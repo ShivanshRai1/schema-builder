@@ -1,35 +1,9 @@
-import type { ComponentKind } from "../model/types";
+/**
+ * Local NL fallback when the LLM returns a reply but empty/invalid ops.
+ * Keep in sync with src/llm/ops.ts interpret().
+ */
 
-// ---------------------------------------------------------------------------
-// Structured circuit edit operations + natural-language interpret / fallback.
-// ---------------------------------------------------------------------------
-
-export type Op =
-  | { type: "addComponent"; kind: ComponentKind }
-  | { type: "setParam"; refdes: string; key: string; value: string }
-  | { type: "deleteComponent"; refdes: string }
-  | {
-      type: "connectPins";
-      aRefdes: string;
-      bRefdes: string;
-      /** Pin id; omit/empty → auto-pick (right/bottom ↔ left/top). */
-      aPin?: string;
-      bPin?: string;
-    }
-  | {
-      type: "disconnectPins";
-      aRefdes: string;
-      aPin?: string;
-      bRefdes?: string;
-      bPin?: string;
-    };
-
-export interface InterpretResult {
-  ops: Op[];
-  reply: string;
-}
-
-const KIND_WORDS: Record<string, ComponentKind> = {
+const KIND_WORDS = {
   resistor: "R", resistors: "R", resistance: "R", ohm: "R", ohms: "R", r: "R",
   inductor: "L", inductors: "L", inductance: "L", henry: "L", henries: "L", l: "L", coil: "L",
   capacitor: "C", capacitors: "C", capacitance: "C", farad: "C", cap: "C", caps: "C", c: "C",
@@ -49,7 +23,7 @@ const KIND_WORDS: Record<string, ComponentKind> = {
   node: "NODE", label: "NODE", netlabel: "NODE",
 };
 
-const KEY_ALIASES: Record<string, string> = {
+const KEY_ALIASES = {
   value: "value", val: "value", param: "value", parameter: "value",
   resistance: "value", resistivity: "value", ohms: "value", ohm: "value",
   capacitance: "value", farads: "value", farad: "value",
@@ -67,9 +41,8 @@ const SET_VERBS = "set|change|update|modify|edit|adjust|make|alter|revise|tune|r
 const DEL_VERBS = "delete|remove|erase|drop|clear|discard|destroy|kill|omit|exclude|uninstall|take\\s+out|get\\s+rid\\s+of";
 const VALUE_WORDS = "value|val|param(?:eter)?|resistance|capacitance|inductance|ohms?|farads?|henr(?:y|ies)|voltage|current|amps?|volts?|model|name|ic";
 
-/** Strip polite / filler prefixes so patterns can anchor at the verb. */
-function normalizeUtterance(raw: string): string {
-  return raw
+function normalizeUtterance(raw) {
+  return String(raw ?? "")
     .trim()
     .replace(/[.!?]+$/g, "")
     .replace(
@@ -82,15 +55,13 @@ function normalizeUtterance(raw: string): string {
 }
 
 /**
- * Rule-based interpreter + NL fallback used when the LLM returns empty ops.
+ * @param {string} input
+ * @returns {{ ops: object[], reply: string } | null}
  */
-export function interpret(input: string): InterpretResult {
+export function interpretFallback(input) {
   const text = normalizeUtterance(input);
-  if (!text) {
-    return { ops: [], reply: "Say something to edit the circuit." };
-  }
+  if (!text) return null;
 
-  // Wire ops before add/set so "connect …" is not misread.
   const disc = matchDisconnect(text);
   if (disc) return disc;
 
@@ -106,56 +77,46 @@ export function interpret(input: string): InterpretResult {
   const set = matchSet(text);
   if (set) return set;
 
-  return {
-    ops: [],
-    reply:
-      'Try: "add resistor", "change the R1 value to 4.7k", "connect R1 to C1", "connect R1.b to C1.a", "disconnect R1", "remove C1".',
-  };
+  return null;
 }
 
 const REF = "([A-Za-z]+\\d+|GND|ground|earth|0)";
 const PIN = "([A-Za-z][A-Za-z0-9]*)";
 const ENDPOINT = `${REF}(?:\\s*(?:\\.|\\s+pin\\s+|\\s+pin\\s*=\\s*|\\s+)\\s*${PIN})?`;
 
-function normalizeRefToken(raw: string): string {
-  const t = raw.trim().toUpperCase();
+function normalizeRefToken(raw) {
+  const t = String(raw ?? "").trim().toUpperCase();
   if (t === "GROUND" || t === "EARTH" || t === "0") return "GND";
   return t;
 }
 
-function matchConnect(text: string): InterpretResult | null {
+function matchConnect(text) {
   if (!/^(?:connect|wire|link|join|attach|rewire|reconnect)\b/i.test(text)) return null;
-
-  // connect R1.b to C1.a / wire R1 pin b to C1 pin a
   const withPins = text.match(
     new RegExp(
       `^(?:connect|wire|link|join|attach|rewire|reconnect)\\s+${ENDPOINT}\\s+(?:to|with|and|->|→)\\s+${ENDPOINT}$`,
       "i",
     ),
   );
-  if (withPins) {
-    const aRefdes = normalizeRefToken(withPins[1]);
-    const aPin = withPins[2]?.trim().toLowerCase();
-    const bRefdes = normalizeRefToken(withPins[3]);
-    const bPin = withPins[4]?.trim().toLowerCase();
-    const op: Op = {
-      type: "connectPins",
-      aRefdes,
-      bRefdes,
-      ...(aPin ? { aPin } : {}),
-      ...(bPin ? { bPin } : {}),
-    };
-    const aLabel = aPin ? `${aRefdes}.${aPin}` : aRefdes;
-    const bLabel = bPin ? `${bRefdes}.${bPin}` : bRefdes;
-    return { ops: [op], reply: `Connected ${aLabel} → ${bLabel}.` };
-  }
-  return null;
+  if (!withPins) return null;
+  const aRefdes = normalizeRefToken(withPins[1]);
+  const aPin = withPins[2]?.trim().toLowerCase();
+  const bRefdes = normalizeRefToken(withPins[3]);
+  const bPin = withPins[4]?.trim().toLowerCase();
+  const op = {
+    type: "connectPins",
+    aRefdes,
+    bRefdes,
+    ...(aPin ? { aPin } : {}),
+    ...(bPin ? { bPin } : {}),
+  };
+  const aLabel = aPin ? `${aRefdes}.${aPin}` : aRefdes;
+  const bLabel = bPin ? `${bRefdes}.${bPin}` : bRefdes;
+  return { ops: [op], reply: `Connected ${aLabel} → ${bLabel}.` };
 }
 
-function matchDisconnect(text: string): InterpretResult | null {
+function matchDisconnect(text) {
   if (!/^(?:disconnect|unwire|unlink|detach)\b/i.test(text)) return null;
-
-  // disconnect R1.b from C1.a
   const both = text.match(
     new RegExp(
       `^(?:disconnect|unwire|unlink|detach)\\s+${ENDPOINT}\\s+(?:from|and|->|→)\\s+${ENDPOINT}$`,
@@ -180,25 +141,28 @@ function matchDisconnect(text: string): InterpretResult | null {
       reply: `Disconnected ${aRefdes}${aPin ? "." + aPin : ""} from ${bRefdes}${bPin ? "." + bPin : ""}.`,
     };
   }
-
-  // disconnect R1 / unwire R1.b
   const one = text.match(
-    new RegExp(`^(?:disconnect|unwire|unlink|detach)\\s+(?:(?:all\\s+(?:wires?\\s+)?(?:on|from|of)\\s+)?)?${ENDPOINT}$`, "i"),
+    new RegExp(
+      `^(?:disconnect|unwire|unlink|detach)\\s+(?:(?:all\\s+(?:wires?\\s+)?(?:on|from|of)\\s+)?)?${ENDPOINT}$`,
+      "i",
+    ),
   );
   if (one) {
     const aRefdes = normalizeRefToken(one[1]);
     const aPin = one[2]?.trim().toLowerCase();
     return {
       ops: [{ type: "disconnectPins", aRefdes, ...(aPin ? { aPin } : {}) }],
-      reply: aPin ? `Disconnected pin ${aRefdes}.${aPin}.` : `Disconnected all wires on ${aRefdes}.`,
+      reply: aPin
+        ? `Disconnected pin ${aRefdes}.${aPin}.`
+        : `Disconnected all wires on ${aRefdes}.`,
     };
   }
   return null;
 }
 
-function matchAdd(text: string): InterpretResult | null {
+function matchAdd(text) {
   const re = new RegExp(
-    `^(?:${ADD_VERBS})\\s+(?:(?:a|an|another|one|new|the|another)\\s+)*([a-z][a-z0-9]*)`,
+    `^(?:${ADD_VERBS})\\s+(?:(?:a|an|another|one|new|the)\\s+)*([a-z][a-z0-9]*)`,
     "i",
   );
   const m = text.match(re);
@@ -209,8 +173,7 @@ function matchAdd(text: string): InterpretResult | null {
   return { ops: [{ type: "addComponent", kind }], reply: `Added ${kind}.` };
 }
 
-function matchSet(text: string): InterpretResult | null {
-  // "set R1 value 4.7k" / "set R1 value to 4.7k" / "set R1 model Foo"
+function matchSet(text) {
   const strict = text.match(
     new RegExp(`^(?:${SET_VERBS})\\s+([A-Za-z]+\\d+)\\s+(${VALUE_WORDS})\\s+(?:to\\s+|as\\s+|==?\\s*)?(.+)$`, "i"),
   );
@@ -226,22 +189,17 @@ function matchSet(text: string): InterpretResult | null {
     }
   }
 
-  const patterns: RegExp[] = [
-    // change the R1 value to 4.7k / update R1's resistance to 4.7k
+  const patterns = [
     new RegExp(
       `^(?:${SET_VERBS})\\s+(?:the\\s+)?([A-Za-z]+\\d+)(?:'s)?\\s+(?:the\\s+)?(${VALUE_WORDS})\\s+(?:to\\s+|as\\s+|==?\\s*)(.+)$`,
       "i",
     ),
-    // change value of R1 to 4.7k / modify the resistance of R1 to 4.7k
     new RegExp(
       `^(?:${SET_VERBS})\\s+(?:the\\s+)?(${VALUE_WORDS})\\s+(?:of\\s+|for\\s+|on\\s+)?([A-Za-z]+\\d+)\\s+(?:to\\s+|as\\s+|==?\\s*)(.+)$`,
       "i",
     ),
-    // give R1 a value of 4.7k / give R1 value 4.7k
     /^(?:give|assign)\s+([A-Za-z]+\d+)\s+(?:a\s+)?(?:value|resistance|capacitance|inductance)\s+(?:of\s+)?(.+)$/i,
-    // change R1 to 4.7k / set R1 = 4.7k / make C1 2.2n
     new RegExp(`^(?:${SET_VERBS})\\s+([A-Za-z]+\\d+)\\s+(?:(?:to|as|=|==)\\s*)?(.+)$`, "i"),
-    // R1 = 4.7k / R1 value = 4.7k / R1 to 4.7k
     new RegExp(`^([A-Za-z]+\\d+)\\s+(?:(?:${VALUE_WORDS})\\s+)?(?:(?:to|as|=|==)\\s*)(.+)$`, "i"),
   ];
 
@@ -283,13 +241,13 @@ function matchSet(text: string): InterpretResult | null {
   return null;
 }
 
-function isValueWord(s: string): boolean {
+function isValueWord(s) {
   return /^(?:value|val|param(?:eter)?|resistance|capacitance|inductance|ohms?|farads?|henr(?:y|ies)|voltage|current|amps?|volts?|model|name|ic)$/i.test(
     String(s ?? "").trim(),
   );
 }
 
-function matchDelete(text: string): InterpretResult | null {
+function matchDelete(text) {
   const re = new RegExp(
     `^(?:${DEL_VERBS})\\s+(?:(?:the|this|that|component|part|device)\\s+)*([A-Za-z]+\\d+)`,
     "i",
@@ -303,11 +261,66 @@ function matchDelete(text: string): InterpretResult | null {
   };
 }
 
-function normalizeKey(key: string): string {
-  const k = key.trim().toLowerCase().replace(/[^a-z]/g, "");
+function normalizeKey(key) {
+  const k = String(key ?? "").trim().toLowerCase().replace(/[^a-z]/g, "");
   return KEY_ALIASES[k] ?? (k || "value");
 }
 
-function cleanValue(v: string): string {
-  return v.trim().replace(/^["']|["']$/g, "").replace(/\s+/g, " ");
+function cleanValue(v) {
+  return String(v ?? "").trim().replace(/^["']|["']$/g, "").replace(/\s+/g, " ");
+}
+
+/**
+ * @param {unknown} raw
+ */
+export function normalizeOps(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((item) => {
+    if (!item || typeof item !== "object") return item;
+    if (item.type === "setParam") {
+      return {
+        type: "setParam",
+        refdes: String(item.refdes ?? "").trim().toUpperCase(),
+        key: normalizeKey(String(item.key ?? "")),
+        value: cleanValue(String(item.value ?? "")),
+      };
+    }
+    if (item.type === "deleteComponent") {
+      return {
+        type: "deleteComponent",
+        refdes: String(item.refdes ?? "").trim().toUpperCase(),
+      };
+    }
+    if (item.type === "connectPins") {
+      return {
+        type: "connectPins",
+        aRefdes: normRef(item.aRefdes ?? item.from),
+        bRefdes: normRef(item.bRefdes ?? item.to),
+        ...(optPin(item.aPin) ? { aPin: optPin(item.aPin) } : {}),
+        ...(optPin(item.bPin) ? { bPin: optPin(item.bPin) } : {}),
+      };
+    }
+    if (item.type === "disconnectPins") {
+      const bRaw = String(item.bRefdes ?? item.to ?? "").trim();
+      return {
+        type: "disconnectPins",
+        aRefdes: normRef(item.aRefdes ?? item.refdes ?? item.from),
+        ...(optPin(item.aPin) ? { aPin: optPin(item.aPin) } : {}),
+        ...(bRaw ? { bRefdes: normRef(bRaw) } : {}),
+        ...(optPin(item.bPin) ? { bPin: optPin(item.bPin) } : {}),
+      };
+    }
+    return item;
+  });
+}
+
+function normRef(s) {
+  const t = String(s ?? "").trim().toUpperCase();
+  if (t === "GROUND" || t === "EARTH" || t === "0") return "GND";
+  return t;
+}
+
+function optPin(s) {
+  const p = String(s ?? "").trim().toLowerCase();
+  return p || undefined;
 }

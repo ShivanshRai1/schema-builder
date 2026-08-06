@@ -1,2 +1,6 @@
 node_modules
 dist
+public/monaco
+server/node_modules
+.env
+.env.local

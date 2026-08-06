@@ -19,6 +19,8 @@ export interface NetlistOptions {
   title?: string;
   /** Extra directive lines appended verbatim (models, analyses, options). */
   directives?: string[];
+  /** Raw .subckt / .model library text inserted before device lines. */
+  library?: string;
 }
 
 const DEFAULT_DIRECTIVES = [
@@ -39,6 +41,13 @@ export function toNetlist(
   lines.push(`* ${opts.title ?? "SimulAI schematic"} — generated from graph`);
   lines.push(`* ${deviceCount} devices, ${nets.length} nets`);
   lines.push("");
+
+  const lib = opts.library?.trim();
+  if (lib) {
+    lines.push("* --- .subckt library (user-attached) ---");
+    lines.push(lib);
+    lines.push("");
+  }
 
   // One line per emitting device, ordered by refdes for stable output.
   const devices = nodes

@@ -1,43 +1,68 @@
-import { useState } from "react";
-import { interpret, type Op } from "../llm/ops";
+import { useRef, useState } from "react";
+import type { Op } from "../llm/ops";
+import type { AssistantContext } from "../llm/assistantTypes";
+import { assistantApiUrl } from "../llm/assistantApi";
+import { runAssistant } from "../llm/runAssistant";
 
 interface Message {
   role: "user" | "assistant";
   text: string;
 }
 
-// ---------------------------------------------------------------------------
-// Assistant panel. Sends the user's message through interpret() (the rule-based
-// LLM stand-in), then hands the returned structured ops to the parent to apply
-// to the graph. In step 3 interpret() becomes a real model call; this component
-// does not change.
-// ---------------------------------------------------------------------------
-
-export function ChatPanel({ onApplyOps }: { onApplyOps: (ops: Op[]) => void }) {
+/**
+ * Assistant panel.
+ * Default: rule-based interpret via runAssistant (no env).
+ * With VITE_ASSISTANT_API_URL: calls your backend stub / future LLM.
+ * applyOps path unchanged.
+ */
+export function ChatPanel({
+  onApplyOps,
+  getContext,
+}: {
+  onApplyOps: (ops: Op[]) => void;
+  getContext: () => AssistantContext;
+}) {
+  const usingApi = Boolean(assistantApiUrl());
   const [messages, setMessages] = useState<Message[]>([
     {
       role: "assistant",
-      text:
-        "I edit the circuit through structured ops. Try “add resistor”, “set R1 value 4.7k”, or “delete C1”. " +
-        "The graph stays the source of truth — I never rewrite the netlist directly.",
+      text: usingApi
+        ? "Gemini assistant — messages go to your local server. Structured ops update the graph."
+        : "I edit the circuit through structured ops. Try “add resistor”, “set R1 value 4.7k”, “connect R1 to C1”, or “disconnect R1”. " +
+          "The graph stays the source of truth — I never rewrite the netlist directly.",
     },
   ]);
   const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
 
-  function send() {
+  async function send() {
     const text = input.trim();
-    if (!text) return;
-    const { ops, reply } = interpret(text);
-    setMessages((m) => [...m, { role: "user", text }, { role: "assistant", text: reply }]);
-    if (ops.length) onApplyOps(ops);
+    if (!text || busy) return;
+
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+
     setInput("");
+    setMessages((m) => [...m, { role: "user", text }]);
+    setBusy(true);
+
+    try {
+      const { ops, reply } = await runAssistant(text, getContext(), { signal: ac.signal });
+      if (ac.signal.aborted) return;
+      setMessages((m) => [...m, { role: "assistant", text: reply }]);
+      if (ops.length) onApplyOps(ops);
+    } finally {
+      if (!ac.signal.aborted) setBusy(false);
+    }
   }
 
   return (
     <div className="chat-panel">
       <div className="panel-header">
         <span>assistant</span>
-        <span className="badge">structured ops → graph</span>
+        <span className="badge">{usingApi ? "api → ops → graph" : "rules → ops → graph"}</span>
       </div>
       <div className="chat-log">
         {messages.map((m, i) => (
@@ -45,16 +70,22 @@ export function ChatPanel({ onApplyOps }: { onApplyOps: (ops: Op[]) => void }) {
             <div className="chat-bubble">{m.text}</div>
           </div>
         ))}
+        {busy && (
+          <div className="chat-msg assistant">
+            <div className="chat-bubble">Thinking…</div>
+          </div>
+        )}
       </div>
       <div className="chat-input-row">
         <input
           className="chat-input"
           value={input}
+          disabled={busy}
           placeholder="e.g. add resistor"
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && send()}
+          onKeyDown={(e) => e.key === "Enter" && void send()}
         />
-        <button className="chat-send" onClick={send}>
+        <button className="chat-send" disabled={busy} onClick={() => void send()}>
           Send
         </button>
       </div>
