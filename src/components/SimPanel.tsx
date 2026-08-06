@@ -141,7 +141,7 @@ export function SimPanel({ netlist }: { netlist: string }) {
         <canvas ref={canvasRef} />
         {!result && !busy && (
           <div className="sim-placeholder">
-            Run → call sim_api.php · demo plot if fleet offline
+            Run simulation to see a waveform
           </div>
         )}
       </div>

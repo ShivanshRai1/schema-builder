@@ -47,8 +47,8 @@ export function demoWaveform(reason?: string): SimResult {
     ok: true,
     source: "demo",
     message: reason
-      ? `${reason} — showing demo plot`
-      : "Demo waveform (fleet offline) — showing demo plot",
+      ? `${reason} — showing a demo waveform`
+      : "Simulation offline — showing a demo waveform",
     series: [{ name: "V(out)", x, y }],
   };
 }
@@ -96,14 +96,14 @@ export async function runSimulation(
     });
 
     if (!res.ok) {
-      return demoWaveform(`Fleet unavailable (HTTP ${res.status})`);
+      return demoWaveform(`Simulation unavailable (HTTP ${res.status})`);
     }
 
     let data: unknown;
     try {
       data = await res.json();
     } catch {
-      return demoWaveform("Fleet returned non-JSON");
+      return demoWaveform("Simulation unavailable");
     }
 
     // Explicit API error payload
@@ -111,13 +111,13 @@ export async function runSimulation(
       const d = data as Record<string, unknown>;
       if (d.ok === false || d.error) {
         const err = String(d.error ?? d.message ?? "simulation failed");
-        return demoWaveform(`Fleet error: ${err}`);
+        return demoWaveform(`Simulation error: ${err}`);
       }
     }
 
     const series = normalizeSeries(data);
     if (!series.length) {
-      return demoWaveform("Fleet response had no plot series");
+      return demoWaveform("Simulation returned no waveform data");
     }
 
     return {
@@ -137,10 +137,10 @@ export async function runSimulation(
           series: [],
         };
       }
-      return demoWaveform("Fleet timed out");
+      return demoWaveform("Simulation timed out");
     }
     const msg = e instanceof Error ? e.message : "network error";
-    return demoWaveform(`Fleet unavailable (${msg})`);
+    return demoWaveform(`Simulation unavailable (${msg})`);
   } finally {
     clearTimeout(timer);
     opts.signal?.removeEventListener("abort", onOuterAbort);

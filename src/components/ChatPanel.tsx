@@ -27,9 +27,8 @@ export function ChatPanel({
     {
       role: "assistant",
       text: usingApi
-        ? "Gemini assistant — messages go to your local server. Structured ops update the graph."
-        : "I edit the circuit through structured ops. Try “add resistor”, “set R1 value 4.7k”, “connect R1 to C1”, or “disconnect R1”. " +
-          "The graph stays the source of truth — I never rewrite the netlist directly.",
+        ? "Hi — ask me to add parts, change values, connect wires, or remove components."
+        : "Hi — try “add resistor”, “set R1 value 4.7k”, “connect R1 to C1”, or “disconnect R1”.",
     },
   ]);
   const [input, setInput] = useState("");
@@ -62,7 +61,6 @@ export function ChatPanel({
     <div className="chat-panel">
       <div className="panel-header">
         <span>assistant</span>
-        <span className="badge">{usingApi ? "api → ops → graph" : "rules → ops → graph"}</span>
       </div>
       <div className="chat-log">
         {messages.map((m, i) => (

@@ -36,9 +36,6 @@ export function NetlistPanel({
       <div className="panel-header">
         <span>netlist.cir</span>
         <div className="panel-header-right">
-          <span className="badge">
-            {editing ? "text edit · apply to sync" : "graph-authoritative · read-only"}
-          </span>
           {editing ? (
             <>
               <button type="button" className="ghost-btn" onClick={onCancel}>
