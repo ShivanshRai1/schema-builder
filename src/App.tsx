@@ -16,6 +16,7 @@ import { SimPanel } from "./components/SimPanel";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { COMPONENT_SPECS, defaultParams } from "./model/componentSpecs";
 import type { ComponentData, ComponentKind } from "./model/types";
+import { nextRotation } from "./model/rotation";
 import { toNetlist } from "./netlist/toNetlist";
 import { extractDirectives } from "./netlist/parseDeviceParams";
 import { applyNetlistToGraph } from "./netlist/applyNetlistToGraph";
@@ -43,7 +44,14 @@ const INITIAL_NODES: Node<ComponentData>[] = [
   mk("n3", "C", "C1", 540, 180),
   mk("n4", "GND", "", 280, 360),
 ];
-const wire = (s: string, sh: string, t: string, th: string): Edge => ({ id: `${s}${sh}-${t}${th}`, source: s, sourceHandle: sh, target: t, targetHandle: th });
+const wire = (s: string, sh: string, t: string, th: string): Edge => ({
+  id: `${s}${sh}-${t}${th}`,
+  type: "smoothstep",
+  source: s,
+  sourceHandle: sh,
+  target: t,
+  targetHandle: th,
+});
 const INITIAL_EDGES: Edge[] = [
   wire("n1", "p", "n2", "a"),
   wire("n2", "b", "n3", "a"),
@@ -144,8 +152,21 @@ export default function App() {
 
   const onConnect = useCallback((c: Connection) => {
     pushHistory();
-    setEdges((eds) => addEdge(c, eds));
+    setEdges((eds) => addEdge({ ...c, type: "smoothstep" }, eds));
   }, [setEdges, pushHistory]);
+
+  const rotateSelected = useCallback(() => {
+    const sel = nodes.filter((n) => n.selected);
+    if (!sel.length) return;
+    pushHistory();
+    setNodes((ns) =>
+      ns.map((n) =>
+        n.selected
+          ? { ...n, data: { ...n.data, rotation: nextRotation(n.data.rotation) } }
+          : n,
+      ),
+    );
+  }, [nodes, setNodes, pushHistory]);
 
   const newId = () => `n${++idCounter.current}`;
 
@@ -282,10 +303,14 @@ export default function App() {
         const ids = nodes.filter((n) => n.selected).map((n) => n.id);
         if (ids.length) { e.preventDefault(); deleteNodes(ids); }
       }
+      else if (!mod && e.key.toLowerCase() === "r") {
+        const hasSel = nodes.some((n) => n.selected);
+        if (hasSel) { e.preventDefault(); rotateSelected(); }
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [copySelection, cutSelection, paste, deleteNodes, nodes, undo, redo, snapshot]);
+  }, [copySelection, cutSelection, paste, deleteNodes, nodes, undo, redo, snapshot, rotateSelected]);
 
   const startTextEdit = useCallback(() => {
     setDraftNetlist(netlist);
@@ -495,6 +520,7 @@ export default function App() {
             node={selectedNode}
             onChangeParam={changeParam}
             onChangeRefdes={changeRefdes}
+            onRotate={rotateSelected}
             onDelete={(id) => deleteNodes([id])}
           />
           <NetlistPanel

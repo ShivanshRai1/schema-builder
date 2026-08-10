@@ -1,6 +1,7 @@
 import type { Node } from "@xyflow/react";
 import { COMPONENT_SPECS } from "../model/componentSpecs";
 import type { ComponentData } from "../model/types";
+import { normalizeRotation } from "../model/rotation";
 
 // ---------------------------------------------------------------------------
 // Attribute editor. Renders inputs from the selected component's declared
@@ -15,11 +16,13 @@ export function PropertiesPanel({
   node,
   onChangeParam,
   onChangeRefdes,
+  onRotate,
   onDelete,
 }: {
   node: Node<ComponentData> | null;
   onChangeParam: (nodeId: string, key: string, value: string) => void;
   onChangeRefdes: (nodeId: string, refdes: string) => void;
+  onRotate?: () => void;
   onDelete: (nodeId: string) => void;
 }) {
   if (!node) {
@@ -32,12 +35,25 @@ export function PropertiesPanel({
   }
 
   const spec = COMPONENT_SPECS[node.data.kind];
+  const rotation = normalizeRotation(node.data.rotation);
 
   return (
     <div className="props-panel">
       <div className="panel-header">
         <span>{spec.label}</span>
-        <button className="ghost-btn danger" onClick={() => onDelete(node.id)}>delete</button>
+        <div className="props-header-actions">
+          {onRotate && (
+            <button
+              type="button"
+              className="ghost-btn"
+              title="Rotate 90° clockwise (R)"
+              onClick={onRotate}
+            >
+              rotate {rotation}°
+            </button>
+          )}
+          <button className="ghost-btn danger" onClick={() => onDelete(node.id)}>delete</button>
+        </div>
       </div>
 
       <div className="props-body">

@@ -69,6 +69,9 @@ export interface AttributeSpec {
   hint?: string;
 }
 
+/** Clockwise orientation; pin ids are stable — only Handle geometry changes. */
+export type ComponentRotation = 0 | 90 | 180 | 270;
+
 /** Per-node data carried on every React Flow component node. */
 export interface ComponentData {
   kind: ComponentKind;
@@ -76,5 +79,7 @@ export interface ComponentData {
   refdes: string;
   /** SPICE / attribute values keyed by attribute key. */
   params: Record<string, string>;
+  /** Visual orientation (degrees CW). Omitted / 0 = catalog default. */
+  rotation?: ComponentRotation;
   [key: string]: unknown; // React Flow requires an index signature on node data
 }

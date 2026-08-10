@@ -76,7 +76,12 @@ body { background: var(--bg); color: var(--text); }
   border-style: dashed;
   border-color: #c9a227;
 }
-.component-glyph { font-size: 20px; line-height: 1; }
+.component-glyph {
+  font-size: 20px;
+  line-height: 1;
+  transform-origin: center center;
+  transition: transform 0.12s ease;
+}
 .component-refdes { font-weight: 650; margin-top: 2px; }
 .component-params { color: var(--muted); font-size: 10.5px; margin-top: 1px; }
 .component-unplaced {
@@ -96,6 +101,8 @@ body { background: var(--bg); color: var(--text); }
   position: absolute; font-size: 9px; color: var(--muted);
   pointer-events: none; transform: translate(10px, -6px); white-space: nowrap;
 }
+
+.props-header-actions { display: flex; align-items: center; gap: 6px; }
 
 /* Right column panels --------------------------------------------------- */
 .netlist-panel, .chat-panel, .sim-panel, .library-panel { display: flex; flex-direction: column; min-height: 0; }

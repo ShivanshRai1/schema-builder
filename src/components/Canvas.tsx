@@ -4,6 +4,7 @@ import {
   Background,
   Controls,
   ConnectionMode,
+  ConnectionLineType,
   type Node,
   type Edge,
   type OnNodesChange,
@@ -17,6 +18,9 @@ import { ComponentNode } from "../nodes/ComponentNode";
 import type { ComponentData, ComponentKind } from "../model/types";
 import { isPaletteDrag, PALETTE_DND_MIME } from "../dnd";
 import { COMPONENT_SPECS } from "../model/componentSpecs";
+
+/** Match Background gap — snap placement and orthogonal wire stubs to this grid. */
+export const SCHEMATIC_GRID = 16;
 
 // The schematic canvas. ConnectionMode.Loose lets any pin wire to any pin
 // (a schematic has no source/target direction), which is what we want here.
@@ -58,6 +62,14 @@ export function Canvas({
     [handleReplace],
   );
 
+  const defaultEdgeOptions = useMemo(
+    () => ({
+      type: "smoothstep" as const,
+      pathOptions: { borderRadius: 0 },
+    }),
+    [],
+  );
+
   return (
     <div className="canvas">
       <ReactFlow
@@ -68,6 +80,10 @@ export function Canvas({
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         connectionMode={ConnectionMode.Loose}
+        connectionLineType={ConnectionLineType.SmoothStep}
+        defaultEdgeOptions={defaultEdgeOptions}
+        snapToGrid
+        snapGrid={[SCHEMATIC_GRID, SCHEMATIC_GRID]}
         fitView
         proOptions={{ hideAttribution: true }}
         onInit={(instance) => {
@@ -90,7 +106,7 @@ export function Canvas({
           onAddAt(kind, pos.x, pos.y);
         }}
       >
-        <Background gap={16} />
+        <Background gap={SCHEMATIC_GRID} />
         <Controls />
       </ReactFlow>
     </div>

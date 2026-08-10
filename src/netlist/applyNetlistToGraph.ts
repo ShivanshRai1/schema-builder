@@ -65,6 +65,7 @@ function edgesFromNetMap(netToPins: Map<string, Endpoint[]>): Edge[] {
       const p = pins[j]!;
       edges.push({
         id: `nl-${net}-${i++}`,
+        type: "smoothstep",
         source: hub.nodeId,
         sourceHandle: hub.pinId,
         target: p.nodeId,

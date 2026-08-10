@@ -2,6 +2,7 @@ import type { Edge, Node } from "@xyflow/react";
 import { addEdge } from "@xyflow/react";
 import type { ComponentData } from "../model/types";
 import { COMPONENT_SPECS } from "../model/componentSpecs";
+import { rotatePinSpec } from "../model/rotation";
 
 /** Resolve refdes (or GND/ground/0) to a graph node. */
 export function findNodeByRefdes(
@@ -22,7 +23,9 @@ export function pinExists(node: Node<ComponentData>, pinId: string): boolean {
 
 /** Prefer outgoing (right/bottom) for "from", incoming (left/top) for "to". */
 export function defaultPin(node: Node<ComponentData>, role: "from" | "to"): string {
-  const pins = COMPONENT_SPECS[node.data.kind].pins;
+  const pins = COMPONENT_SPECS[node.data.kind].pins.map((p) =>
+    rotatePinSpec(p, node.data.rotation),
+  );
   if (node.data.kind === "GND") return pins[0]?.id ?? "g";
   if (role === "from") {
     return (
@@ -83,7 +86,14 @@ export function connectEndpoints(
   if (alreadyConnected(edges, a.id, aPin, b.id, bPin)) return edges;
   const id = `${a.id}${aPin}-${b.id}${bPin}`;
   return addEdge(
-    { id, source: a.id, sourceHandle: aPin, target: b.id, targetHandle: bPin },
+    {
+      id,
+      type: "smoothstep",
+      source: a.id,
+      sourceHandle: aPin,
+      target: b.id,
+      targetHandle: bPin,
+    },
     edges,
   );
 }

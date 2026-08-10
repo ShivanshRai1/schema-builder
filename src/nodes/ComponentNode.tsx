@@ -2,12 +2,13 @@ import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
 import type { ComponentData, ComponentKind, PinSpec } from "../model/types";
 import { COMPONENT_SPECS } from "../model/componentSpecs";
 import { isPaletteDrag, PALETTE_DND_MIME } from "../dnd";
+import { normalizeRotation, rotatePinSpec } from "../model/rotation";
 
 // ---------------------------------------------------------------------------
 // One generic node component renders EVERY component family by reading its
-// spec. Pins become React Flow Handles positioned from the spec's side/offset.
-// Handles are the wiring anchors; their `id` is the pin id, which is what the
-// net extractor keys on.
+// spec. Pins become React Flow Handles positioned from the spec's side/offset
+// (remapped by optional node.data.rotation). Handle `id` stays the pin id —
+// netlist/wiring never depend on geometry.
 // ---------------------------------------------------------------------------
 
 const sideToPosition: Record<PinSpec["side"], Position> = {
@@ -41,6 +42,8 @@ export function ComponentNode({
   // Show one concise value under the refdes: value, else model, else name.
   const paramText = data.params.value ?? data.params.model ?? data.params.name ?? "";
   const unplaced = Boolean(data.unplaced);
+  const rotation = normalizeRotation(data.rotation);
+  const pins = spec.pins.map((p) => rotatePinSpec(p, rotation));
 
   return (
     <div
@@ -61,12 +64,17 @@ export function ComponentNode({
         onReplace(id, kind);
       }}
     >
-      <div className="component-glyph">{spec.glyph}</div>
+      <div
+        className="component-glyph"
+        style={rotation ? { transform: `rotate(${rotation}deg)` } : undefined}
+      >
+        {spec.glyph}
+      </div>
       <div className="component-refdes">{data.refdes || spec.label}</div>
       {paramText && <div className="component-params">{paramText}</div>}
       {unplaced && <div className="component-unplaced">unplaced</div>}
 
-      {spec.pins.map((pin) => (
+      {pins.map((pin) => (
         <Handle
           key={pin.id}
           id={pin.id}
