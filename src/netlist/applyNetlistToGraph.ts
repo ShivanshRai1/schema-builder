@@ -65,11 +65,12 @@ function edgesFromNetMap(netToPins: Map<string, Endpoint[]>): Edge[] {
       const p = pins[j]!;
       edges.push({
         id: `nl-${net}-${i++}`,
-        type: "step",
+        type: "schematic",
         source: hub.nodeId,
         sourceHandle: hub.pinId,
         target: p.nodeId,
         targetHandle: p.pinId,
+        data: { waypoints: [] },
       });
     }
   }
@@ -227,7 +228,8 @@ export function applyNetlistToGraph(
     if (!alive.has(e.source) || !alive.has(e.target)) return false;
     const sk = kindOf.get(e.source);
     const tk = kindOf.get(e.target);
-    return sk === "VSENSE" || sk === "VPROBE" || tk === "VSENSE" || tk === "VPROBE";
+    return sk === "VSENSE" || sk === "VPROBE" || tk === "VSENSE" || tk === "VPROBE"
+      || sk === "TIP" || tk === "TIP";
   });
 
   const edgeKey = (e: Edge) =>

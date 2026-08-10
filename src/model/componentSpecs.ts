@@ -234,6 +234,13 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
     attributes: [A("name", "Net name", "text", "net")],
     toSpice: () => null, // forces its net's NAME (see nets.ts)
   },
+  /** Dangling wire end (Esc mid-route). Not in palette; emits nothing. */
+  TIP: {
+    kind: "TIP", category: "Structural", refdesPrefix: "", label: "Wire end", glyph: "·", emits: false,
+    pins: [pin("t", "", "left", 0.5)],
+    attributes: [],
+    toSpice: () => null,
+  },
 };
 
 /** Build the default params map for a kind from its attribute schema. */

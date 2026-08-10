@@ -5,9 +5,8 @@ import {
   addEdge,
   type Node,
   type Edge,
-  type Connection,
 } from "@xyflow/react";
-import { Canvas } from "./components/Canvas";
+import { Canvas, type WireCompletePayload, type WirePartialPayload } from "./components/Canvas";
 import { Palette } from "./components/Palette";
 import { PropertiesPanel } from "./components/PropertiesPanel";
 import { NetlistPanel } from "./components/NetlistPanel";
@@ -46,11 +45,12 @@ const INITIAL_NODES: Node<ComponentData>[] = [
 ];
 const wire = (s: string, sh: string, t: string, th: string): Edge => ({
   id: `${s}${sh}-${t}${th}`,
-  type: "step",
+  type: "schematic",
   source: s,
   sourceHandle: sh,
   target: t,
   targetHandle: th,
+  data: { waypoints: [] },
 });
 const INITIAL_EDGES: Edge[] = [
   wire("n1", "p", "n2", "a"),
@@ -150,10 +150,126 @@ export default function App() {
   const selected = nodes.filter((n) => n.selected);
   const selectedNode = selected.length === 1 ? selected[0] : null;
 
-  const onConnect = useCallback((c: Connection) => {
+  const onWire = useCallback((payload: WireCompletePayload) => {
+    const { waypoints, ...c } = payload;
+    if (!c.source || !c.target || !c.sourceHandle || !c.targetHandle) return;
+    if (c.source === c.target && c.sourceHandle === c.targetHandle) return;
+
     pushHistory();
-    setEdges((eds) => addEdge({ ...c, type: "step" }, eds));
-  }, [setEdges, pushHistory]);
+    const ns = nodesRef.current;
+    const eds = edgesRef.current;
+    const srcNode = ns.find((n) => n.id === c.source);
+    const tgtNode = ns.find((n) => n.id === c.target);
+
+    // Continuing from a dangling TIP: extend the old wire and remove the tip.
+    if (srcNode?.data.kind === "TIP") {
+      const intoTip = eds.find(
+        (e) =>
+          (e.target === c.source && e.targetHandle === "t") ||
+          (e.source === c.source && e.sourceHandle === "t"),
+      );
+      if (!intoTip) {
+        setEdges((prev) => addEdge({ ...c, type: "schematic", data: { waypoints } }, prev));
+        return;
+      }
+      const fromSource = intoTip.target === c.source;
+      const baseWaypoints =
+        ((intoTip.data as { waypoints?: { x: number; y: number }[] } | undefined)?.waypoints) ?? [];
+      const merged = [...baseWaypoints, ...waypoints];
+      const withoutTipEdges = eds.filter(
+        (e) => e.source !== c.source && e.target !== c.source,
+      );
+      setNodes((prev) => prev.filter((n) => n.id !== c.source));
+      setEdges(
+        addEdge(
+          {
+            id: `${fromSource ? intoTip.source : intoTip.target}${fromSource ? intoTip.sourceHandle : intoTip.targetHandle}-${c.target}${c.targetHandle}`,
+            type: "schematic",
+            source: fromSource ? intoTip.source! : intoTip.target!,
+            sourceHandle: fromSource ? intoTip.sourceHandle! : intoTip.targetHandle!,
+            target: c.target,
+            targetHandle: c.targetHandle,
+            data: { waypoints: merged },
+          },
+          withoutTipEdges,
+        ),
+      );
+      return;
+    }
+
+    // Landing on a TIP: merge into existing dangling wire; remove tip.
+    if (tgtNode?.data.kind === "TIP") {
+      const intoTip = eds.find(
+        (e) =>
+          (e.target === c.target && e.targetHandle === "t") ||
+          (e.source === c.target && e.sourceHandle === "t"),
+      );
+      if (!intoTip) {
+        setEdges((prev) => addEdge({ ...c, type: "schematic", data: { waypoints } }, prev));
+        return;
+      }
+      const tipIsTarget = intoTip.target === c.target;
+      const otherId = tipIsTarget ? intoTip.source : intoTip.target;
+      const otherHandle = tipIsTarget ? intoTip.sourceHandle : intoTip.targetHandle;
+      const baseWaypoints =
+        ((intoTip.data as { waypoints?: { x: number; y: number }[] } | undefined)?.waypoints) ?? [];
+      const merged = [...waypoints, ...baseWaypoints];
+      const withoutTipEdges = eds.filter(
+        (e) => e.source !== c.target && e.target !== c.target,
+      );
+      setNodes((prev) => prev.filter((n) => n.id !== c.target));
+      setEdges(
+        addEdge(
+          {
+            id: `${c.source}${c.sourceHandle}-${otherId}${otherHandle}`,
+            type: "schematic",
+            source: c.source,
+            sourceHandle: c.sourceHandle,
+            target: otherId!,
+            targetHandle: otherHandle!,
+            data: { waypoints: merged },
+          },
+          withoutTipEdges,
+        ),
+      );
+      return;
+    }
+
+    setEdges((prev) => addEdge({ ...c, type: "schematic", data: { waypoints } }, prev));
+  }, [setNodes, setEdges, pushHistory]);
+
+  const TIP_SIZE = 8;
+
+  const makeTipNode = (tipId: string, end: { x: number; y: number }) => ({
+    id: tipId,
+    type: "component" as const,
+    position: { x: end.x, y: end.y - TIP_SIZE / 2 },
+    data: { kind: "TIP" as const, refdes: "", params: {} },
+    style: { width: TIP_SIZE, height: TIP_SIZE },
+    selected: false,
+    draggable: false,
+  });
+
+  const onWirePartial = useCallback((payload: WirePartialPayload) => {
+    const { source, sourceHandle, waypoints, end } = payload;
+    pushHistory();
+    const tipId = newId();
+    setNodes((ns) => [...ns, makeTipNode(tipId, end)]);
+    setEdges((eds) =>
+      addEdge(
+        {
+          id: `${source}${sourceHandle}-${tipId}t`,
+          type: "schematic",
+          source,
+          sourceHandle,
+          target: tipId,
+          targetHandle: "t",
+          data: { waypoints },
+        },
+        eds,
+      ),
+    );
+  }, [setNodes, setEdges, pushHistory]);
 
   const rotateSelected = useCallback(() => {
     const sel = nodes.filter((n) => n.selected);
@@ -234,6 +350,163 @@ export default function App() {
     setEdges((es) => es.filter((e) => !idSet.has(e.source) && !idSet.has(e.target)));
   }, [setNodes, setEdges, pushHistory]);
 
+  const TIP_TRIM_SIZE = 8;
+
+  /** Esc on a selected wire (not while drawing): peel back one bend. */
+  const trimSelectedWires = useCallback(() => {
+    const nodesNow = nodesRef.current;
+    const edgesNow = edgesRef.current;
+
+    let selectedEdges = edgesNow.filter((e) => e.selected);
+    // After a peel, selection often lands on the invisible tip — still peel that wire.
+    if (!selectedEdges.length) {
+      const tipIds = new Set(
+        nodesNow.filter((n) => n.selected && n.data.kind === "TIP").map((n) => n.id),
+      );
+      if (tipIds.size) {
+        selectedEdges = edgesNow.filter(
+          (e) => tipIds.has(e.source) || tipIds.has(e.target),
+        );
+      }
+    }
+    if (!selectedEdges.length) return false;
+
+    pushHistory();
+    let nextNodes = nodesNow.map((n) => ({ ...n, selected: false }));
+    let nextEdges = edgesNow;
+    const tipsToRemove = new Set<string>();
+    const keepEdgeSelected = new Set<string>();
+
+    for (const edge of selectedEdges) {
+      const waypoints = [
+        ...((((edge.data as { waypoints?: { x: number; y: number }[] } | undefined)?.waypoints) ?? [])),
+      ];
+      const tgt = nextNodes.find((n) => n.id === edge.target);
+      const src = nextNodes.find((n) => n.id === edge.source);
+      const targetIsTip = tgt?.data.kind === "TIP";
+      const sourceIsTip = src?.data.kind === "TIP";
+
+      if (waypoints.length > 0) {
+        if (targetIsTip) {
+          const end = waypoints[waypoints.length - 1]!;
+          const kept = waypoints.slice(0, -1);
+          nextNodes = nextNodes.map((n) =>
+            n.id === edge.target
+              ? {
+                  ...n,
+                  position: { x: end.x, y: end.y - TIP_TRIM_SIZE / 2 },
+                  selected: false,
+                  draggable: false,
+                }
+              : n,
+          );
+          nextEdges = nextEdges.map((e) =>
+            e.id === edge.id
+              ? { ...e, data: { ...(e.data as object), waypoints: kept }, selected: true }
+              : { ...e, selected: false },
+          );
+          keepEdgeSelected.add(edge.id);
+        } else if (sourceIsTip) {
+          const end = waypoints[0]!;
+          const kept = waypoints.slice(1);
+          nextNodes = nextNodes.map((n) =>
+            n.id === edge.source
+              ? {
+                  ...n,
+                  position: { x: end.x, y: end.y - TIP_TRIM_SIZE / 2 },
+                  selected: false,
+                  draggable: false,
+                }
+              : n,
+          );
+          nextEdges = nextEdges.map((e) =>
+            e.id === edge.id
+              ? { ...e, data: { ...(e.data as object), waypoints: kept }, selected: true }
+              : { ...e, selected: false },
+          );
+          keepEdgeSelected.add(edge.id);
+        } else {
+          const end = waypoints[waypoints.length - 1]!;
+          const kept = waypoints.slice(0, -1);
+          const tipId = newId();
+          nextNodes = [...nextNodes, {
+            id: tipId,
+            type: "component" as const,
+            position: { x: end.x, y: end.y - TIP_TRIM_SIZE / 2 },
+            data: { kind: "TIP" as const, refdes: "", params: {} },
+            style: { width: TIP_TRIM_SIZE, height: TIP_TRIM_SIZE },
+            selected: false,
+            draggable: false,
+          }];
+          nextEdges = nextEdges.map((e) =>
+            e.id === edge.id
+              ? {
+                  ...e,
+                  target: tipId,
+                  targetHandle: "t",
+                  data: { ...(e.data as object), waypoints: kept },
+                  selected: true,
+                }
+              : { ...e, selected: false },
+          );
+          keepEdgeSelected.add(edge.id);
+        }
+        continue;
+      }
+
+      // No bends left → remove this wire (and dangling tip if any).
+      nextEdges = nextEdges.filter((e) => e.id !== edge.id);
+      if (targetIsTip) tipsToRemove.add(edge.target);
+      if (sourceIsTip) tipsToRemove.add(edge.source);
+    }
+
+    if (tipsToRemove.size) {
+      const stillUsed = new Set<string>();
+      for (const e of nextEdges) {
+        stillUsed.add(e.source);
+        stillUsed.add(e.target);
+      }
+      nextNodes = nextNodes.filter(
+        (n) => !(tipsToRemove.has(n.id) && !stillUsed.has(n.id)),
+      );
+    }
+
+    // Keep peeled wires selected so repeated Esc keeps working.
+    nextEdges = nextEdges.map((e) =>
+      keepEdgeSelected.has(e.id) ? { ...e, selected: true } : e,
+    );
+
+    setNodes(nextNodes);
+    setEdges(nextEdges);
+    return true;
+  }, [setNodes, setEdges, pushHistory]);
+
+  const deleteSelectedEdges = useCallback(() => {
+    const selectedEdges = edgesRef.current.filter((e) => e.selected);
+    if (!selectedEdges.length) return false;
+    pushHistory();
+    const edgeIds = new Set(selectedEdges.map((e) => e.id));
+    const tipCandidates = new Set<string>();
+    for (const e of selectedEdges) {
+      tipCandidates.add(e.source);
+      tipCandidates.add(e.target);
+    }
+    const nextEdges = edgesRef.current.filter((e) => !edgeIds.has(e.id));
+    const stillUsed = new Set<string>();
+    for (const e of nextEdges) {
+      stillUsed.add(e.source);
+      stillUsed.add(e.target);
+    }
+    setEdges(nextEdges);
+    setNodes((ns) =>
+      ns.filter(
+        (n) =>
+          !(n.data.kind === "TIP" && tipCandidates.has(n.id) && !stillUsed.has(n.id)),
+      ),
+    );
+    return true;
+  }, [setNodes, setEdges, pushHistory]);
+
   const copySelection = useCallback(() => {
     const sel = nodes.filter((n) => n.selected);
     if (!sel.length) return;
@@ -299,7 +572,12 @@ export default function App() {
         e.preventDefault();
         downloadCircuit(snapshot());
       }
-      else if (e.key === "Delete" || e.key === "Backspace") {
+      else if (e.key === "Backspace" || e.key === "Delete") {
+        // Full remove: selected wires first, else selected components.
+        if (deleteSelectedEdges()) {
+          e.preventDefault();
+          return;
+        }
         const ids = nodes.filter((n) => n.selected).map((n) => n.id);
         if (ids.length) { e.preventDefault(); deleteNodes(ids); }
       }
@@ -310,7 +588,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [copySelection, cutSelection, paste, deleteNodes, nodes, undo, redo, snapshot, rotateSelected]);
+  }, [copySelection, cutSelection, paste, deleteNodes, deleteSelectedEdges, nodes, undo, redo, snapshot, rotateSelected]);
 
   const startTextEdit = useCallback(() => {
     setDraftNetlist(netlist);
@@ -499,7 +777,7 @@ export default function App() {
             }}
           />
         </div>
-        <span className="app-hint">Ctrl/⌘ Z/Y undo/redo · S save · C/X/V · Del</span>
+        <span className="app-hint">Wire: pin→bends→pin · Esc: keep while drawing / peel selected wire · Backspace/Del removes · R rotate</span>
       </header>
 
       <div className="workspace">
@@ -510,7 +788,9 @@ export default function App() {
           edges={edges}
           onNodesChange={handleNodesChange}
           onEdgesChange={onEdgesChange}
-          onConnect={onConnect}
+          onWire={onWire}
+          onWirePartial={onWirePartial}
+          onTrimWire={trimSelectedWires}
           onReplace={replaceComponent}
           onAddAt={addComponentAt}
         />

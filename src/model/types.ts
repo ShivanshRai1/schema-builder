@@ -28,7 +28,7 @@ export type ComponentKind =
   // sense / probes
   | "CSENSE" | "VSENSE" | "IPROBE" | "VPROBE"
   // structural
-  | "GND" | "NODE";
+  | "GND" | "NODE" | "TIP";
 
 export type Category =
   | "Passive"

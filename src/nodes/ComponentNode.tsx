@@ -1,13 +1,18 @@
-import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
+import { useEffect, useMemo } from "react";
+import {
+  Handle,
+  Position,
+  useUpdateNodeInternals,
+  type NodeProps,
+  type Node,
+} from "@xyflow/react";
 import type { ComponentData, ComponentKind, PinSpec } from "../model/types";
 import { COMPONENT_SPECS } from "../model/componentSpecs";
 import { isPaletteDrag, PALETTE_DND_MIME } from "../dnd";
 import { normalizeRotation, rotatePinSpec } from "../model/rotation";
 
 // ---------------------------------------------------------------------------
-// One generic node component renders EVERY component family by reading its
-// spec. Pins become React Flow Handles positioned from the spec's side/offset
-// (remapped by optional node.data.rotation). Handle `id` stays the pin id —
+// Pins are invisible hit-targets (LTspice-like). Handle `id` is the pin id —
 // netlist/wiring never depend on geometry.
 // ---------------------------------------------------------------------------
 
@@ -35,55 +40,89 @@ export function ComponentNode({
   data,
   selected,
   onReplace,
+  onPinClick,
 }: NodeProps<Node<ComponentData>> & {
   onReplace?: (nodeId: string, kind: ComponentKind) => void;
+  onPinClick?: (nodeId: string, pinId: string) => void;
 }) {
   const spec = COMPONENT_SPECS[data.kind];
-  // Show one concise value under the refdes: value, else model, else name.
+  const updateNodeInternals = useUpdateNodeInternals();
   const paramText = data.params.value ?? data.params.model ?? data.params.name ?? "";
   const unplaced = Boolean(data.unplaced);
   const rotation = normalizeRotation(data.rotation);
-  const pins = spec.pins.map((p) => rotatePinSpec(p, rotation));
+  const pins = useMemo(
+    () => spec.pins.map((p) => rotatePinSpec(p, rotation)),
+    [spec.pins, rotation],
+  );
+  const isTip = data.kind === "TIP";
+
+  // Remeasure handle bounds only when orientation changes (avoids hover thrash).
+  useEffect(() => {
+    updateNodeInternals(id);
+    const t = window.setTimeout(() => updateNodeInternals(id), 0);
+    return () => window.clearTimeout(t);
+  }, [id, rotation, updateNodeInternals]);
 
   return (
     <div
-      className={`component-node kind-${data.kind}${selected ? " selected" : ""}${unplaced ? " unplaced" : ""}`}
-      title={unplaced ? "Unplaced — drag to set position" : undefined}
+      className={`component-node kind-${data.kind}${selected ? " selected" : ""}${unplaced ? " unplaced" : ""}${isTip ? " tip-node" : ""}`}
+      title={
+        isTip
+          ? "Wire end — click to continue wiring"
+          : unplaced
+            ? "Unplaced — drag to set position"
+            : undefined
+      }
       onDragOver={(e) => {
-        if (!isPaletteDrag(e.dataTransfer) || !onReplace) return;
+        if (isTip || !isPaletteDrag(e.dataTransfer) || !onReplace) return;
         e.preventDefault();
         e.stopPropagation();
         e.dataTransfer.dropEffect = "copy";
       }}
       onDrop={(e) => {
-        if (!onReplace) return;
+        if (isTip || !onReplace) return;
         e.preventDefault();
         e.stopPropagation();
         const kind = e.dataTransfer.getData(PALETTE_DND_MIME) as ComponentKind;
-        if (!kind || !COMPONENT_SPECS[kind]) return;
+        if (!kind || !COMPONENT_SPECS[kind] || kind === "TIP") return;
         onReplace(id, kind);
       }}
     >
-      <div
-        className="component-glyph"
-        style={rotation ? { transform: `rotate(${rotation}deg)` } : undefined}
-      >
-        {spec.glyph}
-      </div>
-      <div className="component-refdes">{data.refdes || spec.label}</div>
-      {paramText && <div className="component-params">{paramText}</div>}
-      {unplaced && <div className="component-unplaced">unplaced</div>}
+      {!isTip && (
+        <>
+          <div
+            className="component-glyph"
+            style={rotation ? { transform: `rotate(${rotation}deg)` } : undefined}
+          >
+            {spec.glyph}
+          </div>
+          <div className="component-refdes">{data.refdes || spec.label}</div>
+          {paramText && <div className="component-params">{paramText}</div>}
+          {unplaced && <div className="component-unplaced">unplaced</div>}
+        </>
+      )}
 
       {pins.map((pin) => (
         <Handle
           key={pin.id}
           id={pin.id}
-          type="source" // xyflow: a single "source" handle can both start and receive wires
+          type="source"
           position={sideToPosition[pin.side]}
           style={handleStyle(pin)}
-          className="component-pin"
+          className={`component-pin${isTip ? " tip-pin" : ""}`}
+          onMouseDown={(e) => {
+            e.stopPropagation();
+          }}
+          onClick={(e) => {
+            if (!onPinClick) return;
+            e.stopPropagation();
+            e.preventDefault();
+            onPinClick(id, pin.id);
+          }}
         >
-          {pin.label && <span className="pin-label">{pin.label}</span>}
+          {!isTip && pin.label ? (
+            <span className="pin-label">{pin.label}</span>
+          ) : null}
         </Handle>
       ))}
     </div>

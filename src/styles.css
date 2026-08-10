@@ -62,14 +62,45 @@ body { background: var(--bg); color: var(--text); }
 .ghost-btn.danger:hover { background: #3a1c1a; }
 
 /* Canvas + nodes -------------------------------------------------------- */
-.canvas { flex: 1; min-height: 0; }
+.canvas { flex: 1; min-height: 0; position: relative; }
+.canvas-wiring { cursor: crosshair; }
+.canvas-wiring .react-flow__pane { cursor: crosshair; }
 .react-flow { background: var(--bg); }
+
+.wire-draft-locked {
+  stroke: var(--accent);
+  stroke-width: 1.75;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+}
+.wire-draft-rubber {
+  stroke: var(--accent);
+  stroke-width: 1.75;
+  stroke-dasharray: 6 4;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+  opacity: 0.9;
+}
+.wire-draft-hint {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 6;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  color: var(--text);
+  background: rgba(22, 27, 34, 0.92);
+  border: 1px solid var(--accent-dim);
+  pointer-events: none;
+}
 
 .component-node {
   position: relative; width: 92px; min-height: 54px;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   padding: 8px; border: 1.5px solid var(--border); border-radius: 8px;
   background: var(--panel-2); color: var(--text); font-size: 12px;
+  overflow: visible;
 }
 .component-node.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
 .component-node.unplaced {
@@ -92,14 +123,82 @@ body { background: var(--bg); color: var(--text); }
   letter-spacing: 0.4px;
 }
 .kind-GND { background: #12181f; }
+.tip-node {
+  width: 8px !important;
+  min-height: 8px !important;
+  height: 8px;
+  padding: 0 !important;
+  border: none !important;
+  border-radius: 50%;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.tip-node.selected {
+  box-shadow: none !important;
+  background: transparent !important;
+}
+/* Wire end is invisible — only a hit target to continue wiring. */
+.tip-node .component-pin,
+.tip-node .react-flow__handle.component-pin {
+  width: 8px !important;
+  height: 8px !important;
+  min-width: 8px !important;
+  min-height: 8px !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  opacity: 0;
+}
+.tip-node .component-pin:hover,
+.tip-node .react-flow__handle.component-pin:hover {
+  background: transparent !important;
+  opacity: 0;
+}
 
+/* Visible a/b pins — wire endpoints must match these centers (like freehand). */
+.react-flow__handle.component-pin,
 .component-pin {
-  width: 9px; height: 9px; background: var(--accent);
-  border: 1.5px solid #0b1017; border-radius: 50%;
+  width: 9px !important;
+  height: 9px !important;
+  min-width: 9px !important;
+  min-height: 9px !important;
+  background: var(--accent) !important;
+  border: 1.5px solid #0b1017 !important;
+  border-radius: 50% !important;
+  box-shadow: none !important;
+  z-index: 2;
+  transform: none !important;
+  transition: none !important;
+}
+.react-flow__handle.component-pin:hover,
+.component-pin:hover {
+  /* No scale — scaling shifted pins and broke precise wire attach. */
+  background: #7bb8ff !important;
+  transform: none !important;
 }
 .pin-label {
-  position: absolute; font-size: 9px; color: var(--muted);
-  pointer-events: none; transform: translate(10px, -6px); white-space: nowrap;
+  position: absolute;
+  font-size: 10px;
+  font-weight: 700;
+  color: #e6edf3;
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 5;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(15, 20, 25, 0.92);
+  border: 1px solid rgba(77, 163, 255, 0.35);
+  line-height: 1.2;
+}
+/* Keep labels off the handle center; stay readable over wires. */
+.react-flow__handle-left .pin-label { transform: translate(-22px, -8px); }
+.react-flow__handle-right .pin-label { transform: translate(12px, -8px); }
+.react-flow__handle-top .pin-label { transform: translate(10px, -18px); }
+.react-flow__handle-bottom .pin-label { transform: translate(10px, 10px); }
+
+.react-flow__handle.component-pin,
+.component-pin {
+  z-index: 4;
 }
 
 .props-header-actions { display: flex; align-items: center; gap: 6px; }

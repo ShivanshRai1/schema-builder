@@ -88,11 +88,12 @@ export function connectEndpoints(
   return addEdge(
     {
       id,
-      type: "step",
+      type: "schematic",
       source: a.id,
       sourceHandle: aPin,
       target: b.id,
       targetHandle: bPin,
+      data: { waypoints: [] },
     },
     edges,
   );
