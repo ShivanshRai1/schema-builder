@@ -62,25 +62,32 @@ export function Canvas({
     [handleReplace],
   );
 
+  // Orthogonal (H/V) routes like LTspice — not bezier curves.
   const defaultEdgeOptions = useMemo(
     () => ({
-      type: "smoothstep" as const,
-      pathOptions: { borderRadius: 0 },
+      type: "step" as const,
+      pathOptions: { offset: 20 },
     }),
     [],
+  );
+
+  // Force step type on every edge so older saved/seed wires never render as bezier.
+  const routedEdges = useMemo(
+    () => edges.map((e) => (e.type === "step" ? e : { ...e, type: "step" as const })),
+    [edges],
   );
 
   return (
     <div className="canvas">
       <ReactFlow
         nodes={nodes}
-        edges={edges}
+        edges={routedEdges}
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         connectionMode={ConnectionMode.Loose}
-        connectionLineType={ConnectionLineType.SmoothStep}
+        connectionLineType={ConnectionLineType.Step}
         defaultEdgeOptions={defaultEdgeOptions}
         snapToGrid
         snapGrid={[SCHEMATIC_GRID, SCHEMATIC_GRID]}

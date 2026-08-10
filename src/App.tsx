@@ -46,7 +46,7 @@ const INITIAL_NODES: Node<ComponentData>[] = [
 ];
 const wire = (s: string, sh: string, t: string, th: string): Edge => ({
   id: `${s}${sh}-${t}${th}`,
-  type: "smoothstep",
+  type: "step",
   source: s,
   sourceHandle: sh,
   target: t,
@@ -152,7 +152,7 @@ export default function App() {
 
   const onConnect = useCallback((c: Connection) => {
     pushHistory();
-    setEdges((eds) => addEdge({ ...c, type: "smoothstep" }, eds));
+    setEdges((eds) => addEdge({ ...c, type: "step" }, eds));
   }, [setEdges, pushHistory]);
 
   const rotateSelected = useCallback(() => {

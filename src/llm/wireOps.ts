@@ -88,7 +88,7 @@ export function connectEndpoints(
   return addEdge(
     {
       id,
-      type: "smoothstep",
+      type: "step",
       source: a.id,
       sourceHandle: aPin,
       target: b.id,
