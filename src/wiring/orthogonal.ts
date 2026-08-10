@@ -72,6 +72,9 @@ export function orthogonalPolyline(points: Point[]): Point[] {
 /**
  * Route start→waypoints→end with short stubs so wires enter/leave pins
  * perpendicular to the part edge (exact pin centers, like freehand attach).
+ *
+ * With no waypoints, bend in the pin's exit axis first (vertical from left/right
+ * pins, horizontal from top/bottom) so the run does not fold back through the part.
  */
 export function routeWirePoints(
   start: Point,
@@ -83,7 +86,27 @@ export function routeWirePoints(
 ): Point[] {
   const startOut = outwardStub(start, sourceSide, stub);
   const endOut = outwardStub(end, targetSide, stub);
+
+  if (waypoints.length === 0) {
+    const bend = exitFirstBend(startOut, endOut, sourceSide);
+    return orthogonalPolyline([start, startOut, ...bend, endOut, end]);
+  }
+
   return orthogonalPolyline([start, startOut, ...waypoints, endOut, end]);
+}
+
+/** One elbow that continues along the source exit before turning to the target. */
+function exitFirstBend(startOut: Point, endOut: Point, sourceSide: PinSide): Point[] {
+  if (pointsEqual(startOut, endOut)) return [];
+  const aligned =
+    Math.abs(startOut.x - endOut.x) < 0.5 || Math.abs(startOut.y - endOut.y) < 0.5;
+  if (aligned) return [];
+
+  // Left/right pins: keep x (go vertical first). Top/bottom: keep y (go horizontal first).
+  if (sourceSide === "left" || sourceSide === "right") {
+    return [{ x: startOut.x, y: endOut.y }];
+  }
+  return [{ x: endOut.x, y: startOut.y }];
 }
 
 export function polylinePath(points: Point[]): string {
