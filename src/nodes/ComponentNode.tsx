@@ -55,13 +55,21 @@ export function ComponentNode({
     [spec.pins, rotation],
   );
   const isTip = data.kind === "TIP";
+  // Include side/offset so RF re-registers handles when rotation remaps geometry.
+  const pinLayoutKey = pins.map((p) => `${p.id}:${p.side}:${p.offset}`).join("|");
 
-  // Remeasure handle bounds only when orientation changes (avoids hover thrash).
+  // Remeasure handle bounds after orientation changes (labels can move before RF bounds do).
   useEffect(() => {
     updateNodeInternals(id);
-    const t = window.setTimeout(() => updateNodeInternals(id), 0);
-    return () => window.clearTimeout(t);
-  }, [id, rotation, updateNodeInternals]);
+    const raf = window.requestAnimationFrame(() => updateNodeInternals(id));
+    const t0 = window.setTimeout(() => updateNodeInternals(id), 0);
+    const t1 = window.setTimeout(() => updateNodeInternals(id), 32);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.clearTimeout(t0);
+      window.clearTimeout(t1);
+    };
+  }, [id, rotation, pinLayoutKey, updateNodeInternals]);
 
   return (
     <div
@@ -92,7 +100,7 @@ export function ComponentNode({
         <>
           <div
             className="component-glyph"
-            style={rotation ? { transform: `rotate(${rotation}deg)` } : undefined}
+            style={rotation ? { transform: `rotate(${rotation}deg)` } : undefined }
           >
             {spec.glyph}
           </div>
@@ -104,7 +112,7 @@ export function ComponentNode({
 
       {pins.map((pin) => (
         <Handle
-          key={pin.id}
+          key={`${pin.id}-${pin.side}-${pin.offset}-${rotation}`}
           id={pin.id}
           type="source"
           position={sideToPosition[pin.side]}
