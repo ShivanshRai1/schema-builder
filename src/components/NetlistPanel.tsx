@@ -17,6 +17,7 @@ export function NetlistPanel({
   onDraftChange,
   onApply,
   onCancel,
+  onPopOut,
 }: {
   netlist: string;
   editing: boolean;
@@ -26,6 +27,7 @@ export function NetlistPanel({
   onDraftChange: (text: string) => void;
   onApply: () => void;
   onCancel: () => void;
+  onPopOut?: () => void;
 }) {
   const onMount: OnMount = (editor, monaco) => {
     monaco.editor.setModelLanguage(editor.getModel()!, spiceLanguageId);
@@ -53,6 +55,16 @@ export function NetlistPanel({
               title="Edit netlist text; Apply syncs params, add/delete, and wiring by refdes"
             >
               edit as text
+            </button>
+          )}
+          {onPopOut && (
+            <button
+              type="button"
+              className="ghost-btn pop-out-btn"
+              onClick={onPopOut}
+              title="Open in a floating window"
+            >
+              ⤢
             </button>
           )}
         </div>

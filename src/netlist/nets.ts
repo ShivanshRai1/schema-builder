@@ -7,10 +7,7 @@ import { COMPONENT_SPECS } from "../model/componentSpecs";
 //
 // A "pin endpoint" is `${nodeId}:${pinId}`. Two endpoints joined by a wire
 // belong to the same electrical net. Every ground pin is forced into net "0".
-// Every remaining connected group gets a stable small integer name.
-//
-// This is the heart of graph -> netlist: it is what turns geometry-free
-// connectivity into the nets a SPICE line references.
+// TIP nodes are transparent joiners (union through them) but do not mint nets.
 // ---------------------------------------------------------------------------
 
 class DSU {
@@ -20,7 +17,6 @@ class DSU {
     if (!this.parent.has(x)) this.parent.set(x, x);
     let root = x;
     while (this.parent.get(root) !== root) root = this.parent.get(root)!;
-    // path compression
     let cur = x;
     while (this.parent.get(cur) !== root) {
       const next = this.parent.get(cur)!;
@@ -46,9 +42,7 @@ class DSU {
 }
 
 export interface NetMap {
-  /** Net name for a given pin of a given node (e.g. "0", "1", "3"). */
   netOf: (nodeId: string, pinId: string) => string;
-  /** All distinct net names present, "0" first. */
   nets: string[];
 }
 
@@ -59,42 +53,43 @@ export function extractNets(
   edges: Edge[],
 ): NetMap {
   const dsu = new DSU();
-  const groundRoots = new Set<string>();
+  const groundEndpoints: string[] = [];
 
-  // 1. Register every pin of every node, and mark ground endpoints.
+  // 1. Register pins. TIP pins are included so wires through tips still union.
   for (const node of nodes) {
     const spec = COMPONENT_SPECS[node.data.kind];
     for (const pin of spec.pins) {
       const e = ep(node.id, pin.id);
       dsu.add(e);
-      if (node.data.kind === "GND") groundRoots.add(e);
+      if (node.data.kind === "GND") groundEndpoints.push(e);
     }
   }
 
-  // 2. Union endpoints joined by wires.
+  // 2. Union endpoints joined by wires (tips act as solder blobs).
   for (const edge of edges) {
     if (!edge.sourceHandle || !edge.targetHandle) continue;
     dsu.union(ep(edge.source, edge.sourceHandle), ep(edge.target, edge.targetHandle));
   }
 
-  // 3. Collapse all ground endpoints into a single net.
-  const groundList = [...groundRoots];
-  for (let i = 1; i < groundList.length; i++) dsu.union(groundList[0], groundList[i]);
-  const groundRoot = groundList.length ? dsu.root(groundList[0]) : null;
+  // 3. Collapse every GND pin into one net, then name that root "0".
+  for (let i = 1; i < groundEndpoints.length; i++) {
+    dsu.union(groundEndpoints[0]!, groundEndpoints[i]!);
+  }
+  const groundRoot = groundEndpoints.length ? dsu.root(groundEndpoints[0]!) : null;
 
-  // 4. Assign names. Ground root -> "0". Net-label (NODE) elements force their
-  //    group's name to the label's `name` attribute. Everything else -> 1,2,3...
   const nameByRoot = new Map<string, string>();
   const order: string[] = [];
   if (groundRoot) {
     nameByRoot.set(groundRoot, "0");
     order.push("0");
   }
+
+  // 4. Net-label (NODE) elements force their group's name.
   for (const node of nodes) {
     if (node.data.kind !== "NODE") continue;
-    const spec = COMPONENT_SPECS.NODE;
-    const root = dsu.root(ep(node.id, spec.pins[0].id));
-    if (nameByRoot.has(root)) continue; // ground or an earlier label wins
+    const pinId = COMPONENT_SPECS.NODE.pins[0]!.id;
+    const root = dsu.root(ep(node.id, pinId));
+    if (nameByRoot.has(root)) continue;
     const raw = (node.data.params.name ?? "").trim();
     const name = raw.replace(/\s+/g, "_");
     if (name) {
@@ -102,8 +97,8 @@ export function extractNets(
       order.push(name);
     }
   }
-  let next = 1;
 
+  let next = 1;
   const nameFor = (root: string): string => {
     let name = nameByRoot.get(root);
     if (name === undefined) {
@@ -114,8 +109,10 @@ export function extractNets(
     return name;
   };
 
-  // Pre-name every real pin so the net list is complete and deterministic.
+  // 5. Only mint net numbers for pins that matter electrically — not TIP-only
+  //    orphans. Emitting devices + GND + NODE + probes define the netlist.
   for (const node of nodes) {
+    if (node.data.kind === "TIP") continue;
     const spec = COMPONENT_SPECS[node.data.kind];
     for (const pin of spec.pins) nameFor(dsu.root(ep(node.id, pin.id)));
   }

@@ -28,7 +28,7 @@ Chart.register(
  * If the API is missing or fails, runSimulation returns a demo plot.
  * Does not touch graph / netlist / assistant state.
  */
-export function SimPanel({ netlist }: { netlist: string }) {
+export function SimPanel({ netlist, onPopOut }: { netlist: string; onPopOut?: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -134,6 +134,16 @@ export function SimPanel({ netlist }: { netlist: string }) {
           >
             {busy ? "Running…" : "Run"}
           </button>
+          {onPopOut && (
+            <button
+              type="button"
+              className="ghost-btn pop-out-btn"
+              onClick={onPopOut}
+              title="Open in a floating window"
+            >
+              ⤢
+            </button>
+          )}
         </div>
       </div>
       {result && <div className="netlist-status">{result.message}</div>}

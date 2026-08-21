@@ -188,7 +188,8 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
   },
   EAMP: {
     kind: "EAMP", category: "Control", refdesPrefix: "XEA", label: "Error amp / op-amp", glyph: "▷A", emits: true,
-    pins: [pin("inp", "+", "left", 0.3), pin("inn", "−", "left", 0.7), pin("out", "OUT", "right")],
+    // 0.25/0.75 keep +/− on the 16px wire grid with the 64×64 symbol box.
+    pins: [pin("inp", "+", "left", 0.25), pin("inn", "−", "left", 0.75), pin("out", "OUT", "right")],
     attributes: [modelAttr("OPAMP_GEN")],
     toSpice: subckt(["inp", "inn", "out"]),
   },

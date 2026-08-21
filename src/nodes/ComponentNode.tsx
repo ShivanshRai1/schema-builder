@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useLayoutEffect, useMemo } from "react";
 import {
   Handle,
   Position,
@@ -10,11 +10,8 @@ import type { ComponentData, ComponentKind, PinSpec } from "../model/types";
 import { COMPONENT_SPECS } from "../model/componentSpecs";
 import { isPaletteDrag, PALETTE_DND_MIME } from "../dnd";
 import { normalizeRotation, rotatePinSpec } from "../model/rotation";
-
-// ---------------------------------------------------------------------------
-// Pins are invisible hit-targets (LTspice-like). Handle `id` is the pin id —
-// netlist/wiring never depend on geometry.
-// ---------------------------------------------------------------------------
+import { getSymbolLayout, hasSymbol } from "./symbols/layout";
+import { SchematicSymbol } from "./symbols/SchematicSymbols";
 
 const sideToPosition: Record<PinSpec["side"], Position> = {
   left: Position.Left,
@@ -33,6 +30,13 @@ function handleStyle(pin: PinSpec): React.CSSProperties {
     case "bottom":
       return { left: pct };
   }
+}
+
+/** Put refdes/value on the side that has no pin — so wires don't run through text. */
+function labelAnchor(pins: PinSpec[]): "above" | "right" {
+  const sides = new Set(pins.map((p) => p.side));
+  if (sides.has("left") && sides.has("right")) return "above";
+  return "right";
 }
 
 export function ComponentNode({
@@ -55,25 +59,28 @@ export function ComponentNode({
     [spec.pins, rotation],
   );
   const isTip = data.kind === "TIP";
-  // Include side/offset so RF re-registers handles when rotation remaps geometry.
+  const isSymbol = hasSymbol(data.kind);
+  const symLayout = isSymbol ? getSymbolLayout(data.kind, rotation) : null;
   const pinLayoutKey = pins.map((p) => `${p.id}:${p.side}:${p.offset}`).join("|");
+  const labelsClass = isSymbol ? `symbol-labels labels-${labelAnchor(pins)}` : "symbol-labels";
 
-  // Remeasure handle bounds after orientation changes (labels can move before RF bounds do).
-  useEffect(() => {
+  useLayoutEffect(() => {
     updateNodeInternals(id);
-    const raf = window.requestAnimationFrame(() => updateNodeInternals(id));
-    const t0 = window.setTimeout(() => updateNodeInternals(id), 0);
-    const t1 = window.setTimeout(() => updateNodeInternals(id), 32);
-    return () => {
-      window.cancelAnimationFrame(raf);
-      window.clearTimeout(t0);
-      window.clearTimeout(t1);
-    };
+  }, [id, rotation, pinLayoutKey, updateNodeInternals]);
+
+  useEffect(() => {
+    const t = window.setTimeout(() => updateNodeInternals(id), 0);
+    return () => window.clearTimeout(t);
   }, [id, rotation, pinLayoutKey, updateNodeInternals]);
 
   return (
     <div
-      className={`component-node kind-${data.kind}${selected ? " selected" : ""}${unplaced ? " unplaced" : ""}${isTip ? " tip-node" : ""}`}
+      className={`component-node${isSymbol ? " symbol-node" : ""}${isSymbol ? ` sym-labels-${labelAnchor(pins)}` : ""} kind-${data.kind}${selected ? " selected" : ""}${unplaced ? " unplaced" : ""}${isTip ? " tip-node" : ""}`}
+      style={
+        symLayout
+          ? { width: symLayout.w, height: symLayout.h, minHeight: symLayout.h }
+          : undefined
+      }
       title={
         isTip
           ? "Wire end — click to continue wiring"
@@ -96,11 +103,28 @@ export function ComponentNode({
         onReplace(id, kind);
       }}
     >
-      {!isTip && (
+      {!isTip && isSymbol && (
+        <>
+          <div
+            className="symbol-body"
+            style={{
+              transform: `translate(-50%, -50%) rotate(${rotation}deg)`,
+            }}
+          >
+            <SchematicSymbol kind={data.kind} selected={selected} rotation={rotation} />
+          </div>
+          <div className={labelsClass}>
+            <div className="component-refdes">{data.refdes || spec.label}</div>
+            {paramText && <div className="component-params">{paramText}</div>}
+            {unplaced && <div className="component-unplaced">unplaced</div>}
+          </div>
+        </>
+      )}
+      {!isTip && !isSymbol && (
         <>
           <div
             className="component-glyph"
-            style={rotation ? { transform: `rotate(${rotation}deg)` } : undefined }
+            style={rotation ? { transform: `rotate(${rotation}deg)` } : undefined}
           >
             {spec.glyph}
           </div>
@@ -117,10 +141,7 @@ export function ComponentNode({
           type="source"
           position={sideToPosition[pin.side]}
           style={handleStyle(pin)}
-          className={`component-pin${isTip ? " tip-pin" : ""}`}
-          onMouseDown={(e) => {
-            e.stopPropagation();
-          }}
+          className={`component-pin pin-side-${pin.side}${isTip ? " tip-pin" : ""}`}
           onClick={(e) => {
             if (!onPinClick) return;
             e.stopPropagation();
@@ -128,7 +149,7 @@ export function ComponentNode({
             onPinClick(id, pin.id);
           }}
         >
-          {!isTip && pin.label ? (
+          {!isTip && !isSymbol && pin.label ? (
             <span className="pin-label">{pin.label}</span>
           ) : null}
         </Handle>

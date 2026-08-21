@@ -7,6 +7,7 @@
   --muted: #8b98a5;
   --accent: #4da3ff;
   --accent-dim: #234d78;
+  --select: #f0b429;
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
@@ -22,11 +23,121 @@ body { background: var(--bg); color: var(--text); }
 }
 .app-title { font-weight: 650; letter-spacing: 0.2px; }
 .app-sub { color: var(--muted); font-size: 12.5px; }
-.app-hint { margin-left: auto; color: var(--muted); font-size: 11.5px; font-family: ui-monospace, Menlo, monospace; }
-.app-actions { display: flex; align-items: center; gap: 6px; margin-left: 12px; flex-wrap: wrap; }
+.app-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; flex-wrap: wrap; }
 
-.workspace { flex: 1; display: grid; grid-template-columns: 200px 1fr 380px; min-height: 0; }
-.right-col { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--border); }
+/* Mode instructions — full width under header, high contrast for new users */
+.mode-guide {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 10px 16px 12px;
+  border-bottom: 1px solid var(--border);
+  background: #121a24;
+  flex-shrink: 0;
+}
+.mode-guide-badge {
+  flex-shrink: 0;
+  margin-top: 1px;
+  padding: 4px 10px;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #061018;
+  background: #7ec2ff;
+}
+.mode-guide-explore .mode-guide-badge { background: #9ad4ff; }
+.mode-guide-wire .mode-guide-badge { background: #7ec2ff; }
+.mode-guide-move .mode-guide-badge { background: #f0b429; color: #1a1408; }
+.mode-guide-content {
+  flex: 1;
+  min-width: 0;
+  color: #e8eef5;
+}
+.mode-guide-lead {
+  margin: 0 0 6px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #f2f6fb;
+  line-height: 1.35;
+}
+.mode-guide-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+}
+.mode-guide-list li {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: #d5dee8;
+}
+.mode-guide-list strong { color: #fff; font-weight: 650; }
+.mode-guide kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  margin: 0 1px;
+  border-radius: 4px;
+  border: 1px solid #3d4a5a;
+  background: #1c2633;
+  color: #9ad4ff;
+  font-size: 11.5px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.mode-guide-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #2a3544;
+}
+.mode-guide-legend .wl-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: #c8d4e0;
+  white-space: nowrap;
+}
+.mode-guide-legend .wl-item svg { flex-shrink: 0; }
+
+.workspace { flex: 1; display: grid; grid-template-columns: 200px 1fr 380px; min-height: 0; position: relative; }
+.right-col {
+  position: relative;
+  display: flex; flex-direction: column; min-height: 0;
+  border-left: 1px solid var(--border);
+}
+.col-resize {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 6px;
+  cursor: ew-resize; z-index: 5;
+}
+.col-resize:hover, .col-resize:active { background: var(--accent); opacity: 0.55; }
+.right-slot {
+  display: flex; flex-direction: column;
+  min-height: 72px; min-width: 0; overflow: hidden;
+}
+.right-slot > .props-panel,
+.right-slot > .netlist-panel,
+.right-slot > .sim-panel,
+.right-slot > .chat-panel,
+.right-slot > .library-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  border-bottom: none;
+}
+.panel-split {
+  flex: 0 0 6px;
+  cursor: ns-resize;
+  background: var(--border);
+  z-index: 2;
+}
+.panel-split:hover, .panel-split:active { background: var(--accent); }
 
 /* Palette (left sidebar) ------------------------------------------------- */
 .palette { padding: 10px 8px; background: var(--panel); border-right: 1px solid var(--border); overflow-y: auto; }
@@ -41,6 +152,18 @@ body { background: var(--bg); color: var(--text); }
 }
 .palette-item:hover { border-color: var(--accent); }
 .palette-item:active { transform: translateY(1px); }
+.palette-item.is-active {
+  border-color: var(--accent);
+  background: rgba(77, 163, 255, 0.16);
+  box-shadow: 0 0 0 1px var(--accent-dim);
+}
+.palette-item.is-active .palette-label { color: var(--text); font-weight: 650; }
+.palette-tool-hint {
+  margin-top: 6px;
+  font-size: 10px;
+  line-height: 1.3;
+  color: var(--accent);
+}
 .palette-glyph { font-size: 15px; line-height: 1.1; }
 .palette-label { font-size: 9.5px; color: var(--muted); text-align: center; line-height: 1.15; }
 
@@ -63,35 +186,123 @@ body { background: var(--bg); color: var(--text); }
 
 /* Canvas + nodes -------------------------------------------------------- */
 .canvas { flex: 1; min-height: 0; position: relative; }
-.canvas-wiring { cursor: crosshair; }
+.canvas .react-flow__nodes { z-index: 3 !important; }
+.canvas .react-flow__edges { z-index: 1 !important; }
+.canvas .react-flow__edgelabel-renderer { z-index: 2 !important; }
+.canvas-explore .react-flow__pane { cursor: grab; }
+.canvas-explore .react-flow__pane:active { cursor: grabbing; }
+.canvas-explore .react-flow__node { cursor: pointer; }
+.canvas-wire .react-flow__pane,
 .canvas-wiring .react-flow__pane { cursor: crosshair; }
+.canvas-wiring .react-flow__edge { cursor: crosshair; }
+.canvas-wiring { cursor: crosshair; }
+.canvas-wire:not(.canvas-wiring) .react-flow__edge { cursor: crosshair; }
+.canvas-wiring .react-flow__node,
+.canvas-wiring .react-flow__node *,
+.canvas-wiring .component-node {
+  cursor: crosshair !important;
+}
+.canvas-move .react-flow__pane { cursor: crosshair; }
+.canvas-move .react-flow__node { cursor: move; }
+.canvas-move .react-flow__edge { cursor: grab; }
+.canvas-move .react-flow__edge:active { cursor: grabbing; }
+.canvas-move .react-flow__node.dragging { cursor: grabbing; }
+
+/* Bend handles (HTML via EdgeLabelRenderer): faint until hover. */
+.wire-bend-handle {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 8;
+  touch-action: none;
+}
+.wire-bend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent, #3884ff);
+  border: 1.5px solid rgba(15, 20, 25, 0.9);
+  opacity: 0.18;
+  box-shadow: none;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+  pointer-events: none;
+}
+.wire-bend-handle.wire-bend-micro .wire-bend-dot {
+  width: 10px;
+  height: 10px;
+  opacity: 0.35;
+  background: #f0c14a;
+}
+.react-flow__edge:hover .wire-bend-dot,
+.wire-bend-handle:hover .wire-bend-dot,
+.wire-bend-handle.is-selected .wire-bend-dot {
+  opacity: 0.95;
+}
+.wire-add-handle {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 7;
+  touch-action: none;
+}
+.wire-add-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 1px;
+  transform: rotate(45deg);
+  background: transparent;
+  border: 1.5px solid var(--accent, #3884ff);
+  opacity: 0.2;
+  pointer-events: none;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+.react-flow__edge:hover .wire-add-dot,
+.wire-add-handle:hover .wire-add-dot,
+.wire-add-handle.is-selected .wire-add-dot {
+  opacity: 0.9;
+}
+.wire-add-handle:hover .wire-add-dot {
+  transform: rotate(45deg) scale(1.2);
+}
+
+.cut-marquee-rect {
+  fill: rgba(56, 132, 255, 0.08);
+  stroke: var(--accent, #3884ff);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 4;
+  pointer-events: none;
+}
+.canvas-mode-hint { border-color: rgba(77, 163, 255, 0.45); }
 .react-flow { background: var(--bg); }
 
 .wire-draft-locked {
   stroke: var(--accent);
-  stroke-width: 1.75;
+  stroke-width: 2.25;
   stroke-linecap: square;
   stroke-linejoin: miter;
+  fill: none;
+  vector-effect: non-scaling-stroke;
 }
 .wire-draft-rubber {
-  stroke: var(--accent);
-  stroke-width: 1.75;
-  stroke-dasharray: 6 4;
+  stroke: #7ec2ff;
+  stroke-width: 2.25;
+  stroke-dasharray: none;
   stroke-linecap: square;
   stroke-linejoin: miter;
-  opacity: 0.9;
+  opacity: 1;
+  fill: none;
+  vector-effect: non-scaling-stroke;
 }
-.wire-draft-hint {
-  position: absolute;
-  left: 12px;
-  bottom: 12px;
-  z-index: 6;
-  padding: 6px 10px;
-  border-radius: 6px;
-  font-size: 11.5px;
-  color: var(--text);
-  background: rgba(22, 27, 34, 0.92);
-  border: 1px solid var(--accent-dim);
+.wire-draft-anchor {
+  fill: #7ec2ff;
+  stroke: #06101c;
+  stroke-width: 1.25;
+  vector-effect: non-scaling-stroke;
   pointer-events: none;
 }
 
@@ -102,7 +313,118 @@ body { background: var(--bg); color: var(--text); }
   background: var(--panel-2); color: var(--text); font-size: 12px;
   overflow: visible;
 }
-.component-node.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+/* LTspice-style SVG symbols — no card box; labels sit to the right. */
+.component-node.symbol-node {
+  width: auto;
+  min-height: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  isolation: isolate;
+}
+.component-node.symbol-node.selected {
+  box-shadow: none;
+  --symbol-stroke: var(--select);
+}
+.component-node.symbol-node.selected .symbol-body {
+  filter: drop-shadow(0 0 4px rgba(240, 180, 41, 0.75));
+}
+.component-node.symbol-node.selected .component-pin::after {
+  border-color: var(--select);
+}
+.component-node.symbol-node.unplaced .symbol-body {
+  opacity: 0.75;
+  outline: 1px dashed #c9a227;
+  outline-offset: 3px;
+}
+.symbol-body {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  flex-shrink: 0;
+  transform-origin: center center;
+  transition: transform 0.12s ease;
+  line-height: 0;
+}
+.symbol-labels {
+  position: absolute;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 3;
+  line-height: 1.15;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(12, 16, 22, 0.82);
+}
+/* Pins on left/right (R, C, L, D, op-amp): sit above the body, not on the leads. */
+.symbol-labels.labels-above {
+  left: 50%;
+  bottom: calc(100% + 3px);
+  top: auto;
+  transform: translateX(-50%);
+}
+/* Pins on top/bottom (V, I, GND, transistors): sit to the right of the body. */
+.symbol-labels.labels-right {
+  left: calc(100% + 6px);
+  top: 50%;
+  bottom: auto;
+  transform: translateY(-50%);
+}
+/* Pin junction squares on schematic symbols (LTspice-like). */
+.symbol-node .component-pin::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  transform: translate(-50%, -50%);
+  border: 1.5px solid var(--symbol-stroke, #5eb0ff);
+  background: var(--bg, #0f1419);
+  box-sizing: border-box;
+  pointer-events: none;
+}
+/* Pin names on symbols — smaller; horizontal parts tuck names under each terminal. */
+.symbol-node .pin-label {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 0 2px;
+  border-color: rgba(77, 163, 255, 0.22);
+}
+.symbol-node.sym-labels-above .component-pin.pin-side-left .pin-label,
+.symbol-node.sym-labels-above .component-pin.pin-side-right .pin-label {
+  left: 50%;
+  top: 100%;
+  transform: translate(-50%, 5px);
+}
+/* V / I: +/− labels track the pin, offset away from the wire axis at every rotation. */
+.symbol-node.kind-V .component-pin.pin-side-top .pin-label,
+.symbol-node.kind-I .component-pin.pin-side-top .pin-label {
+  left: 50%;
+  top: 0;
+  transform: translate(-50%, calc(-100% - 4px));
+}
+.symbol-node.kind-V .component-pin.pin-side-bottom .pin-label,
+.symbol-node.kind-I .component-pin.pin-side-bottom .pin-label {
+  left: 50%;
+  top: 100%;
+  transform: translate(-50%, 4px);
+}
+/* Horizontal (90° / 270°): pins on left/right — tuck labels above, not on the leads. */
+.symbol-node.kind-V .component-pin.pin-side-left .pin-label,
+.symbol-node.kind-I .component-pin.pin-side-left .pin-label,
+.symbol-node.kind-V .component-pin.pin-side-right .pin-label,
+.symbol-node.kind-I .component-pin.pin-side-right .pin-label {
+  left: 50%;
+  top: 0;
+  transform: translate(-50%, calc(-100% - 4px));
+}
+.component-node.selected { border-color: var(--select); box-shadow: 0 0 0 2px rgba(240, 180, 41, 0.35); }
 .component-node.unplaced {
   border-style: dashed;
   border-color: #c9a227;
@@ -132,73 +454,153 @@ body { background: var(--bg); color: var(--text); }
   border-radius: 50%;
   background: transparent !important;
   box-shadow: none !important;
+  /* Above parts so dangling ends stay clickable (parts sit over edges). */
+  z-index: 6 !important;
 }
 .tip-node.selected {
   box-shadow: none !important;
   background: transparent !important;
 }
-/* Wire end is invisible — only a hit target to continue wiring. */
+/* Wire end: large hit target above parts. Mark only on hover/select so
+   mid-wire junction tips stay quiet. */
 .tip-node .component-pin,
 .tip-node .react-flow__handle.component-pin {
+  width: 36px !important;
+  height: 36px !important;
+  min-width: 36px !important;
+  min-height: 36px !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  opacity: 1;
+}
+.tip-node .component-pin::after,
+.tip-node .react-flow__handle.component-pin::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  transform: translate(-50%, -50%);
+  border: 1.5px solid transparent;
+  border-radius: 2px;
+  background: transparent;
+  pointer-events: none;
+}
+.tip-node .component-pin:hover::after,
+.tip-node .react-flow__handle.component-pin:hover::after,
+.tip-node.selected .component-pin::after,
+.tip-node.selected .react-flow__handle.component-pin::after {
+  border-color: rgba(94, 176, 255, 0.7);
+  background: rgba(15, 20, 25, 0.45);
+}
+.tip-node.selected .component-pin::after,
+.tip-node.selected .react-flow__handle.component-pin::after {
+  border-color: var(--select, #f0a020);
+  background: rgba(240, 160, 32, 0.25);
+}
+.tip-node .component-pin:hover,
+.tip-node .react-flow__handle.component-pin:hover {
+  background: transparent !important;
+  opacity: 1;
+}
+
+/* Invisible pin attach point — hit area expanded via ::before.
+   Labels sit fully outside so they never cover refdes / glyph. */
+.react-flow__handle.component-pin,
+.component-pin {
   width: 8px !important;
   height: 8px !important;
   min-width: 8px !important;
   min-height: 8px !important;
   background: transparent !important;
   border: none !important;
+  border-radius: 0 !important;
   box-shadow: none !important;
-  opacity: 0;
-}
-.tip-node .component-pin:hover,
-.tip-node .react-flow__handle.component-pin:hover {
-  background: transparent !important;
-  opacity: 0;
-}
-
-/* Visible a/b pins — wire endpoints must match these centers (like freehand). */
-.react-flow__handle.component-pin,
-.component-pin {
-  width: 9px !important;
-  height: 9px !important;
-  min-width: 9px !important;
-  min-height: 9px !important;
-  background: var(--accent) !important;
-  border: 1.5px solid #0b1017 !important;
-  border-radius: 50% !important;
-  box-shadow: none !important;
-  z-index: 2;
-  transform: none !important;
+  z-index: 4;
+  transform: translate(-50%, -50%) !important;
   transition: none !important;
+  overflow: visible !important;
+}
+.react-flow__handle.component-pin::before,
+.component-pin::before {
+  content: "";
+  position: absolute;
+  inset: -12px;
+  border-radius: 4px;
 }
 .react-flow__handle.component-pin:hover,
 .component-pin:hover {
-  /* No scale — scaling shifted pins and broke precise wire attach. */
-  background: #7bb8ff !important;
-  transform: none !important;
+  background: transparent !important;
+  transform: translate(-50%, -50%) !important;
 }
 .pin-label {
   position: absolute;
   font-size: 10px;
   font-weight: 700;
   color: #e6edf3;
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: crosshair;
   white-space: nowrap;
   z-index: 5;
-  padding: 1px 4px;
-  border-radius: 3px;
-  background: rgba(15, 20, 25, 0.92);
-  border: 1px solid rgba(77, 163, 255, 0.35);
-  line-height: 1.2;
+  padding: 0 3px;
+  border-radius: 2px;
+  background: rgba(15, 20, 25, 0.88);
+  border: 1px solid rgba(77, 163, 255, 0.3);
+  line-height: 1.15;
+  /* Default: centered on pin — side rules override. */
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
 }
-/* Keep labels off the handle center; stay readable over wires. */
-.react-flow__handle-left .pin-label { transform: translate(-22px, -8px); }
-.react-flow__handle-right .pin-label { transform: translate(12px, -8px); }
-.react-flow__handle-top .pin-label { transform: translate(10px, -18px); }
-.react-flow__handle-bottom .pin-label { transform: translate(10px, 10px); }
+.component-pin.pin-snap-hot .pin-label {
+  border-color: var(--accent, #3884ff);
+  box-shadow: 0 0 0 1px rgba(56, 132, 255, 0.45);
+}
+/* Always outside the part — clear of glyph / V1 / R1 text. */
+.component-pin.pin-side-left .pin-label {
+  left: 0;
+  top: 50%;
+  transform: translate(calc(-100% - 5px), -50%);
+}
+.component-pin.pin-side-right .pin-label {
+  left: 100%;
+  top: 50%;
+  transform: translate(5px, -50%);
+}
+.component-pin.pin-side-top .pin-label {
+  left: 50%;
+  top: 0;
+  transform: translate(-50%, calc(-100% - 3px));
+}
+.component-pin.pin-side-bottom .pin-label {
+  left: 50%;
+  top: 100%;
+  transform: translate(-50%, 3px);
+}
+.wire-draft-rubber.snapping {
+  stroke-dasharray: none;
+  opacity: 1;
+}
+.wire-draft-snap-dot {
+  fill: var(--accent, #3884ff);
+  stroke: none;
+  pointer-events: none;
+}
+.wire-junction {
+  fill: #e8eef5;
+  stroke: #0f1419;
+  stroke-width: 1;
+  pointer-events: none;
+}
 
-.react-flow__handle.component-pin,
-.component-pin {
-  z-index: 4;
+/* Hollow ring at wire crossings that are NOT electrically connected */
+.wire-crossing {
+  fill: var(--bg, #0f1419);
+  stroke: #e8eef5;
+  stroke-width: 2;
+  pointer-events: none;
 }
 
 .props-header-actions { display: flex; align-items: center; gap: 6px; }
@@ -249,6 +651,53 @@ body { background: var(--bg); color: var(--text); }
   font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .panel-header-right { display: flex; align-items: center; gap: 8px; }
+.pop-out-btn { padding: 2px 6px; line-height: 1; font-size: 13px; }
+
+/* Floating windows (pop-out panels) ------------------------------------- */
+.floating-window {
+  position: fixed;
+  display: flex; flex-direction: column;
+  background: var(--panel, #12161c);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  min-width: 320px;
+}
+.floating-window.fw-maximized { border-radius: 8px; }
+.floating-window.fw-minimized { min-width: 0; }
+.fw-titlebar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 6px 8px 6px 12px;
+  background: var(--panel-2, #171c24);
+  border-bottom: 1px solid var(--border);
+  cursor: move; user-select: none;
+  font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.fw-title { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fw-controls { display: flex; align-items: center; gap: 4px; }
+.fw-btn {
+  width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid transparent; border-radius: 6px;
+  background: transparent; color: var(--muted); cursor: pointer;
+  font-size: 12px; line-height: 1;
+}
+.fw-btn:hover { background: var(--accent-dim); color: var(--text); }
+.fw-btn-close:hover { background: #b4232a; color: #fff; }
+.fw-body {
+  position: relative;
+  flex: 1; display: flex; min-height: 0;
+}
+/* Let the docked panel fill the floating body. */
+.fw-body > .netlist-panel,
+.fw-body > .sim-panel { flex: 1; border-bottom: none; }
+.fw-resize {
+  position: absolute; right: 0; bottom: 0; width: 16px; height: 16px;
+  cursor: nwse-resize;
+  background:
+    linear-gradient(135deg, transparent 0 50%, var(--border) 50% 60%, transparent 60% 70%, var(--border) 70% 80%, transparent 80%);
+  z-index: 2;
+}
 .badge {
   font-size: 10.5px; color: var(--muted); background: var(--panel-2);
   border: 1px solid var(--border); border-radius: 20px; padding: 2px 8px;
@@ -259,6 +708,11 @@ body { background: var(--bg); color: var(--text); }
   border: 1px solid var(--accent-dim); border-radius: 6px; padding: 2px 8px; cursor: pointer;
 }
 .ghost-btn:hover { background: var(--accent-dim); }
+.ghost-btn-active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--text);
+}
 .ghost-btn-primary {
   background: var(--accent-dim);
   color: var(--text);
