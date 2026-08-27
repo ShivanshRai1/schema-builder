@@ -589,6 +589,86 @@ function sideSign(side: PinSide): number {
   return side === "right" || side === "bottom" ? 1 : -1;
 }
 
+/** Max secondary-axis offset we'll absorb by sliding a part (2 grid steps). */
+const NEAR_ALIGN_MAX = WIRE_GRID * 2;
+
+/**
+ * When two facing pins land nearly coplanar, nudge one part so the run is
+ * truly straight (kills the 1–2 grid stair R↔C often shows).
+ */
+export function planNearAlignPartNudge(
+  nodes: Node<ComponentData>[],
+  edges: Edge[],
+  edge: Edge,
+  opts?: { preferMoveId?: string; clickPoint?: Point },
+): TipMove | null {
+  if (!edge.sourceHandle || !edge.targetHandle) return null;
+  const src = nodes.find((n) => n.id === edge.source);
+  const tgt = nodes.find((n) => n.id === edge.target);
+  if (!src || !tgt) return null;
+  if (src.data.kind === "TIP" || tgt.data.kind === "TIP") return null;
+
+  const start = pinWorldPoint(src, edge.sourceHandle);
+  const end = pinWorldPoint(tgt, edge.targetHandle);
+  if (!start || !end) return null;
+
+  const sourceSide = pinWorldSide(src, edge.sourceHandle);
+  const targetSide = pinWorldSide(tgt, edge.targetHandle);
+  if (!sourceSide || !targetSide) return null;
+
+  const srcH = sideAxis(sourceSide) === "h";
+  const tgtH = sideAxis(targetSide) === "h";
+  if (srcH !== tgtH) return null;
+
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  // Horizontal facing pins: fix small Y stair. Vertical: small X stair.
+  let axis: "x" | "y";
+  let delta: number;
+  if (srcH) {
+    if (Math.abs(dy) < 0.5 || Math.abs(dy) > NEAR_ALIGN_MAX) return null;
+    if (Math.abs(dx) < WIRE_GRID) return null;
+    axis = "y";
+    delta = dy;
+  } else {
+    if (Math.abs(dx) < 0.5 || Math.abs(dx) > NEAR_ALIGN_MAX) return null;
+    if (Math.abs(dy) < WIRE_GRID) return null;
+    axis = "x";
+    delta = dx;
+  }
+
+  const degOf = (id: string) =>
+    edges.reduce(
+      (n, e) => n + (e.source === id || e.target === id ? 1 : 0),
+      0,
+    );
+  const srcDeg = degOf(src.id);
+  const tgtDeg = degOf(tgt.id);
+
+  let moveSrc = false;
+  if (opts?.preferMoveId === src.id) moveSrc = true;
+  else if (opts?.preferMoveId === tgt.id) moveSrc = false;
+  else if (srcDeg !== tgtDeg) moveSrc = srcDeg < tgtDeg;
+  else if (opts?.clickPoint) {
+    const sc = { x: src.position.x, y: src.position.y };
+    const tc = { x: tgt.position.x, y: tgt.position.y };
+    const ds = Math.hypot(opts.clickPoint.x - sc.x, opts.clickPoint.y - sc.y);
+    const dt = Math.hypot(opts.clickPoint.x - tc.x, opts.clickPoint.y - tc.y);
+    moveSrc = ds <= dt;
+  } else {
+    moveSrc = true;
+  }
+
+  const part = moveSrc ? src : tgt;
+  // Moving source toward target: +delta; moving target toward source: -delta.
+  const signed = moveSrc ? delta : -delta;
+  return {
+    id: part.id,
+    x: axis === "x" ? part.position.x + signed : part.position.x,
+    y: axis === "y" ? part.position.y + signed : part.position.y,
+  };
+}
+
 function pinToPinStraightWaypoints(
   start: Point,
   end: Point,
@@ -602,11 +682,12 @@ function pinToPinStraightWaypoints(
 
   const srcH = sideAxis(sourceSide) === "h";
   const tgtH = sideAxis(targetSide) === "h";
-  // After a part move, pins often land within one grid of coplanar. Empty
-  // waypoints + clearApproachBend's near-align path yield a tiny stair instead
-  // of a body-clearance detour (big step / overhang past the far pin).
-  if (srcH && tgtH && Math.abs(start.y - end.y) <= WIRE_GRID) return [];
-  if (!srcH && !tgtH && Math.abs(start.x - end.x) <= WIRE_GRID) return [];
+  // After a part move, pins often land within a couple grids of coplanar.
+  // Empty waypoints leave a tiny stair via clearApproachBend — callers should
+  // near-align parts instead of baking mid-column elbows (those look like a
+  // false junction square mid-wire).
+  if (srcH && tgtH && Math.abs(start.y - end.y) <= NEAR_ALIGN_MAX) return [];
+  if (!srcH && !tgtH && Math.abs(start.x - end.x) <= NEAR_ALIGN_MAX) return [];
 
   const anchor = prefer === "source" ? startOut : endOut;
   const other = prefer === "source" ? endOut : startOut;
@@ -676,12 +757,13 @@ function alignTipToPin(
  * Double-click straighten:
  * - pin↔TIP: slide the tip onto the pin's exit row/column
  * - TIP↔TIP: collapse to one H/V (may move a tip)
- * - pin↔pin: one clean elbow with the final approach into the nearer pin
+ * - pin↔pin: nudge a 1-grid stair into true alignment when possible; else one clean elbow
  */
 export function straightenWire(
   nodes: Node<ComponentData>[],
   edge: Edge,
   clickPoint?: Point,
+  allEdges: Edge[] = [],
 ): BendEditResult | null {
   if (!edge.sourceHandle || !edge.targetHandle) return null;
   const src = nodes.find((n) => n.id === edge.source);
@@ -715,6 +797,13 @@ export function straightenWire(
       waypoints: [],
       tipMoves: [{ id: tip.id, x: p.x, y: p.y }],
     };
+  }
+
+  // 1-grid stair between facing pins: nudge a part so the run is truly straight.
+  const edgesForDeg = allEdges.length ? allEdges : [edge];
+  const align = planNearAlignPartNudge(nodes, edgesForDeg, edge, { clickPoint });
+  if (align) {
+    return { waypoints: [], tipMoves: [align] };
   }
 
   const sourceSide = pinWorldSide(src, edge.sourceHandle) ?? "left";
@@ -1262,7 +1351,7 @@ export function finalizeConnectedPartMove(
       }
 
       // Free tip: slide onto the pin's exit row/column.
-      const result = straightenWire(nodes, edge);
+      const result = straightenWire(nodes, edge, undefined, workEdges);
       if (result?.tipMoves?.length) {
         for (const m of result.tipMoves) {
           tipMoves.push(m);
@@ -1278,6 +1367,16 @@ export function finalizeConnectedPartMove(
     // Pin↔pin: empty waypoints — routeWirePoints re-approaches from pin stubs.
     // straightenWire elbows go stale/backtrack after rotate and caused the
     // doubled paths / wires-through-parts seen in V-R-C circuits.
+    // If the moved part landed one grid off a facing peer, nudge it into line.
+    const preferId = srcMoved && !tgtMoved
+      ? edge.source
+      : tgtMoved && !srcMoved
+        ? edge.target
+        : undefined;
+    const align = planNearAlignPartNudge(nodes, workEdges, edge, {
+      preferMoveId: preferId,
+    });
+    if (align) tipMoves.push(align);
     return {
       ...edge,
       data: { ...(edge.data as object), waypoints: [], directPath: false },

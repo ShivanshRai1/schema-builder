@@ -315,6 +315,7 @@ export function Canvas({
   onReplace,
   onAddAt,
   onCutMoveRegion,
+  onSelectRegion,
   onMoveDisconnect,
   onWireBranch,
   onCancelWireBranch,
@@ -343,6 +344,8 @@ export function Canvas({
   onReplace: (nodeId: string, kind: ComponentKind) => void;
   onAddAt: (kind: ComponentKind, x: number, y: number) => void;
   onCutMoveRegion: (rect: FlowRect) => void;
+  /** Box-select parts in a rectangle; additive when Shift is held. */
+  onSelectRegion: (rect: FlowRect, additive: boolean) => void;
   /** Split edge at point; returns new TIP id. Optional pre-extended graph. */
   onWireBranch: (
     edgeId: string,
@@ -379,6 +382,8 @@ export function Canvas({
   edgesRef.current = edges;
   const marqueeRef = useRef<MarqueeDraft | null>(null);
   const [marquee, setMarquee] = useState<MarqueeDraft | null>(null);
+  /** Ignore the pane click that follows a box-select mouseup. */
+  const skipPaneClickRef = useRef(false);
   const [, setMoveHint] = useState<string | null>(null);
   const modeRef = useRef(mode);
   modeRef.current = mode;
@@ -399,6 +404,7 @@ export function Canvas({
   const onMoveWireDisconnectRef = useRef(onMoveWireDisconnect);
   const onModeChangeRef = useRef(onModeChange);
   const onCutMoveRef = useRef(onCutMoveRegion);
+  const onSelectRegionRef = useRef(onSelectRegion);
   const onMoveDisconnectRef = useRef(onMoveDisconnect);
   const onNodesChangeRef = useRef(onNodesChange);
   const onEdgesChangeRef = useRef(onEdgesChange);
@@ -422,6 +428,7 @@ export function Canvas({
   onMoveWireDisconnectRef.current = onMoveWireDisconnect;
   onModeChangeRef.current = onModeChange;
   onCutMoveRef.current = onCutMoveRegion;
+  onSelectRegionRef.current = onSelectRegion;
   onMoveDisconnectRef.current = onMoveDisconnect;
   onNodesChangeRef.current = onNodesChange;
   onEdgesChangeRef.current = onEdgesChange;
@@ -838,16 +845,21 @@ export function Canvas({
     const grabPoint = rf.screenToFlowPosition({ x: clientX, y: clientY });
     const startClient = { x: clientX, y: clientY };
 
-    // Select the part immediately. The wire cut is deferred until the pointer
-    // actually moves (see arm() below), so a plain click only selects — it never
-    // reroutes or mangles the part's wires.
-    onNodesChangeRef.current(
-      nodesRef.current.map((n) => ({
-        type: "select" as const,
-        id: n.id,
-        selected: n.id === nodeId,
-      })),
+    // Keep an existing multi-selection when dragging one of its members.
+    const selectedParts = nodesRef.current.filter(
+      (n) => n.selected && n.data.kind !== "TIP",
     );
+    const keepGroup =
+      selectedParts.length > 1 && selectedParts.some((n) => n.id === nodeId);
+    if (!keepGroup) {
+      onNodesChangeRef.current(
+        nodesRef.current.map((n) => ({
+          type: "select" as const,
+          id: n.id,
+          selected: n.id === nodeId,
+        })),
+      );
+    }
 
     let armed = false;
 
@@ -889,7 +901,7 @@ export function Canvas({
               nodesRef.current,
               o0.id,
               snapped,
-              SCHEMATIC_GRID * 0.65,
+              SCHEMATIC_GRID,
             );
       const sdx = aligned.x - o0.x;
       const sdy = aligned.y - o0.y;
@@ -1084,19 +1096,24 @@ export function Canvas({
   }, [mode, beginWireMoveDrag]);
 
 
-  // Cut-move marquee on empty canvas.
+  // Box-select marquee on empty canvas (explore + move).
+  // Move + Shift: keep the older cut-move (sever wires in the box).
   useEffect(() => {
-    if (mode !== "move") return;
+    if (mode !== "move" && mode !== "explore") return;
     const root = canvasElRef.current;
     if (!root) return;
 
-    const finishMarquee = () => {
+    const finishMarquee = (additive: boolean, cutMove: boolean) => {
       const draft = marqueeRef.current;
       marqueeRef.current = null;
       setMarquee(null);
       if (!draft) return;
       const rect = normalizeRect(draft.start, draft.end);
-      if (rectMeaningful(rect)) onCutMoveRef.current(rect);
+      if (!rectMeaningful(rect)) return;
+      // mouseup is followed by a click on the pane — don't clear the new selection.
+      skipPaneClickRef.current = true;
+      if (cutMove) onCutMoveRef.current(rect);
+      else onSelectRegionRef.current(rect, additive);
     };
 
     const onDown = (e: MouseEvent) => {
@@ -1112,6 +1129,11 @@ export function Canvas({
       if (!rf) return;
       e.preventDefault();
       e.stopPropagation();
+
+      const additive = e.shiftKey;
+      const cutMove = mode === "move" && e.shiftKey;
+      // Shift+drag in move = cut-move (not additive select).
+      const selectAdditive = additive && !cutMove;
 
       const start = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
       marqueeRef.current = { start, end: start };
@@ -1131,7 +1153,19 @@ export function Canvas({
       const onUp = () => {
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
-        finishMarquee();
+        finishMarquee(selectAdditive, cutMove);
+        // RF Pane.onClick always calls resetSelectedElements() after onPaneClick.
+        // A trailing click on the empty pane would wipe the selection we just set.
+        const swallowClick = (ev: MouseEvent) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          ev.stopImmediatePropagation();
+          window.removeEventListener("click", swallowClick, true);
+        };
+        window.addEventListener("click", swallowClick, true);
+        window.setTimeout(() => {
+          window.removeEventListener("click", swallowClick, true);
+        }, 0);
       };
 
       window.addEventListener("mousemove", onMove);
@@ -1474,6 +1508,11 @@ export function Canvas({
   );
 
   const onPaneClick = useCallback((e: React.MouseEvent) => {
+    if (skipPaneClickRef.current) {
+      skipPaneClickRef.current = false;
+      e.stopPropagation();
+      return;
+    }
     // Explore: a pane click just clears selection — never draws a wire.
     if (modeRef.current === "explore") {
       const sel = nodesRef.current.filter((n) => n.selected);
@@ -1602,9 +1641,32 @@ export function Canvas({
         return;
       }
 
-      // Explore: single-select a part so it shows in Properties. No move/wire.
-      if (modeRef.current === "explore") {
+      // Explore / Move: Shift+click toggles multi-select; plain click single-selects
+      // (unless clicking a member of an existing group in Move — keep the group).
+      if (modeRef.current === "explore" || modeRef.current === "move") {
         if (node.data.kind === "TIP") return;
+        if (e.shiftKey) {
+          e.stopPropagation();
+          onNodesChange([
+            { type: "select" as const, id: node.id, selected: !node.selected },
+          ]);
+          return;
+        }
+        e.stopPropagation();
+        if (modeRef.current === "explore") {
+          const changes = nodes.flatMap((n) => {
+            if (n.id === node.id) {
+              return n.selected ? [] : [{ type: "select" as const, id: n.id, selected: true }];
+            }
+            return n.selected ? [{ type: "select" as const, id: n.id, selected: false }] : [];
+          });
+          if (changes.length) onNodesChange(changes);
+          return;
+        }
+        // Move: keep cut-move / box group when clicking a selected member to drag.
+        if (node.selected && nodes.some((n) => n.selected && n.id !== node.id)) {
+          return;
+        }
         const changes = nodes.flatMap((n) => {
           if (n.id === node.id) {
             return n.selected ? [] : [{ type: "select" as const, id: n.id, selected: true }];
@@ -1612,22 +1674,7 @@ export function Canvas({
           return n.selected ? [{ type: "select" as const, id: n.id, selected: false }] : [];
         });
         if (changes.length) onNodesChange(changes);
-        return;
       }
-
-      if (modeRef.current !== "move") return;
-      if (node.data.kind === "TIP") return;
-      // Keep cut-move group (part + tips) selected when clicking a member to drag.
-      if (node.selected && nodes.some((n) => n.selected && n.id !== node.id)) {
-        return;
-      }
-      const changes = nodes.flatMap((n) => {
-        if (n.id === node.id) {
-          return n.selected ? [] : [{ type: "select" as const, id: n.id, selected: true }];
-        }
-        return n.selected ? [{ type: "select" as const, id: n.id, selected: false }] : [];
-      });
-      if (changes.length) onNodesChange(changes);
     },
     [nodes, onNodesChange, tryMagneticComplete, applyPinHit],
   );
@@ -1664,8 +1711,9 @@ export function Canvas({
         nodesDraggable={false}
         nodesConnectable={false}
         multiSelectionKeyCode={null}
+        selectionKeyCode={null}
         selectionOnDrag={false}
-        panOnDrag={mode === "explore" ? true : mode === "wire" ? [1] : false}
+        panOnDrag={mode === "explore" ? [1, 2] : mode === "wire" ? [1] : false}
         deleteKeyCode={null}
         connectionMode={ConnectionMode.Loose}
         defaultEdgeOptions={defaultEdgeOptions}

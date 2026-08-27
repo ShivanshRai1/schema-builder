@@ -16,24 +16,33 @@
  * Add a new family = add a kind here + one entry in componentSpecs.ts.
  */
 export type ComponentKind =
-  // passives
-  | "R" | "L" | "C"
+  // passives / resistors
+  | "R" | "RBOX" | "RVAR" | "RVARBOX" | "POT" | "POTBOX"
+  // inductors
+  | "L" | "LVAR"
+  // capacitors
+  | "C" | "CPOL" | "CFIXED" | "CVAR"
   // sources
   | "V" | "I"
   // semiconductors
-  | "D" | "NMOS" | "PMOS" | "SICMOS" | "SICMOS_K" | "GANHEMT"
+  | "D" | "NMOS" | "PMOS" | "NMOS_D" | "PMOS_D" | "NJFET" | "PJFET"
+  | "SICMOS" | "SICMOS_K" | "GANHEMT"
   | "IGBT" | "IGBT_K" | "NPN" | "PNP" | "SCR"
-  // drivers / control
-  | "GATEDRV" | "COMP" | "EAMP"
+  // drivers / control / opamps
+  | "GATEDRV" | "COMP" | "EAMP" | "OPAMP" | "OPAMP5"
   // sense / probes
   | "CSENSE" | "VSENSE" | "IPROBE" | "VPROBE"
   // structural
   | "GND" | "NODE" | "TIP";
 
 export type Category =
-  | "Passive"
+  | "Resistor"
+  | "Capacitor"
+  | "Inductor"
   | "Source"
+  | "Transistor"
   | "Semiconductor"
+  | "Opamp"
   | "Control"
   | "Sense / Probe"
   | "Structural";

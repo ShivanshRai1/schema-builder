@@ -33,17 +33,22 @@ import {
   endpointLabel,
   findNodeByRefdes,
 } from "./llm/wireOps";
-import { applyCutMove, detachPartForMove, reconnectPartsOnTips, reconnectTipsOnPins, type FlowRect } from "./wiring/cutMove";
+import { applyCutMove, detachPartForMove, nodesInRect, reconnectPartsOnTips, reconnectTipsOnPins, type FlowRect } from "./wiring/cutMove";
 import { clearTipStubsOnPins, pruneOrphanTips, collapsePassThroughTips } from "./wiring/tipCleanup";
 import {
   collapseMicroBends,
   detachWireForMove,
   finalizeConnectedPartMove,
   planConnectedPartMove,
+  planNearAlignPartNudge,
   straightenWire,
 } from "./wiring/wireMove";
 import { pinWorldPoint } from "./wiring/pinGeometry";
-import { computeEdgePolyline, polylineToStoredWaypoints } from "./wiring/wireGeometry";
+import {
+  computeEdgePolyline,
+  distToPolyline,
+  polylineToStoredWaypoints,
+} from "./wiring/wireGeometry";
 import {
   cleanEdgeTrailingNubs,
   isDanglingOrTrailingEdge,
@@ -705,6 +710,37 @@ export default function App() {
     setEdges(result.edges);
   }, [setNodes, setEdges, pushHistory]);
 
+  /** Box-select real parts in a rectangle (Shift = add to selection). */
+  const onSelectRegion = useCallback(
+    (rect: FlowRect, additive: boolean) => {
+      const hit = new Set(
+        nodesInRect(nodesRef.current, rect).filter((id) => {
+          const n = nodesRef.current.find((x) => x.id === id);
+          return Boolean(n && n.data.kind !== "TIP");
+        }),
+      );
+      if (!hit.size && !additive) {
+        setNodes((ns) => ns.map((n) => (n.selected ? { ...n, selected: false } : n)));
+        setEdges((es) => es.map((e) => (e.selected ? { ...e, selected: false } : e)));
+        return;
+      }
+      if (!hit.size) return;
+      setNodes((ns) =>
+        ns.map((n) => {
+          if (n.data.kind === "TIP") {
+            return additive ? n : n.selected ? { ...n, selected: false } : n;
+          }
+          const next = hit.has(n.id) || (additive && n.selected);
+          return n.selected === next ? n : { ...n, selected: next };
+        }),
+      );
+      if (!additive) {
+        setEdges((es) => es.map((e) => (e.selected ? { ...e, selected: false } : e)));
+      }
+    },
+    [setNodes, setEdges],
+  );
+
   /**
    * Move one part while keeping electrical edges attached. Long free TIP wires
    * ride along; short stubs are dropped; pin↔pin / junction waypoints clear so
@@ -716,6 +752,26 @@ export default function App() {
     (nodeId: string, grabPoint?: { x: number; y: number }) => {
       const nodesNow = nodesRef.current;
       let edgesNow = edgesRef.current;
+
+      // Multi-select: move the whole selected group of real parts together.
+      const selectedParts = nodesNow.filter(
+        (n) => n.selected && n.data.kind !== "TIP",
+      );
+      if (
+        selectedParts.length > 1 &&
+        selectedParts.some((n) => n.id === nodeId)
+      ) {
+        connectedMoveRef.current = true;
+        const moveIds = selectedParts.map((n) => n.id);
+        const idSet = new Set(moveIds);
+        return {
+          moveIds,
+          origins: nodesNow
+            .filter((n) => idSet.has(n.id))
+            .map((n) => ({ id: n.id, x: n.position.x, y: n.position.y })),
+          cutCount: 0,
+        };
+      }
 
       // Try to keep wires connected during the drag. This is possible when the
       // part is connected via TIP nodes that we can re-route rather than sever.
@@ -1035,33 +1091,69 @@ export default function App() {
   }, [setNodes, setEdges, pushHistory]);
 
   const straightenEdge = useCallback((edgeId: string, clickPoint?: Point) => {
-    const nodesNow = nodesRef.current;
-    const edgesNow = edgesRef.current;
-    const edge = edgesNow.find((candidate) => candidate.id === edgeId);
+    let nodesNow = nodesRef.current;
+    let edgesNow = edgesRef.current;
+    let edge = edgesNow.find((candidate) => candidate.id === edgeId);
     if (!edge) return;
 
-    const result = straightenWire(nodesNow, edge, clickPoint);
+    // Mid-wire splice tips (R—TIP—C) draw a filled junction square. Merge them
+    // into one pin↔pin edge first so double-click can near-align the parts.
+    const healed = collapsePassThroughTips(nodesNow, edgesNow);
+    if (healed.merged > 0) {
+      nodesNow = healed.nodes;
+      edgesNow = healed.edges;
+      const stillThere = edgesNow.find((candidate) => candidate.id === edgeId);
+      if (stillThere) {
+        edge = stillThere;
+      } else {
+        // Old half-edge was removed; pick the merged rail under the click.
+        const hit = clickPoint
+          ? edgesNow
+              .map((candidate) => {
+                const poly = computeEdgePolyline(nodesNow, candidate);
+                return { candidate, d: distToPolyline(poly, clickPoint) };
+              })
+              .sort((a, b) => a.d - b.d)[0]
+          : null;
+        edge = hit && hit.d < 24 ? hit.candidate : edgesNow[edgesNow.length - 1];
+      }
+      if (!edge) return;
+    }
+
+    const result = straightenWire(nodesNow, edge, clickPoint, edgesNow);
     if (!result) return;
 
     pushHistory();
     let nextNodes = nodesNow;
+    const movedPartIds = new Set<string>();
     if (result.tipMoves?.length) {
       const byId = new Map(result.tipMoves.map((m) => [m.id, m]));
       nextNodes = nodesNow.map((node) => {
         const move = byId.get(node.id);
-        return move ? { ...node, position: { x: move.x, y: move.y } } : node;
+        if (!move) return node;
+        if (node.data.kind !== "TIP") movedPartIds.add(node.id);
+        return { ...node, position: { x: move.x, y: move.y } };
       });
     }
 
-    let nextEdges = edgesNow.map((candidate) =>
-      candidate.id === edgeId
+    let nextEdges: Edge[] = edgesNow.map((candidate) =>
+      candidate.id === edge!.id
         ? {
             ...candidate,
             data: { ...(candidate.data as object), waypoints: result.waypoints },
             selected: true,
           }
-        : candidate,
+        : { ...candidate, selected: false },
     );
+
+    // Part nudge to kill a 1–2 grid stair: re-route every wire on that part.
+    if (movedPartIds.size) {
+      const finalized = finalizeConnectedPartMove(nextNodes, nextEdges, movedPartIds);
+      nextNodes = finalized.nodes;
+      nextEdges = finalized.edges.map((candidate) =>
+        candidate.id === edge!.id ? { ...candidate, selected: true } : candidate,
+      );
+    }
 
     // Drop tiny dangling stubs that share a pin with this wire (leftover nubs
     // after a part move often sit on the same pin as the real connection).
@@ -1074,7 +1166,7 @@ export default function App() {
     const stubIds = nextEdges
       .filter(
         (candidate) =>
-          candidate.id !== edgeId &&
+          candidate.id !== edge!.id &&
           isShortDanglingStub(nextNodes, nextEdges, candidate) &&
           (pinKeys.has(`${candidate.source}:${candidate.sourceHandle ?? ""}`) ||
             pinKeys.has(`${candidate.target}:${candidate.targetHandle ?? ""}`)),
@@ -1091,9 +1183,49 @@ export default function App() {
     // Degree-2 tips that became collinear after the tip slide should collapse.
     const collapsed = collapsePassThroughTips(nextNodes, nextEdges);
     nextNodes = collapsed.nodes;
+    const keepId = edge.id;
     nextEdges = collapsed.edges.map((candidate) =>
-      candidate.id === edgeId ? { ...candidate, selected: true } : candidate,
+      candidate.id === keepId ? { ...candidate, selected: true } : candidate,
     );
+
+    // Final pass: if the (possibly merged) pin↔pin run is still a tiny stair,
+    // nudge again now that splice tips are gone.
+    const focused =
+      nextEdges.find((candidate) => candidate.selected) ??
+      nextEdges.find((candidate) => candidate.id === keepId);
+    if (focused) {
+      const align = planNearAlignPartNudge(nextNodes, nextEdges, focused, {
+        clickPoint,
+      });
+      if (align) {
+        nextNodes = nextNodes.map((node) =>
+          node.id === align.id
+            ? { ...node, position: { x: align.x, y: align.y } }
+            : node,
+        );
+        const finalized = finalizeConnectedPartMove(
+          nextNodes,
+          nextEdges.map((candidate) =>
+            candidate.id === focused.id
+              ? {
+                  ...candidate,
+                  data: { ...(candidate.data as object), waypoints: [] },
+                  selected: true,
+                }
+              : candidate,
+          ),
+          new Set([align.id]),
+        );
+        nextNodes = finalized.nodes;
+        nextEdges = finalized.edges.map((candidate) =>
+          candidate.id === focused.id ||
+          (candidate.source === focused.source &&
+            candidate.target === focused.target)
+            ? { ...candidate, selected: true }
+            : candidate,
+        );
+      }
+    }
 
     setNodes(nextNodes);
     setEdges(nextEdges);
@@ -1876,10 +2008,10 @@ export default function App() {
             <>
               <p className="mode-guide-lead">Look around without changing the circuit.</p>
               <ul className="mode-guide-list">
-                <li><kbd>Drag</kbd> empty canvas to pan · <kbd>Scroll</kbd> to zoom</li>
-                <li><kbd>Click</kbd> a part to inspect it in Properties</li>
-                <li><kbd>Delete</kbd> / <kbd>Backspace</kbd> removes the selected part · with nothing selected, opens scissors</li>
-                <li>Switch to <strong>Wire</strong> or <strong>Move</strong> when you need to edit</li>
+                <li><kbd>Drag</kbd> empty canvas to box-select parts · middle/right-drag to pan · <kbd>Scroll</kbd> to zoom</li>
+                <li><kbd>Click</kbd> a part to select · <kbd>Shift</kbd>+click to add/remove from selection</li>
+                <li><kbd>Delete</kbd> / <kbd>Backspace</kbd> removes the selection · with nothing selected, opens scissors</li>
+                <li><kbd>Ctrl</kbd>+C / V copy·paste the selection · Switch to <strong>Move</strong> to drag a group</li>
               </ul>
             </>
           ) : canvasMode === "wire" ? (
@@ -1910,11 +2042,11 @@ export default function App() {
             <>
               <p className="mode-guide-lead">Move parts. Press <kbd>M</kbd> to toggle Move / Wire.</p>
               <ul className="mode-guide-list">
-                <li><kbd>Click</kbd> a part to select · <kbd>Drag</kbd> to move it (wires stay attached and clean up on drop)</li>
+                <li><kbd>Drag</kbd> empty canvas to box-select · <kbd>Shift</kbd>+drag empty = cut wires in the box</li>
+                <li><kbd>Click</kbd> / <kbd>Shift</kbd>+click parts · <kbd>Drag</kbd> a selected part to move the whole group</li>
                 <li>Drop near a wire end to reconnect · <kbd>Arrow</kbd> keys nudge (Shift = 1px)</li>
                 <li><kbd>Double-click</kbd> a wire to straighten it after a move</li>
-                <li><kbd>R</kbd> rotates the selected part · box-drag cuts a region to move together</li>
-                <li><kbd>Delete</kbd> removes the selected part · <kbd>Ctrl</kbd>+Z / Y undo·redo · <kbd>Ctrl</kbd>+C / V copy·paste</li>
+                <li><kbd>R</kbd> rotates selected parts · <kbd>Delete</kbd> removes selection · <kbd>Ctrl</kbd>+C / V copy·paste</li>
               </ul>
             </>
           )}
@@ -1939,6 +2071,7 @@ export default function App() {
           onReplace={replaceComponent}
           onAddAt={addComponentAt}
           onCutMoveRegion={onCutMoveRegion}
+          onSelectRegion={onSelectRegion}
           onMoveDisconnect={onMoveDisconnect}
           onWireBranch={onWireBranch}
           onCancelWireBranch={onCancelWireBranch}
@@ -1957,6 +2090,7 @@ export default function App() {
           <div className="right-slot" style={{ flex: `${slotFr.props} 1 80px` }}>
             <PropertiesPanel
               node={selectedNode}
+              selectionCount={selected.filter((n) => n.data.kind !== "TIP").length}
               onChangeParam={changeParam}
               onChangeRefdes={changeRefdes}
               onRotate={rotateSelected}

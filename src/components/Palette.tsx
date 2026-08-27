@@ -2,6 +2,8 @@ import { COMPONENT_SPECS, PALETTE } from "../model/componentSpecs";
 import type { ComponentKind } from "../model/types";
 import { PALETTE_DND_MIME } from "../dnd";
 import type { CanvasMode } from "./Canvas";
+import { hasSymbol } from "../nodes/symbols/layout";
+import { SchematicSymbol } from "../nodes/symbols/SchematicSymbols";
 
 // Palette of tools + components.
 // Tools are modes. Parts: click → add, drag onto canvas / a part → place or replace.
@@ -69,6 +71,7 @@ export function Palette({
           <div className="palette-grid">
             {group.kinds.map((kind) => {
               const spec = COMPONENT_SPECS[kind];
+              const showSvg = hasSymbol(kind);
               return (
                 <button
                   key={kind}
@@ -82,7 +85,13 @@ export function Palette({
                     e.dataTransfer.effectAllowed = "copy";
                   }}
                 >
-                  <span className="palette-glyph">{spec.glyph}</span>
+                  {showSvg ? (
+                    <span className="palette-glyph palette-glyph-svg">
+                      <SchematicSymbol kind={kind} />
+                    </span>
+                  ) : (
+                    <span className="palette-glyph">{spec.glyph}</span>
+                  )}
                   <span className="palette-label">{spec.label}</span>
                 </button>
               );

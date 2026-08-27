@@ -14,12 +14,15 @@ import { normalizeRotation } from "../model/rotation";
 
 export function PropertiesPanel({
   node,
+  selectionCount = 0,
   onChangeParam,
   onChangeRefdes,
   onRotate,
   onDelete,
 }: {
   node: Node<ComponentData> | null;
+  /** Number of selected real parts (for multi-select empty state). */
+  selectionCount?: number;
   onChangeParam: (nodeId: string, key: string, value: string) => void;
   onChangeRefdes: (nodeId: string, refdes: string) => void;
   onRotate?: () => void;
@@ -29,7 +32,11 @@ export function PropertiesPanel({
     return (
       <div className="props-panel">
         <div className="panel-header"><span>properties</span></div>
-        <div className="props-empty">Select a component to edit its attributes.</div>
+        <div className="props-empty">
+          {selectionCount > 1
+            ? `${selectionCount} parts selected — Delete / Move / Ctrl+C work on the group.`
+            : "Select a component to edit its attributes."}
+        </div>
       </div>
     );
   }

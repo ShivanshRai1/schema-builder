@@ -8,8 +8,15 @@ import { COMPONENT_SPECS } from "../model/componentSpecs";
 
 /** How many leading net tokens toSpice emits before value/model. */
 export function netTokenCount(kind: ComponentKind): number {
-  // NMOS/PMOS emit bulk tied to source: D G S S
-  if (kind === "NMOS" || kind === "PMOS") return 4;
+  // NMOS/PMOS (+ depletion) emit bulk tied to source: D G S S
+  if (
+    kind === "NMOS" ||
+    kind === "PMOS" ||
+    kind === "NMOS_D" ||
+    kind === "PMOS_D"
+  ) {
+    return 4;
+  }
   return COMPONENT_SPECS[kind].pins.length;
 }
 
@@ -20,11 +27,21 @@ export function netTokenCount(kind: ComponentKind): number {
 export function spicePinOrder(kind: ComponentKind): string[] {
   switch (kind) {
     case "R":
+    case "RBOX":
+    case "RVAR":
+    case "RVARBOX":
     case "L":
+    case "LVAR":
     case "C":
+    case "CPOL":
+    case "CFIXED":
+    case "CVAR":
     case "CSENSE":
     case "IPROBE":
       return ["a", "b"];
+    case "POT":
+    case "POTBOX":
+      return ["a", "w", "b"];
     case "V":
     case "I":
       return ["p", "n"];
@@ -32,7 +49,12 @@ export function spicePinOrder(kind: ComponentKind): string[] {
       return ["a", "k"];
     case "NMOS":
     case "PMOS":
+    case "NMOS_D":
+    case "PMOS_D":
       return ["d", "g", "s", "s"];
+    case "NJFET":
+    case "PJFET":
+      return ["d", "g", "s"];
     case "SICMOS":
     case "GANHEMT":
       return ["d", "g", "s"];
@@ -51,7 +73,10 @@ export function spicePinOrder(kind: ComponentKind): string[] {
       return ["in", "out", "vdd", "gnd"];
     case "COMP":
     case "EAMP":
+    case "OPAMP":
       return ["inp", "inn", "out"];
+    case "OPAMP5":
+      return ["inp", "inn", "out", "vplus", "vminus"];
     default:
       return COMPONENT_SPECS[kind].pins.map((p) => p.id);
   }
@@ -102,6 +127,7 @@ export function inferKindFromRefdes(
 
   if (/^M\d+$/i.test(refdes)) return "NMOS";
   if (/^Q\d+$/i.test(refdes)) return "NPN";
+  if (/^J\d+$/i.test(refdes)) return "NJFET";
 
   const candidates = Object.values(COMPONENT_SPECS)
     .filter((s) => s.emits && s.refdesPrefix)
