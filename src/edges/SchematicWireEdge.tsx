@@ -36,8 +36,6 @@ export function SchematicWireEdge({
   sourceY,
   targetX,
   targetY,
-  sourcePosition,
-  targetPosition,
   style,
   markerEnd,
   data,
