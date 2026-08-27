@@ -893,9 +893,41 @@ export default function App() {
     if (!ids.length) return;
     pushHistory();
     const idSet = new Set(ids);
-    setNodes((ns) => ns.filter((n) => !idSet.has(n.id)));
-    setEdges((es) => es.filter((e) => !idSet.has(e.source) && !idSet.has(e.target)));
+    const nextNodes = nodesRef.current.filter((n) => !idSet.has(n.id));
+    const nextEdges = edgesRef.current.filter(
+      (e) => !idSet.has(e.source) && !idSet.has(e.target),
+    );
+    const pruned = pruneOrphanTips(nextNodes, nextEdges);
+    const collapsed = collapsePassThroughTips(pruned.nodes, pruned.edges);
+    setNodes(collapsed.nodes);
+    setEdges(collapsed.edges);
   }, [setNodes, setEdges, pushHistory]);
+
+  /** Delete selected parts/wires, or toggle scissors when nothing is selected. */
+  const deleteSelectionOrToggleScissors = useCallback(() => {
+    const nodesNow = nodesRef.current;
+    const edgesNow = edgesRef.current;
+    const selectedNodeIds = nodesNow.filter((n) => n.selected).map((n) => n.id);
+    const selectedEdgeIds = edgesNow.filter((e) => e.selected).map((e) => e.id);
+    if (!selectedNodeIds.length && !selectedEdgeIds.length) {
+      setCanvasMode((current) => (current === "delete" ? "explore" : "delete"));
+      return;
+    }
+    pushHistory();
+    const dropNodes = new Set(selectedNodeIds);
+    const dropEdges = new Set(selectedEdgeIds);
+    const nextNodes = nodesNow.filter((n) => !dropNodes.has(n.id));
+    const nextEdges = edgesNow.filter(
+      (e) =>
+        !dropEdges.has(e.id) &&
+        !dropNodes.has(e.source) &&
+        !dropNodes.has(e.target),
+    );
+    const pruned = pruneOrphanTips(nextNodes, nextEdges);
+    const collapsed = collapsePassThroughTips(pruned.nodes, pruned.edges);
+    setNodes(collapsed.nodes);
+    setEdges(collapsed.edges);
+  }, [pushHistory, setNodes, setEdges]);
 
   const deleteNodeWithTool = useCallback((nodeId: string) => {
     const nodesNow = nodesRef.current;
@@ -1528,7 +1560,7 @@ export default function App() {
       else if (e.key === "Backspace" || e.key === "Delete") {
         e.preventDefault();
         if (e.repeat) return;
-        setCanvasMode((current) => current === "delete" ? "explore" : "delete");
+        deleteSelectionOrToggleScissors();
       }
       else if (!mod && (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown")) {
         const sel = nodes.filter((n) => n.selected && n.data.kind !== "TIP");
@@ -1559,7 +1591,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-    }, [copySelection, cutSelection, paste, nodes, undo, redo, snapshot, rotateSelected, setNodes, setEdges, pushHistory]);
+    }, [copySelection, cutSelection, paste, nodes, undo, redo, snapshot, rotateSelected, setNodes, setEdges, pushHistory, deleteSelectionOrToggleScissors]);
 
   const startTextEdit = useCallback(() => {
     setDraftNetlist(netlist);
@@ -1810,7 +1842,7 @@ export default function App() {
             type="button"
             className={`ghost-btn${canvasMode === "delete" ? " ghost-btn-active" : ""}`}
             onClick={() => setCanvasMode((mode) => mode === "delete" ? "explore" : "delete")}
-            title="Delete tool — click any part or wire (Delete/Backspace)"
+            title="Delete tool — click parts or wires. Delete/Backspace removes selection, or toggles scissors if nothing is selected"
           >
             ✂ Delete
           </button>
@@ -1846,6 +1878,7 @@ export default function App() {
               <ul className="mode-guide-list">
                 <li><kbd>Drag</kbd> empty canvas to pan · <kbd>Scroll</kbd> to zoom</li>
                 <li><kbd>Click</kbd> a part to inspect it in Properties</li>
+                <li><kbd>Delete</kbd> / <kbd>Backspace</kbd> removes the selected part · with nothing selected, opens scissors</li>
                 <li>Switch to <strong>Wire</strong> or <strong>Move</strong> when you need to edit</li>
               </ul>
             </>
@@ -1860,7 +1893,7 @@ export default function App() {
                 <li><kbd>Alt</kbd>+click a wire to select it (turns amber)</li>
                 <li><kbd>Double-click</kbd> a wire to straighten it (pulls the run into the nearer pin)</li>
                 <li><kbd>Esc</kbd> on a selected wire: peels one bend at a time · also removes short dangling stubs</li>
-                <li><kbd>Delete</kbd> / <kbd>Backspace</kbd>: toggle scissors, then click any part or wire · <kbd>Esc</kbd> exits</li>
+                <li><kbd>Delete</kbd> / <kbd>Backspace</kbd>: remove selected part/wire · with nothing selected, toggle scissors · <kbd>Esc</kbd> exits scissors</li>
               </ul>
               <div className="mode-guide-legend" aria-label="Wire legend">
                 <span className="wl-item">
@@ -1881,7 +1914,7 @@ export default function App() {
                 <li>Drop near a wire end to reconnect · <kbd>Arrow</kbd> keys nudge (Shift = 1px)</li>
                 <li><kbd>Double-click</kbd> a wire to straighten it after a move</li>
                 <li><kbd>R</kbd> rotates the selected part · box-drag cuts a region to move together</li>
-                <li><kbd>Ctrl</kbd>+Z / Y undo·redo · <kbd>Ctrl</kbd>+C / V copy·paste</li>
+                <li><kbd>Delete</kbd> removes the selected part · <kbd>Ctrl</kbd>+Z / Y undo·redo · <kbd>Ctrl</kbd>+C / V copy·paste</li>
               </ul>
             </>
           )}

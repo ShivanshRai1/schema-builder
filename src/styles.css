@@ -15,6 +15,30 @@
 html, body, #root { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--text); }
 
+/* Dark scrollbars to match the UI (Firefox + Chromium/WebKit) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) var(--panel);
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: var(--panel);
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 6px;
+  border: 2px solid var(--panel);
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+*::-webkit-scrollbar-corner {
+  background: var(--panel);
+}
+
 .app { display: flex; flex-direction: column; height: 100vh; }
 
 .app-header {
@@ -288,6 +312,36 @@ body { background: var(--bg); color: var(--text); }
 }
 .canvas-mode-hint { border-color: rgba(77, 163, 255, 0.45); }
 .react-flow { background: var(--bg); }
+
+/* Zoom / fit / lock controls — dark so icons stay visible */
+.react-flow__controls {
+  border: 1px solid var(--border) !important;
+  border-radius: 8px !important;
+  overflow: hidden;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35) !important;
+}
+.react-flow__controls-button {
+  background: var(--panel) !important;
+  border-bottom: 1px solid var(--border) !important;
+  fill: var(--text) !important;
+  color: var(--text) !important;
+  width: 28px !important;
+  height: 28px !important;
+}
+.react-flow__controls-button:hover {
+  background: var(--panel-2) !important;
+}
+.react-flow__controls-button:last-child {
+  border-bottom: none !important;
+}
+.react-flow__controls-button svg {
+  fill: var(--text) !important;
+  max-width: 14px;
+  max-height: 14px;
+}
+.react-flow__controls-button path {
+  fill: var(--text) !important;
+}
 
 .wire-draft-locked {
   stroke: #c8d1dc;

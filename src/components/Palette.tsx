@@ -49,7 +49,7 @@ export function Palette({
           <button
             type="button"
             className={`palette-item palette-tool${mode === "delete" ? " is-active" : ""}`}
-            title="Delete tool — click parts or wires; Delete/Backspace toggles, Esc exits"
+            title="Delete tool — click parts or wires; Delete/Backspace removes selection (or toggles scissors if none)"
             onClick={() => onModeChange(mode === "delete" ? "explore" : "delete")}
           >
             <span className="palette-glyph">✂</span>
@@ -60,7 +60,7 @@ export function Palette({
           <div className="palette-tool-hint">Click the grid to start a new wire</div>
         )}
         {mode === "delete" && (
-          <div className="palette-tool-hint">Click any part or wire to delete it · Esc exits</div>
+          <div className="palette-tool-hint">Click any part or wire · Esc exits · Delete key removes a selection without this mode</div>
         )}
       </div>
       {PALETTE.map((group) => (
