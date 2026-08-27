@@ -36,12 +36,15 @@ import {
   WIRE_GRID,
   type Point,
 } from "../wiring/orthogonal";
-import { findNearestPin, findNearestPinOnNode, PIN_SNAP_RADIUS, pinWorldPoint, snapPositionToPeerPins } from "../wiring/pinGeometry";
+import { findNearestPin, findNearestPinOnNode, PIN_SNAP_RADIUS, pinWorldPoint, pinWorldSide, snapPositionToPeerPins } from "../wiring/pinGeometry";
 import {
   computeEdgePolyline,
   closestPointOnPolyline,
+  distToPolyline,
   findNearestWireHit,
 } from "../wiring/wireGeometry";
+import { isShortDanglingStub } from "../wiring/normalizeWires";
+import { resolveBranchOnEdge } from "../wiring/busBranch";
 import {
   normalizeRect,
   rectMeaningful,
@@ -65,8 +68,8 @@ const WIRE_JOIN_RADIUS = 16;
  */
 const SAME_PART_PIN_COMMIT = 14;
 
-/** LTspice-style canvas tool: wire (click pins) or move (drag parts). */
-export type CanvasMode = "explore" | "wire" | "move";
+/** LTspice-style canvas tools. */
+export type CanvasMode = "explore" | "wire" | "move" | "delete";
 
 export type WireCompletePayload = Connection & {
   waypoints: Point[];
@@ -86,9 +89,16 @@ export type WirePartialPayload = {
 type WiringDraft = {
   sourceNodeId: string | null;
   sourceHandle: string | null;
+  /** Temporary split inserted when this draft started from an existing wire. */
+  branchOriginTipId?: string;
   start: Point;
   waypoints: Point[];
   preview: Point | null;
+  /**
+   * First-segment preference before any bend is locked.
+   * Branch off H bus → "v"; off V bus → "h"; leave a pin along its side.
+   */
+  axisHint?: "h" | "v" | null;
 };
 
 function handleCenter(
@@ -121,8 +131,18 @@ function lastLocked(draft: WiringDraft): Point {
     : draft.start;
 }
 
-/** Prefer continuing the last locked segment's axis (V→V / H→H). */
+/**
+ * First segment only: honor leave-bus / leave-pin axisHint (strong sticky).
+ * After a bend is locked, return null so the mouse picks H vs V freely —
+ * sticking to the last axis made corners feel stuck (couldn't turn).
+ */
 function draftPreferAxis(draft: WiringDraft): "h" | "v" | null {
+  if (!draft.waypoints.length) return draft.axisHint ?? null;
+  return null;
+}
+
+/** Axis of the last locked run, if any (for collinear bend extension). */
+function draftLastAxis(draft: WiringDraft): "h" | "v" | null {
   if (!draft.waypoints.length) return null;
   const to = draft.waypoints[draft.waypoints.length - 1]!;
   const from =
@@ -297,6 +317,10 @@ export function Canvas({
   onCutMoveRegion,
   onMoveDisconnect,
   onWireBranch,
+  onCancelWireBranch,
+  onDeleteNode,
+  onDeleteEdge,
+  onStraightenEdge,
   onSelectEdge,
 }: {
   nodes: Node<ComponentData>[];
@@ -319,8 +343,17 @@ export function Canvas({
   onReplace: (nodeId: string, kind: ComponentKind) => void;
   onAddAt: (kind: ComponentKind, x: number, y: number) => void;
   onCutMoveRegion: (rect: FlowRect) => void;
-  /** Split edge at point; returns new TIP id. */
-  onWireBranch: (edgeId: string, branchPoint: Point) => string | null;
+  /** Split edge at point; returns new TIP id. Optional pre-extended graph. */
+  onWireBranch: (
+    edgeId: string,
+    branchPoint: Point,
+    graph?: { nodes: Node<ComponentData>[]; edges: Edge[] },
+  ) => string | null;
+  /** Undo a temporary edge split when its branch draft is cancelled. */
+  onCancelWireBranch: (tipId: string) => void;
+  onDeleteNode: (nodeId: string) => void;
+  onDeleteEdge: (edgeId: string, clickPoint?: Point) => void;
+  onStraightenEdge: (edgeId: string, clickPoint?: Point) => void;
   /** Select exactly one edge; clear all node selection. */
   onSelectEdge: (edgeId: string) => void;
   onMoveDisconnect: (
@@ -371,6 +404,14 @@ export function Canvas({
   const onEdgesChangeRef = useRef(onEdgesChange);
   const onWireBranchRef = useRef(onWireBranch);
   onWireBranchRef.current = onWireBranch;
+  const onCancelWireBranchRef = useRef(onCancelWireBranch);
+  onCancelWireBranchRef.current = onCancelWireBranch;
+  const onDeleteNodeRef = useRef(onDeleteNode);
+  onDeleteNodeRef.current = onDeleteNode;
+  const onDeleteEdgeRef = useRef(onDeleteEdge);
+  onDeleteEdgeRef.current = onDeleteEdge;
+  const onStraightenEdgeRef = useRef(onStraightenEdge);
+  onStraightenEdgeRef.current = onStraightenEdge;
   const onSelectEdgeRef = useRef(onSelectEdge);
   onSelectEdgeRef.current = onSelectEdge;
   onReplaceRef.current = onReplace;
@@ -428,17 +469,10 @@ export function Canvas({
   const finishOrKeepPartial = useCallback(() => {
     const draft = wiringRef.current;
     if (!draft) return;
-    const pts = [...draft.waypoints];
-    if (draft.preview) {
-      const from = lastLocked(draft);
-      const end = projectOrthogonal(
-        from,
-        draft.preview,
-        SCHEMATIC_GRID,
-        draftPreferAxis(draft),
-      );
-      if (dist(from, end) >= SCHEMATIC_GRID * 0.4) pts.push(end);
-    }
+    // Left clicks are the committed anchors. The mouse-following preview is
+    // deliberately excluded: right-click stops drawing and discards only that
+    // current blue segment.
+    const pts = draft.waypoints;
     if (pts.length > 0) {
       onWirePartialRef.current({
         source: draft.sourceNodeId ?? undefined,
@@ -447,6 +481,10 @@ export function Canvas({
         waypoints: pts.slice(0, -1),
         end: pts[pts.length - 1]!,
       });
+    } else if (draft.branchOriginTipId) {
+      // A click on a wire splits it immediately so the rubber-band has a real
+      // source. If no segment was drawn, put the original wire back.
+      onCancelWireBranchRef.current(draft.branchOriginTipId);
     }
     wiringRef.current = null;
     setWiring(null);
@@ -454,6 +492,10 @@ export function Canvas({
   }, [clearRubberDom]);
 
   const cancelWiringDraft = useCallback(() => {
+    const draft = wiringRef.current;
+    if (draft?.branchOriginTipId) {
+      onCancelWireBranchRef.current(draft.branchOriginTipId);
+    }
     wiringRef.current = null;
     setWiring(null);
     clearRubberDom();
@@ -506,12 +548,25 @@ export function Canvas({
       if (!center) return;
 
       if (!draft) {
+        const node = nodesRef.current.find((n) => n.id === hitNodeId);
+        const side =
+          node && node.data.kind !== "TIP"
+            ? pinWorldSide(node, hitPinId)
+            : null;
+        // Leave a pin along its outward axis first (LTspice-like).
+        const axisHint =
+          side === "top" || side === "bottom"
+            ? ("v" as const)
+            : side === "left" || side === "right"
+              ? ("h" as const)
+              : null;
         wiringRef.current = {
           sourceNodeId: hitNodeId,
           sourceHandle: hitPinId,
           start: center,
           waypoints: [],
           preview: null,
+          axisHint,
         };
         setWiring(wiringRef.current);
         clearRubberDom();
@@ -549,12 +604,26 @@ export function Canvas({
     [clearRubberDom],
   );
 
-  /** Split `edgeId` at `branchPt` and complete the current draft onto that tip. */
+  /** Split `edgeId` at branch point and complete the current draft onto that tip. */
   const finishDraftOnWire = useCallback(
     (edgeId: string, branchPt: Point): boolean => {
       const draft = wiringRef.current;
       if (!draft) return false;
-      const tipId = onWireBranchRef.current(edgeId, branchPt);
+
+      // Prefer column/row attach on the target bus (clean ladder end).
+      const resolved = resolveBranchOnEdge(
+        nodesRef.current,
+        edgesRef.current,
+        edgeId,
+        branchPt,
+        SCHEMATIC_GRID,
+      );
+      const tipId = resolved
+        ? onWireBranchRef.current(resolved.edgeId, resolved.point, {
+            nodes: resolved.nodes,
+            edges: resolved.edges,
+          })
+        : onWireBranchRef.current(edgeId, branchPt);
       if (!tipId) return false;
       onWireRef.current({
         source: draft.sourceNodeId ?? "",
@@ -607,7 +676,7 @@ export function Canvas({
       }
 
       if (wireHit && (!pinHit || wireHit.dist <= dist(cursor, pinHit.point) - 2)) {
-        return finishDraftOnWire(wireHit.edgeId, wireHit.point);
+        return finishDraftOnWire(wireHit.edgeId, cursor);
       }
 
       // Tip nodes sit on pins and steal clicks — prefer a real pin nearby.
@@ -782,15 +851,12 @@ export function Canvas({
 
     let armed = false;
 
-    // Perform the actual wire cut + start the drag once movement is confirmed.
+    // Start the drag once movement is confirmed. Connected edges stay in the
+    // graph, so only their moving endpoint is redrawn.
     const arm = () => {
       const pickup = onMoveDisconnectRef.current(nodeId, grabPoint);
       if (!pickup || !pickup.origins.length) return false;
-      setMoveHint(
-        pickup.cutCount > 0
-          ? `Disconnected ${pickup.cutCount} wire(s) — drag to place`
-          : "Moving…",
-      );
+      setMoveHint("Moving with connected wires…");
       moveDragRef.current = { startFlow: grabPoint, origins: pickup.origins };
       armed = true;
       return true;
@@ -1076,6 +1142,79 @@ export function Canvas({
     return () => root.removeEventListener("mousedown", onDown, true);
   }, [mode]);
 
+  // Scissors hit-test in capture phase so small wire tails remain deletable.
+  // Component artwork must stay with the node handler: pin stems are part of
+  // the symbol, not separate wire edges.
+  useEffect(() => {
+    if (mode !== "delete") return;
+    const root = canvasElRef.current;
+    if (!root) return;
+
+    const onClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest?.(".react-flow__controls, .react-flow__minimap")) return;
+      if (target?.closest?.(".react-flow__node")) return;
+      const rf = rfRef.current;
+      if (!rf) return;
+      const cursor = rf.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      const nodes = nodesRef.current;
+      const edges = edgesRef.current;
+      // Prefer a short dangling stub when it and a long rail are both under the click.
+      let hit = findNearestWireHit(nodes, edges, cursor, 14, SCHEMATIC_GRID);
+      let bestStub: { edgeId: string; dist: number } | null = null;
+      for (const edge of edges) {
+        if (!isShortDanglingStub(nodes, edges, edge, 96)) continue;
+        const poly = computeEdgePolyline(nodes, edge);
+        if (poly.length < 2) continue;
+        const d = distToPolyline(poly, cursor);
+        if (d > 22) continue;
+        if (!bestStub || d < bestStub.dist) bestStub = { edgeId: edge.id, dist: d };
+      }
+      if (bestStub) hit = { edgeId: bestStub.edgeId, point: cursor, dist: bestStub.dist };
+      if (!hit) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      onDeleteEdgeRef.current(hit.edgeId, cursor);
+    };
+
+    root.addEventListener("click", onClick, true);
+    return () => root.removeEventListener("click", onClick, true);
+  }, [mode]);
+
+  // Double-click hit-test so thin post-move wires still straighten even when
+  // the pointer is slightly off the SVG stroke (React Flow dblclick misses).
+  useEffect(() => {
+    if (mode === "delete") return;
+    const root = canvasElRef.current;
+    if (!root) return;
+
+    const onDblClick = (event: MouseEvent) => {
+      if (wiringRef.current) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest?.(".react-flow__controls, .react-flow__minimap")) return;
+      if (target?.closest?.(".react-flow__node")) return;
+      const rf = rfRef.current;
+      if (!rf) return;
+      const cursor = rf.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      const hit = findNearestWireHit(
+        nodesRef.current,
+        edgesRef.current,
+        cursor,
+        14,
+        SCHEMATIC_GRID,
+      );
+      if (!hit) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      onStraightenEdgeRef.current(hit.edgeId, cursor);
+    };
+
+    root.addEventListener("dblclick", onDblClick, true);
+    return () => root.removeEventListener("dblclick", onDblClick, true);
+  }, [mode]);
+
   const applyPinHitRef = useRef(applyPinHit);
   applyPinHitRef.current = applyPinHit;
 
@@ -1135,11 +1274,18 @@ export function Canvas({
         return;
       }
       if (e.key !== "Escape") return;
-      // While drawing: Esc keeps/cancels the draft — never peels an existing wire.
+      if (modeRef.current === "delete") {
+        e.preventDefault();
+        e.stopPropagation();
+        onModeChangeRef.current("explore");
+        return;
+      }
+      // While drawing: Esc cancels the uncommitted draft and restores a wire
+      // that was temporarily split to start a branch.
       if (wiringRef.current) {
         e.preventDefault();
         e.stopPropagation();
-        finishOrKeepPartial();
+        cancelWiringDraft();
         return;
       }
       // Move mode: Esc clears selection before wire peel.
@@ -1165,7 +1311,7 @@ export function Canvas({
     // Capture so React Flow cannot clear selection before we peel.
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [nodes, onNodesChange, finishOrKeepPartial]);
+  }, [nodes, onNodesChange, cancelWiringDraft]);
 
   // While drawing: track the cursor everywhere (pane, parts, UI) and paint the rubber-band.
   useEffect(() => {
@@ -1220,19 +1366,45 @@ export function Canvas({
       const rf = rfRef.current;
       if (!rf) return;
       const cursor = rf.screenToFlowPosition({ x: clientX, y: clientY });
-      const poly = computeEdgePolyline(nodesRef.current, edge);
-      if (poly.length < 2) return;
-      // Classic mid-wire branch: split THIS edge at the nearest point on it.
-      const branchPt = closestPointOnPolyline(poly, cursor, SCHEMATIC_GRID);
-      const tipId = onWireBranchRef.current(edge.id, branchPt);
+
+      // Attach at cursor column on H bus (or row on V) — not nearest junction.
+      const resolved = resolveBranchOnEdge(
+        nodesRef.current,
+        edgesRef.current,
+        edge.id,
+        cursor,
+        SCHEMATIC_GRID,
+      );
+
+      let tipId: string | null;
+      let start: Point;
+      let axisHint: "h" | "v" | null = null;
+
+      if (resolved) {
+        tipId = onWireBranchRef.current(resolved.edgeId, resolved.point, {
+          nodes: resolved.nodes,
+          edges: resolved.edges,
+        });
+        start = resolved.point;
+        axisHint = resolved.busAxis === "h" ? "v" : "h";
+      } else {
+        const poly = computeEdgePolyline(nodesRef.current, edge);
+        if (poly.length < 2) return;
+        const branchPt = closestPointOnPolyline(poly, cursor, SCHEMATIC_GRID);
+        tipId = onWireBranchRef.current(edge.id, branchPt);
+        start = branchPt;
+      }
       if (!tipId) return;
+
       onSelectEdgeRef.current("");
       const next: WiringDraft = {
         sourceNodeId: tipId,
         sourceHandle: "t",
-        start: branchPt,
+        branchOriginTipId: tipId,
+        start,
         waypoints: [],
         preview: null,
+        axisHint,
       };
       wiringRef.current = next;
       setWiring(next);
@@ -1243,6 +1415,16 @@ export function Canvas({
 
   const onEdgeClick = useCallback(
     (e: React.MouseEvent, edge: Edge) => {
+      if (modeRef.current === "delete") {
+        e.stopPropagation();
+        e.preventDefault();
+        const point = rfRef.current?.screenToFlowPosition({
+          x: e.clientX,
+          y: e.clientY,
+        });
+        onDeleteEdgeRef.current(edge.id, point);
+        return;
+      }
       if (modeRef.current !== "wire") {
         if (modeRef.current === "explore" || modeRef.current === "move") {
           e.stopPropagation();
@@ -1257,11 +1439,10 @@ export function Canvas({
 
       const draft = wiringRef.current;
       if (draft) {
+        // Pass raw cursor so column/row attach matches the mouse, not the
+        // Euclidean closest point on the polyline.
         const cursor = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
-        const poly = computeEdgePolyline(nodesRef.current, edge);
-        if (poly.length < 2) return;
-        const branchPt = closestPointOnPolyline(poly, cursor, SCHEMATIC_GRID);
-        finishDraftOnWire(edge.id, branchPt);
+        finishDraftOnWire(edge.id, cursor);
         return;
       }
 
@@ -1277,13 +1458,19 @@ export function Canvas({
 
   const onEdgeDoubleClick = useCallback(
     (e: React.MouseEvent, edge: Edge) => {
-      if (modeRef.current !== "wire") return;
-      if (wiringRef.current) return;
+      // Straighten in any mode except delete; wire-mode single-click already
+      // branches, so double-click is free for path cleanup.
+      if (modeRef.current === "delete") return;
+      if (modeRef.current === "wire" && wiringRef.current) return;
       e.stopPropagation();
       e.preventDefault();
-      beginBranchFromEdge(edge, e.clientX, e.clientY);
+      const point = rfRef.current?.screenToFlowPosition({
+        x: e.clientX,
+        y: e.clientY,
+      });
+      onStraightenEdgeRef.current(edge.id, point);
     },
-    [beginBranchFromEdge],
+    [],
   );
 
   const onPaneClick = useCallback((e: React.MouseEvent) => {
@@ -1297,7 +1484,7 @@ export function Canvas({
       }
       return;
     }
-    if (modeRef.current === "move") return;
+    if (modeRef.current === "move" || modeRef.current === "delete") return;
     const rf = rfRef.current;
     if (!rf) return;
     const t = e.target as HTMLElement | null;
@@ -1315,7 +1502,7 @@ export function Canvas({
         applyPinHit(nearPin.nodeId, nearPin.pinId);
         return;
       }
-      // Free pane click starts a free wire (no auto bus-branch).
+      // Free pane click starts a free wire.
       const start = snapPoint(cursor, SCHEMATIC_GRID);
       const next: WiringDraft = {
         sourceNodeId: null,
@@ -1323,6 +1510,7 @@ export function Canvas({
         start,
         waypoints: [],
         preview: null,
+        axisHint: null,
       };
       wiringRef.current = next;
       setWiring(next);
@@ -1341,7 +1529,7 @@ export function Canvas({
         WIRE_JOIN_RADIUS,
         SCHEMATIC_GRID,
       );
-      if (wireHit && finishDraftOnWire(wireHit.edgeId, wireHit.point)) return;
+      if (wireHit && finishDraftOnWire(wireHit.edgeId, cursor)) return;
     }
 
     const from = lastLocked(draft);
@@ -1350,13 +1538,15 @@ export function Canvas({
     if (dist(from, corner) < SCHEMATIC_GRID * 0.4) return;
     if (draft.waypoints.some((p) => pointsEqual(p, corner))) return;
 
-    // Same-axis extension: stretch the last locked point instead of inserting
-    // a zero-length bend (keeps consecutive verticals as one clean run).
+    // Same-axis extension: stretch the last locked point instead of stacking
+    // collinear waypoints (keeps consecutive verticals as one clean run).
+    const lastAxis = draftLastAxis(draft);
+    const cornerAxis = segmentAxis(from, corner);
     let waypoints: Point[];
     if (
-      prefer &&
       draft.waypoints.length > 0 &&
-      segmentAxis(from, corner) === prefer
+      lastAxis &&
+      cornerAxis === lastAxis
     ) {
       waypoints = [...draft.waypoints.slice(0, -1), corner];
     } else {
@@ -1375,6 +1565,12 @@ export function Canvas({
 
   const onNodeClick = useCallback(
     (e: React.MouseEvent, node: Node<ComponentData>) => {
+      if (modeRef.current === "delete") {
+        e.stopPropagation();
+        e.preventDefault();
+        onDeleteNodeRef.current(node.id);
+        return;
+      }
       if (modeRef.current === "wire") {
         // Never let React Flow select a part while wiring — that looks like
         // "click deleted my wire / selected the part".
@@ -1393,6 +1589,11 @@ export function Canvas({
           return;
         }
         if (node.data.kind === "TIP") {
+          // Junction tips are click-through; free tips extend the wire.
+          const deg = edgesRef.current.filter(
+            (e) => e.source === node.id || e.target === node.id,
+          ).length;
+          if (deg >= 2) return;
           applyPinHit(node.id, "t");
           return;
         }
@@ -1446,7 +1647,7 @@ export function Canvas({
   return (
     <div
       ref={canvasElRef}
-      className={`canvas${mode === "explore" ? " canvas-explore" : ""}${mode === "wire" ? " canvas-wire" : ""}${wiring ? " canvas-wiring" : ""}${mode === "move" ? " canvas-move" : ""}${marquee ? " canvas-marquee" : ""}`}
+      className={`canvas${mode === "explore" ? " canvas-explore" : ""}${mode === "wire" ? " canvas-wire" : ""}${wiring ? " canvas-wiring" : ""}${mode === "move" ? " canvas-move" : ""}${mode === "delete" ? " canvas-delete" : ""}${marquee ? " canvas-marquee" : ""}`}
     >
       <ReactFlow
         nodes={nodes}
@@ -1457,9 +1658,9 @@ export function Canvas({
         onEdgesChange={onEdgesChange}
         onNodeClick={onNodeClick}
         onNodeMouseMove={onNodeMouseMove}
-        elementsSelectable={mode !== "wire"}
-        nodesFocusable={mode !== "wire"}
-        edgesFocusable={mode !== "wire"}
+        elementsSelectable={mode !== "wire" && mode !== "delete"}
+        nodesFocusable={mode !== "wire" && mode !== "delete"}
+        edgesFocusable={mode !== "delete"}
         nodesDraggable={false}
         nodesConnectable={false}
         multiSelectionKeyCode={null}

@@ -4,7 +4,7 @@ import { PALETTE_DND_MIME } from "../dnd";
 import type { CanvasMode } from "./Canvas";
 
 // Palette of tools + components.
-// Wire/Move are modes. Parts: click → add, drag onto canvas / a part → place or replace.
+// Tools are modes. Parts: click → add, drag onto canvas / a part → place or replace.
 export function Palette({
   onAdd,
   mode,
@@ -46,9 +46,21 @@ export function Palette({
             <span className="palette-glyph">✥</span>
             <span className="palette-label">Move</span>
           </button>
+          <button
+            type="button"
+            className={`palette-item palette-tool${mode === "delete" ? " is-active" : ""}`}
+            title="Delete tool — click parts or wires; Delete/Backspace toggles, Esc exits"
+            onClick={() => onModeChange(mode === "delete" ? "explore" : "delete")}
+          >
+            <span className="palette-glyph">✂</span>
+            <span className="palette-label">Delete</span>
+          </button>
         </div>
         {mode === "wire" && (
           <div className="palette-tool-hint">Click the grid to start a new wire</div>
+        )}
+        {mode === "delete" && (
+          <div className="palette-tool-hint">Click any part or wire to delete it · Esc exits</div>
         )}
       </div>
       {PALETTE.map((group) => (

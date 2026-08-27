@@ -1,6 +1,6 @@
 import type { Edge, Node } from "@xyflow/react";
 import type { ComponentData } from "../model/types";
-import { computeEdgePolyline } from "./wireGeometry";
+import { computeEdgePolyline, polylineToStoredWaypoints } from "./wireGeometry";
 import { collapseMicroBends } from "./wireMove";
 
 /**
@@ -152,9 +152,6 @@ export function collapsePassThroughTips(
     const mergedPoly = collapseMicroBends([...poly1.slice(0, -1), ...poly2]);
     if (mergedPoly.length < 2) break;
 
-    const waypoints =
-      mergedPoly.length <= 2 ? [] : mergedPoly.slice(1, -1).map((p) => ({ ...p }));
-
     const newEdge: Edge = {
       id: `${a.nodeId}${a.handle}-${b.nodeId}${b.handle}`,
       type: "schematic",
@@ -162,9 +159,11 @@ export function collapsePassThroughTips(
       sourceHandle: a.handle,
       target: b.nodeId,
       targetHandle: b.handle,
-      data: { waypoints },
+      data: { waypoints: [] },
       selected: Boolean(e1.selected || e2.selected),
     };
+    const waypoints = polylineToStoredWaypoints(nextNodes, newEdge, mergedPoly);
+    newEdge.data = { waypoints };
 
     if (nextEdges.some((e) => e.id === newEdge.id && e.id !== e1.id && e.id !== e2.id)) {
       newEdge.id = `${newEdge.id}-m${merged}`;

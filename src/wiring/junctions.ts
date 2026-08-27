@@ -34,6 +34,19 @@ function onInterior(p: Point, a: Point, b: Point, tol = TOL): boolean {
   return !near(p, a, tol) && !near(p, b, tol);
 }
 
+/**
+ * Interior of the complete polyline. Unlike segment-local onInterior, this
+ * includes internal vertices/corners while still excluding the two true ends.
+ */
+function onPolylineInterior(p: Point, pts: Point[], tol = TOL): boolean {
+  if (pts.length < 2) return false;
+  if (near(p, pts[0]!, tol) || near(p, pts[pts.length - 1]!, tol)) return false;
+  for (let i = 0; i < pts.length - 1; i++) {
+    if (onSegment(p, pts[i]!, pts[i + 1]!, tol)) return true;
+  }
+  return false;
+}
+
 function orthoCross(a1: Point, a2: Point, b1: Point, b2: Point): Point | null {
   const aH = Math.abs(a1.y - a2.y) < 0.6;
   const aV = Math.abs(a1.x - a2.x) < 0.6;
@@ -168,19 +181,15 @@ export function findWireJunctions(
       // T-style: endpoint of one wire sits on the interior of the other.
       // Same net → connected junction; different net → passing (not connected).
       for (const end of aEnds) {
-        for (let s = 0; s < B.pts.length - 1; s++) {
-          if (onInterior(end, B.pts[s]!, B.pts[s + 1]!)) {
-            if (sameNet) addJ(end);
-            else addC(end);
-          }
+        if (onPolylineInterior(end, B.pts)) {
+          if (sameNet) addJ(end);
+          else addC(end);
         }
       }
       for (const end of bEnds) {
-        for (let s = 0; s < A.pts.length - 1; s++) {
-          if (onInterior(end, A.pts[s]!, A.pts[s + 1]!)) {
-            if (sameNet) addJ(end);
-            else addC(end);
-          }
+        if (onPolylineInterior(end, A.pts)) {
+          if (sameNet) addJ(end);
+          else addC(end);
         }
       }
 

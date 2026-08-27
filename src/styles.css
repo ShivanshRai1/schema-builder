@@ -207,6 +207,15 @@ body { background: var(--bg); color: var(--text); }
 .canvas-move .react-flow__edge { cursor: grab; }
 .canvas-move .react-flow__edge:active { cursor: grabbing; }
 .canvas-move .react-flow__node.dragging { cursor: grabbing; }
+.canvas-delete,
+.canvas-delete * {
+  /*
+   * Standard scissors silhouette (handles left, blades right) —
+   * same orientation as common cut icons so it reads at cursor size.
+   * Hotspot ≈ blade tips.
+   */
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='6' cy='6' r='3' stroke='%230b1220' stroke-width='3.2'/%3E%3Ccircle cx='6' cy='18' r='3' stroke='%230b1220' stroke-width='3.2'/%3E%3Cpath d='M8.12 8.12 L12 12 M14.47 14.48 L20 20 M8.12 15.88 L20 4' stroke='%230b1220' stroke-width='3.2'/%3E%3Ccircle cx='6' cy='6' r='3' stroke='%23f2f6fb' stroke-width='1.7'/%3E%3Ccircle cx='6' cy='18' r='3' stroke='%23f2f6fb' stroke-width='1.7'/%3E%3Cpath d='M8.12 8.12 L12 12 M14.47 14.48 L20 20 M8.12 15.88 L20 4' stroke='%23f2f6fb' stroke-width='1.7'/%3E%3C/g%3E%3C/svg%3E") 20 4, not-allowed !important;
+}
 
 /* Bend handles (HTML via EdgeLabelRenderer): faint until hover. */
 .wire-bend-handle {
@@ -281,7 +290,7 @@ body { background: var(--bg); color: var(--text); }
 .react-flow { background: var(--bg); }
 
 .wire-draft-locked {
-  stroke: var(--accent);
+  stroke: #c8d1dc;
   stroke-width: 2.25;
   stroke-linecap: square;
   stroke-linejoin: miter;
@@ -457,18 +466,50 @@ body { background: var(--bg); color: var(--text); }
   /* Above parts so dangling ends stay clickable (parts sit over edges). */
   z-index: 6 !important;
 }
+/* Junction tips: no hit target — clicks go to the wire (draw/branch).
+   Visual join mark comes from JunctionOverlay only. */
+.react-flow__node:has(.tip-junction) {
+  pointer-events: none !important;
+  z-index: 0 !important;
+}
+.tip-node.tip-junction {
+  pointer-events: none !important;
+  z-index: 0 !important;
+}
+.tip-node.tip-junction .component-pin,
+.tip-node.tip-junction .react-flow__handle.component-pin {
+  pointer-events: none !important;
+  width: 1px !important;
+  height: 1px !important;
+  min-width: 1px !important;
+  min-height: 1px !important;
+}
+.tip-node.tip-junction .component-pin::after,
+.tip-node.tip-junction .react-flow__handle.component-pin::after {
+  display: none !important;
+}
 .tip-node.selected {
   box-shadow: none !important;
   background: transparent !important;
 }
-/* Wire end: large hit target above parts. Mark only on hover/select so
-   mid-wire junction tips stay quiet. */
+/* Free wire end only: large hit target. Quiet until hover. */
+.tip-node.tip-free .component-pin,
+.tip-node.tip-free .react-flow__handle.component-pin {
+  width: 28px !important;
+  height: 28px !important;
+  min-width: 28px !important;
+  min-height: 28px !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  opacity: 1;
+}
 .tip-node .component-pin,
 .tip-node .react-flow__handle.component-pin {
-  width: 36px !important;
-  height: 36px !important;
-  min-width: 36px !important;
-  min-height: 36px !important;
+  width: 8px !important;
+  height: 8px !important;
+  min-width: 8px !important;
+  min-height: 8px !important;
   background: transparent !important;
   border: none !important;
   box-shadow: none !important;
@@ -488,15 +529,15 @@ body { background: var(--bg); color: var(--text); }
   background: transparent;
   pointer-events: none;
 }
-.tip-node .component-pin:hover::after,
-.tip-node .react-flow__handle.component-pin:hover::after,
-.tip-node.selected .component-pin::after,
-.tip-node.selected .react-flow__handle.component-pin::after {
+.tip-node.tip-free .component-pin:hover::after,
+.tip-node.tip-free .react-flow__handle.component-pin:hover::after,
+.tip-node.tip-free.selected .component-pin::after,
+.tip-node.tip-free.selected .react-flow__handle.component-pin::after {
   border-color: rgba(94, 176, 255, 0.7);
   background: rgba(15, 20, 25, 0.45);
 }
-.tip-node.selected .component-pin::after,
-.tip-node.selected .react-flow__handle.component-pin::after {
+.tip-node.tip-free.selected .component-pin::after,
+.tip-node.tip-free.selected .react-flow__handle.component-pin::after {
   border-color: var(--select, #f0a020);
   background: rgba(240, 160, 32, 0.25);
 }
@@ -608,7 +649,44 @@ body { background: var(--bg); color: var(--text); }
 /* Right column panels --------------------------------------------------- */
 .netlist-panel, .chat-panel, .sim-panel, .library-panel { display: flex; flex-direction: column; min-height: 0; }
 .netlist-panel { flex: 1.1; border-bottom: 1px solid var(--border); }
-.sim-panel { flex: 0.85; border-bottom: 1px solid var(--border); min-height: 140px; }
+.sim-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.sim-body-hidden { display: none; }
+.sim-tabs { display: flex; gap: 4px; }
+.sim-tab {
+  background: transparent; border: 1px solid transparent; color: var(--muted);
+  font-size: 11px; padding: 2px 8px; border-radius: 6px; cursor: pointer;
+}
+.sim-tab.on { color: var(--text); border-color: var(--border); background: var(--panel-2); }
+.sic-compare {
+  flex: 1; min-height: 0; overflow: auto; padding: 8px 10px 12px;
+  font-size: 11.5px;
+}
+.sic-note { color: var(--muted); font-size: 11px; margin: 0 0 8px; line-height: 1.4; }
+.sic-grphdr { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: #f0b429; margin: 8px 0 4px; }
+.sic-partrow { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+.sic-partrow input { width: auto; }
+.sic-mfr { margin-left: auto; color: var(--muted); font-size: 10px; }
+.sic-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 8px; }
+.sic-conds label, .sic-grid label { display: flex; flex-direction: column; gap: 2px; color: var(--muted); font-size: 10.5px; }
+.sic-conds input[type=number], .sic-grid input { width: 100%; padding: 4px 6px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
+.sic-runrow { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.sic-run { flex: 1; }
+.sic-metrics { font-size: 12px; color: #4FC3F7; margin: 6px 0 10px; }
+.sic-banner { background: rgba(240,180,41,0.1); border: 1px solid rgba(240,180,41,0.3); color: #f0b429; border-radius: 8px; padding: 6px 8px; font-size: 11px; margin: 8px 0; }
+.sic-nl { margin: 6px 0; }
+.sic-nl summary { cursor: pointer; color: var(--muted); font-size: 11px; }
+.sic-nl pre { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px; font-size: 10px; max-height: 160px; overflow: auto; }
+.sic-nl select { width: 100%; margin: 6px 0; }
+.sic-chartbox h4 { margin: 8px 0 4px; font-size: 11px; color: var(--muted); font-weight: 600; }
+.sic-chart { height: 160px; position: relative; }
+.sic-am { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0; font-size: 11px; color: var(--muted); }
+.sic-am button { background: var(--bg); color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; cursor: pointer; font-size: 11px; }
+.sic-am button.on { background: #c792ea; color: #160a20; border-color: transparent; }
+.sic-table-wrap { overflow-x: auto; }
+.sic-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.sic-table th, .sic-table td { text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--border); }
+.sic-table th:first-child, .sic-table td:first-child { text-align: left; }
+.sic-swatch { width: 8px; height: 8px; border-radius: 2px; display: inline-block; margin-right: 5px; }
 .library-panel { flex: 0.55; border-bottom: 1px solid var(--border); min-height: 100px; }
 .chat-panel { flex: 0.85; }
 
@@ -747,3 +825,159 @@ body { background: var(--bg); color: var(--text); }
 .chat-input:focus { outline: none; border-color: var(--accent); }
 .chat-send { padding: 7px 14px; border-radius: 7px; border: none; background: var(--accent); color: #06101c; font-weight: 600; cursor: pointer; }
 .chat-send:hover { filter: brightness(1.08); }
+
+/* Device table (interactive netlist) -------------------------------------- */
+.device-table {
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  padding: 8px 10px;
+  max-height: 28%;
+  overflow: auto;
+  flex-shrink: 0;
+}
+.device-table-header {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.device-table-empty {
+  font-size: 12px;
+  color: var(--muted);
+}
+.device-table-rows { display: flex; flex-direction: column; gap: 4px; }
+.device-table-row {
+  display: grid;
+  grid-template-columns: 40px 1fr 72px 52px;
+  gap: 6px;
+  align-items: center;
+}
+.device-ref { font-size: 12px; font-weight: 600; }
+.device-kind { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.device-value {
+  padding: 4px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+}
+.device-apply {
+  padding: 4px 6px;
+  border-radius: 5px;
+  border: none;
+  background: var(--accent);
+  color: #06101c;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.device-apply:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Assistant propose / confirm form (gate before applyOps) ----------------- */
+.propose-form {
+  border-top: 1px solid var(--border);
+  background: var(--panel-2);
+  padding: 8px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 42%;
+  overflow: auto;
+}
+.propose-form-header {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.propose-form-rows { display: flex; flex-direction: column; gap: 8px; }
+.propose-form-row {
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.propose-form-label {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--text);
+}
+.propose-form-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: flex-end;
+}
+.propose-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 72px;
+  flex: 1 1 72px;
+}
+.propose-field span {
+  font-size: 10px;
+  color: var(--muted);
+}
+.propose-field input,
+.propose-field select {
+  padding: 5px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+}
+.propose-field input:focus,
+.propose-field select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.propose-remove {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 6px;
+  align-self: flex-end;
+}
+.propose-remove:hover { color: var(--text); }
+.propose-form-empty {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 4px 0;
+}
+.propose-form-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.propose-cancel,
+.propose-apply {
+  padding: 6px 12px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.propose-cancel {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+}
+.propose-apply {
+  border: none;
+  background: var(--accent);
+  color: #06101c;
+}
+.propose-apply:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

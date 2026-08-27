@@ -6,7 +6,9 @@ import {
   detachWireForMove,
   flipBendAt,
   straightenBendAt,
+  straightenWire,
 } from "../src/wiring/wireMove";
+import { computeEdgePolyline } from "../src/wiring/wireGeometry";
 import { reconnectTipsOnPins } from "../src/wiring/cutMove";
 import { extractNets } from "../src/netlist/nets";
 import { pinWorldPoint } from "../src/wiring/pinGeometry";
@@ -147,4 +149,81 @@ if (recOff.reconnected !== 2) {
   process.exit(1);
 }
 console.log("PASS wire drop reconnects to pins");
+
+// Pin↔pin straighten: when pins differ by more than one grid, set an elbow
+// so the click-side pin gets a clean straight approach (no stair next to R1).
+{
+  const r = mk("r1", "R", "R1", 280, 100);
+  const c = mk("c1", "C", "C1", 480, 68); // two grids above R1
+  const e = wire("rc", "r1", "b", "c1", "a", []);
+  const nearR = pinWorldPoint(r, "b")!;
+  const result = straightenWire([r, c], e, nearR);
+  if (!result || !result.waypoints.length) {
+    console.error("FAIL: pin-pin straighten should set elbow waypoints", result);
+    process.exit(1);
+  }
+  const poly = computeEdgePolyline(
+    [r, c],
+    { ...e, data: { waypoints: result.waypoints } },
+  );
+  // Leaving R1 to the right should stay on R1's row (no immediate stair).
+  const afterStub = poly[1]!;
+  if (Math.abs(afterStub.y - nearR.y) > 0.5) {
+    console.error("FAIL: approach out of R1 should stay on pin row", poly);
+    process.exit(1);
+  }
+  console.log("PASS pin-pin straighten prefers nearer pin row");
+}
+
+// Near-aligned pins (≤1 grid): straighten must not invent a big body detour.
+{
+  const r = mk("r1n", "R", "R1", 280, 100);
+  const c = mk("c1n", "C", "C1", 480, 84); // one grid above
+  const e = wire("rcn", "r1n", "b", "c1n", "a", [{ x: 400, y: 40 }]); // stale wild bend
+  const result = straightenWire([r, c], e, pinWorldPoint(r, "b")!);
+  if (!result) {
+    console.error("FAIL: near-align straighten should succeed", result);
+    process.exit(1);
+  }
+  if (result.waypoints.length > 0) {
+    console.error("FAIL: near-align should clear to empty waypoints", result.waypoints);
+    process.exit(1);
+  }
+  const poly = computeEdgePolyline(
+    [r, c],
+    { ...e, data: { waypoints: result.waypoints } },
+  );
+  // No long detour far above both pins.
+  for (const p of poly) {
+    if (p.y < 60) {
+      console.error("FAIL: near-align route should not detour far off-row", poly);
+      process.exit(1);
+    }
+  }
+  console.log("PASS near-align straighten stays compact");
+}
+
+// Pin↔TIP straighten: tip slides onto the pin row (not the pin column).
+{
+  const r = mk("r2", "R", "R2", 280, 100);
+  const rPin = pinWorldPoint(r, "a")!;
+  const tip = mk("tip1", "TIP", "", rPin.x - 16, rPin.y - 16 - 4);
+  const e = wire("rt", "r2", "a", "tip1", "t", []);
+  const result = straightenWire([r, tip], e);
+  if (!result?.tipMoves?.length) {
+    console.error("FAIL: pin-tip straighten should move the tip", result);
+    process.exit(1);
+  }
+  const moved = result.tipMoves[0]!;
+  if (Math.abs(moved.y + 4 - rPin.y) > 0.5) {
+    console.error("FAIL: tip should align to R pin Y", moved, rPin);
+    process.exit(1);
+  }
+  if (Math.abs(moved.x - (rPin.x - 16)) > 0.5) {
+    console.error("FAIL: tip should keep its X (pin-side align)", moved, rPin);
+    process.exit(1);
+  }
+  console.log("PASS pin-tip straighten aligns by pin side");
+}
+
 console.log("PASS all wire-move tests");

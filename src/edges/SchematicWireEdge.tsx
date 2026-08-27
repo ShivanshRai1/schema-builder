@@ -8,11 +8,9 @@ import {
 import {
   orthogonalPolyline,
   polylinePath,
-  routeWirePoints,
-  type PinSide,
   type Point,
 } from "../wiring/orthogonal";
-import { pinWorldPoint, pinWorldSide } from "../wiring/pinGeometry";
+import { computeEdgePolyline } from "../wiring/wireGeometry";
 import type { ComponentData } from "../model/types";
 
 export type SchematicWireData = {
@@ -25,24 +23,6 @@ export type WireBendAction = never;
 
 function fallbackPoint(x: number, y: number): Point {
   return { x, y };
-}
-
-function asSide(side: PinSide | null, fallback: PinSide): PinSide {
-  return side ?? fallback;
-}
-
-function positionPropToSide(pos: string | undefined): PinSide {
-  switch (pos) {
-    case "left":
-      return "left";
-    case "right":
-      return "right";
-    case "top":
-      return "top";
-    case "bottom":
-    default:
-      return "bottom";
-  }
 }
 
 /** User-authored orthogonal wire; endpoints follow rotated pin geometry. */
@@ -80,36 +60,24 @@ export function SchematicWireEdge({
     };
   }, (a, b) => a?.key === b?.key);
 
-  const start =
-    (sourceNode && sourceHandleId
-      ? pinWorldPoint(sourceNode.node, sourceHandleId)
-      : null) ?? fallbackPoint(sourceX, sourceY);
-  const end =
-    (targetNode && targetHandleId
-      ? pinWorldPoint(targetNode.node, targetHandleId)
-      : null) ?? fallbackPoint(targetX, targetY);
-
-  const sourceSide = asSide(
-    sourceNode && sourceHandleId ? pinWorldSide(sourceNode.node, sourceHandleId) : null,
-    positionPropToSide(String(sourcePosition)),
-  );
-  const targetSide = asSide(
-    targetNode && targetHandleId ? pinWorldSide(targetNode.node, targetHandleId) : null,
-    positionPropToSide(String(targetPosition)),
-  );
-
-  const waypoints = data?.waypoints ?? [];
-  const srcIsTip = sourceNode?.node.data.kind === "TIP";
-  const tgtIsTip = targetNode?.node.data.kind === "TIP";
-  const tipWire = srcIsTip || tgtIsTip;
-  const authored = tipWire || waypoints.length > 0;
-
   const points =
-    authored
-      ? orthogonalPolyline(
-          waypoints.length ? [start, ...waypoints, end] : [start, end],
+    sourceNode && targetNode
+      ? computeEdgePolyline(
+          [sourceNode.node, targetNode.node],
+          {
+            id,
+            type: "schematic",
+            source,
+            target,
+            sourceHandle: sourceHandleId,
+            targetHandle: targetHandleId,
+            data,
+          },
         )
-      : routeWirePoints(start, end, waypoints, sourceSide, targetSide, 16);
+      : orthogonalPolyline([
+          fallbackPoint(sourceX, sourceY),
+          fallbackPoint(targetX, targetY),
+        ]);
   const path = polylinePath(points);
 
   return (

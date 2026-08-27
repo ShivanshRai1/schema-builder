@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo } from "react";
 import {
   Handle,
   Position,
+  useStore,
   useUpdateNodeInternals,
   type NodeProps,
   type Node,
@@ -59,6 +60,18 @@ export function ComponentNode({
     [spec.pins, rotation],
   );
   const isTip = data.kind === "TIP";
+  // Mid-wire junctions (2+ edges): invisible + click-through so wire clicks
+  // reach the edge (LTspice feels like drawing on the wire, not placing dots).
+  const tipDegree = useStore((s) => {
+    if (!isTip) return 0;
+    let n = 0;
+    for (const e of s.edges) {
+      if (e.source === id || e.target === id) n++;
+    }
+    return n;
+  });
+  const tipJunction = isTip && tipDegree >= 2;
+  const tipFree = isTip && tipDegree <= 1;
   const isSymbol = hasSymbol(data.kind);
   const symLayout = isSymbol ? getSymbolLayout(data.kind, rotation) : null;
   const pinLayoutKey = pins.map((p) => `${p.id}:${p.side}:${p.offset}`).join("|");
@@ -75,15 +88,17 @@ export function ComponentNode({
 
   return (
     <div
-      className={`component-node${isSymbol ? " symbol-node" : ""}${isSymbol ? ` sym-labels-${labelAnchor(pins)}` : ""} kind-${data.kind}${selected ? " selected" : ""}${unplaced ? " unplaced" : ""}${isTip ? " tip-node" : ""}`}
+      className={`component-node${isSymbol ? " symbol-node" : ""}${isSymbol ? ` sym-labels-${labelAnchor(pins)}` : ""} kind-${data.kind}${selected ? " selected" : ""}${unplaced ? " unplaced" : ""}${isTip ? " tip-node" : ""}${tipJunction ? " tip-junction" : ""}${tipFree ? " tip-free" : ""}`}
       style={
         symLayout
           ? { width: symLayout.w, height: symLayout.h, minHeight: symLayout.h }
           : undefined
       }
       title={
-        isTip
+        tipFree
           ? "Wire end — click to continue wiring"
+          : tipJunction
+            ? undefined
           : unplaced
             ? "Unplaced — drag to set position"
             : undefined

@@ -3,7 +3,7 @@ import type { ComponentData } from "../model/types";
 import type { Point } from "./orthogonal";
 import { dist, pointsEqual } from "./orthogonal";
 import { collapseMicroBends } from "./wireMove";
-import { computeEdgePolyline, polylineToStoredWaypoints } from "./wireGeometry";
+import { computeEdgePolyline, polylineToStoredWaypoints, distToPolyline } from "./wireGeometry";
 import { pruneOrphanTips, collapsePassThroughTips } from "./tipCleanup";
 import { findWireJunctions } from "./junctions";
 import { pinWorldPoint } from "./pinGeometry";
@@ -68,15 +68,460 @@ export function isShortDanglingStub(
   maxLen = SHORT_STUB_MAX_LEN,
 ): boolean {
   if (!isDanglingOrTrailingEdge(nodes, edges, edge)) return false;
-  const waypoints =
-    ((edge.data as { waypoints?: Point[] } | undefined)?.waypoints) ?? [];
   const poly = computeEdgePolyline(nodes, edge);
   if (poly.length < 2) return true;
   const len = polylineLength(poly);
-  // Micro-jog leftovers (tiny L from off-grid pins) still count as short stubs.
-  // Longer paths with real authored bends must peel instead of one-shot delete.
-  if (waypoints.length > 1 && len > maxLen) return false;
-  return len <= maxLen;
+  // Any dangling/trailing run at or under maxLen is scissor-deletable,
+  // including micro tips (no minimum length).
+  return len <= maxLen + 0.5;
+}
+
+export type ScissorDeletePlan =
+  | { action: "delete"; edgeId: string }
+  | {
+      action: "trimTip";
+      edgeId: string;
+      tipId: string;
+      /** Polyline after removing the dangling tip segment(s). */
+      trimmedPoly: Point[];
+      tipPosition: Point;
+      /**
+       * Pin↔pin: lock trimmed geometry so autoroute pin-stubs do not come back.
+       * Waypoints are the open interior of trimmedPoly.
+       */
+      directPath?: boolean;
+    }
+  | {
+      /** Peel a nub off a shared junction tip without deleting the rail. */
+      action: "peelToNewTip";
+      edgeId: string;
+      oldTipId: string;
+      atStart: boolean;
+      trimmedPoly: Point[];
+      newTipPosition: Point;
+    };
+
+function terminalSegmentLen(poly: Point[], atStart: boolean): number {
+  if (poly.length < 2) return 0;
+  const a = atStart ? poly[0]! : poly[poly.length - 2]!;
+  const b = atStart ? poly[1]! : poly[poly.length - 1]!;
+  return Math.hypot(b.x - a.x, b.y - a.y);
+}
+
+function peelTerminal(poly: Point[], atStart: boolean): Point[] | null {
+  if (poly.length < 3) return null;
+  return atStart ? poly.slice(1) : poly.slice(0, -1);
+}
+
+const PIN_STUB = 16;
+
+/** Closest segment on a polyline to `p` (flow coords). */
+function closestSegmentOnPoly(
+  poly: Point[],
+  p: Point,
+): { index: number; dist: number } {
+  let bestSeg = -1;
+  let bestD = Infinity;
+  for (let i = 0; i < poly.length - 1; i++) {
+    const a = poly[i]!;
+    const b = poly[i + 1]!;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const lenSq = dx * dx + dy * dy;
+    const t =
+      lenSq < 0.01
+        ? 0
+        : Math.max(
+            0,
+            Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq),
+          );
+    const d = Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+    if (d < bestD) {
+      bestD = d;
+      bestSeg = i;
+    }
+  }
+  return { index: bestSeg, dist: bestD };
+}
+
+/** Distance from point to segment ab. */
+function distToSeg(p: Point, a: Point, b: Point): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq < 0.01) return Math.hypot(p.x - a.x, p.y - a.y);
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq));
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+/**
+ * Peel a short U-turn overhang (out-and-back spur) near the click.
+ * Classic case: horizontal runs one grid past the elbow, then returns to drop
+ * vertically — the spur tip sticks out past the T.
+ */
+function peelUTurnSpurNearClick(
+  poly: Point[],
+  clickPoint: Point,
+  hitRadius: number,
+  maxStubLen: number,
+): Point[] | null {
+  if (poly.length < 4) return null;
+  let best: { i: number; d: number } | null = null;
+  for (let i = 1; i < poly.length - 1; i++) {
+    const prev = poly[i - 1]!;
+    const mid = poly[i]!;
+    const next = poly[i + 1]!;
+    const abx = mid.x - prev.x;
+    const aby = mid.y - prev.y;
+    const bcx = next.x - mid.x;
+    const bcy = next.y - mid.y;
+    const abLen = Math.hypot(abx, aby);
+    const bcLen = Math.hypot(bcx, bcy);
+    if (abLen < 0.5 || bcLen < 0.5) continue;
+    // Must reverse back along the same axis (collinear U-turn).
+    if (abx * bcx + aby * bcy >= -0.5) continue;
+    if (Math.abs(abx * bcy - aby * bcx) > Math.max(abLen, bcLen) * 0.15) continue;
+    if (Math.min(abLen, bcLen) > maxStubLen) continue;
+
+    const d = Math.min(
+      Math.hypot(clickPoint.x - mid.x, clickPoint.y - mid.y),
+      distToSeg(clickPoint, prev, mid),
+      distToSeg(clickPoint, mid, next),
+    );
+    // Also accept clicks on the long drop that shares the elbow — the spur tip
+    // is what the user aims at, but the pointer often lands on the vertical.
+    const elbow = Math.min(abLen, bcLen) === abLen ? next : prev;
+    const dElbow = Math.hypot(clickPoint.x - elbow.x, clickPoint.y - elbow.y);
+    const alongClick = distAlongPoly(poly, clickPoint);
+    const alongElbow = distAlongPoly(poly, elbow);
+    const onPoly = distToPolyline(poly, clickPoint) <= hitRadius;
+    const nearElbowRun =
+      onPoly && Math.abs(alongClick - alongElbow) <= maxStubLen;
+    const near = Math.min(d, dElbow);
+    if (near > hitRadius + 8 && !nearElbowRun) continue;
+    if (!best || near < best.d) best = { i, d: nearElbowRun ? Math.min(near, 8) : near };
+  }
+  if (!best) return null;
+  const trimmed = collapseMicroBends(
+    [...poly.slice(0, best.i), ...poly.slice(best.i + 1)],
+    10,
+  );
+  if (trimmed.length < 2) return null;
+  if (
+    !pointsEqual(trimmed[0]!, poly[0]!) ||
+    !pointsEqual(trimmed[trimmed.length - 1]!, poly[poly.length - 1]!)
+  ) {
+    return null;
+  }
+  return trimmed;
+}
+
+/**
+ * Pin↔pin: trim a short nub / overhang near the click without deleting the rail.
+ */
+function planPinPinScissorTrim(
+  poly: Point[],
+  clickPoint: Point,
+  hitRadius: number,
+  maxStubLen: number,
+): { atStart: boolean; trimmedPoly: Point[] } | null {
+  if (poly.length < 3) return null;
+
+  // Prefer peeling a U-turn overhang (even when the closest segment is the long
+  // vertical sharing the elbow).
+  const spurPeeled = peelUTurnSpurNearClick(poly, clickPoint, hitRadius, maxStubLen);
+  if (spurPeeled) {
+    const clickAlong = distAlongPoly(poly, clickPoint);
+    const atStart = clickAlong <= polylineLength(poly) * 0.5;
+    return { atStart, trimmedPoly: spurPeeled };
+  }
+
+  const { index: bestSeg, dist: bestD } = closestSegmentOnPoly(poly, clickPoint);
+  if (bestD > hitRadius || bestSeg < 0) return null;
+
+  const segLen = dist(poly[bestSeg]!, poly[bestSeg + 1]!);
+  if (segLen > maxStubLen) return null;
+
+  const total = polylineLength(poly);
+  const clickAlong = distAlongPoly(poly, clickPoint);
+  const endZone = maxStubLen + PIN_STUB + 8;
+  const nearStart = clickAlong <= endZone;
+  const nearEnd = clickAlong >= total - endZone;
+  if (!nearStart && !nearEnd) return null;
+
+  const atStart = nearStart && (!nearEnd || clickAlong < total - clickAlong);
+  const last = poly.length - 1;
+
+  let trimmed: Point[];
+  if (atStart) {
+    if (bestSeg === 0) {
+      if (poly.length < 4) return null;
+      trimmed = [poly[0]!, ...poly.slice(2)];
+    } else {
+      // Drop the short spur vertex at bestSeg+1 (end of clicked segment).
+      trimmed = [...poly.slice(0, bestSeg + 1), ...poly.slice(bestSeg + 2)];
+    }
+  } else if (bestSeg === last - 1) {
+    if (poly.length < 4) return null;
+    trimmed = [...poly.slice(0, -2), poly[last]!];
+  } else {
+    trimmed = [...poly.slice(0, bestSeg), ...poly.slice(bestSeg + 1)];
+  }
+
+  trimmed = collapseMicroBends(trimmed, 10);
+  if (trimmed.length < 2) return null;
+  if (
+    !pointsEqual(trimmed[0]!, poly[0]!) ||
+    !pointsEqual(trimmed[trimmed.length - 1]!, poly[poly.length - 1]!)
+  ) {
+    return null;
+  }
+  return { atStart, trimmedPoly: trimmed };
+}
+
+/**
+ * Decide what Delete-mode should do for a wire click.
+ *
+ * Prefers removing a short dangling stub near the click over wiping a long
+ * rail. Nubs on free tips are trimmed; nubs on shared junction tips are peeled
+ * onto a new tip so the long rail stays.
+ */
+export function planScissorWireDelete(
+  nodes: Node<ComponentData>[],
+  edges: Edge[],
+  edgeId: string,
+  clickPoint?: Point,
+  opts?: { stubHitRadius?: number; maxStubLen?: number },
+): ScissorDeletePlan | null {
+  if (!edges.some((e) => e.id === edgeId)) return null;
+  const hitRadius = opts?.stubHitRadius ?? 22;
+  const maxStubLen = opts?.maxStubLen ?? 64;
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const deg = tipDegree(edges);
+
+  let targetId = edgeId;
+
+  if (clickPoint) {
+    let bestStub: { id: string; d: number } | null = null;
+    for (const edge of edges) {
+      if (!isShortDanglingStub(nodes, edges, edge, maxStubLen)) continue;
+      const poly = computeEdgePolyline(nodes, edge);
+      if (poly.length < 2) continue;
+      const d = distToPolyline(poly, clickPoint);
+      if (d > hitRadius) continue;
+      if (!bestStub || d < bestStub.d) bestStub = { id: edge.id, d };
+    }
+    if (bestStub) targetId = bestStub.id;
+
+    for (const node of nodes) {
+      if (node.data.kind !== "TIP") continue;
+      if ((deg.get(node.id) ?? 0) !== 1) continue;
+      const tipPt = pinWorldPoint(node, "t");
+      if (!tipPt) continue;
+      if (Math.hypot(clickPoint.x - tipPt.x, clickPoint.y - tipPt.y) > hitRadius) {
+        continue;
+      }
+      const stub = edges.find(
+        (e) =>
+          (e.source === node.id || e.target === node.id) &&
+          isShortDanglingStub(nodes, edges, e, maxStubLen),
+      );
+      if (stub) {
+        targetId = stub.id;
+        break;
+      }
+    }
+
+    // Prefer an edge that has a U-turn overhang under the click (even if hit-test
+    // reported the long vertical that shares the elbow).
+    let bestSpur: { id: string; d: number } | null = null;
+    for (const edge of edges) {
+      const p = computeEdgePolyline(nodes, edge);
+      if (p.length < 4) continue;
+      const peeled = peelUTurnSpurNearClick(p, clickPoint, hitRadius, maxStubLen);
+      if (!peeled) continue;
+      const d = distToPolyline(p, clickPoint);
+      if (!bestSpur || d < bestSpur.d) bestSpur = { id: edge.id, d };
+    }
+    if (bestSpur && !bestStub) targetId = bestSpur.id;
+  }
+
+  const clicked = edges.find((e) => e.id === targetId)!;
+
+  if (isShortDanglingStub(nodes, edges, clicked, maxStubLen)) {
+    return { action: "delete", edgeId: targetId };
+  }
+
+  if (!clickPoint) return { action: "delete", edgeId: targetId };
+
+  const poly = computeEdgePolyline(nodes, clicked);
+  if (poly.length < 2) return { action: "delete", edgeId: targetId };
+
+  const ends: { tipId: string; atStart: boolean; pt: Point; degree: number }[] = [];
+  for (const atStart of [true, false] as const) {
+    const tipId = atStart ? clicked.source : clicked.target;
+    const tip = byId.get(tipId);
+    if (!tip || tip.data.kind !== "TIP") continue;
+    const pt = atStart ? poly[0]! : poly[poly.length - 1]!;
+    ends.push({ tipId, atStart, pt, degree: deg.get(tipId) ?? 0 });
+  }
+
+  if (!ends.length) {
+    // Pin↔pin (or no tip ends): trim short nubs near the click; never wipe the rail.
+    const pinTrim = planPinPinScissorTrim(poly, clickPoint, hitRadius, maxStubLen);
+    if (pinTrim) {
+      const endId = pinTrim.atStart ? clicked.source : clicked.target;
+      return {
+        action: "trimTip",
+        edgeId: targetId,
+        tipId: endId,
+        trimmedPoly: pinTrim.trimmedPoly,
+        tipPosition: byId.get(endId)?.position ?? { x: 0, y: 0 },
+        directPath: true,
+      };
+    }
+    return null;
+  }
+
+  // Tip-ended: peel U-turn overhangs before considering full delete.
+  const spurPeeled = peelUTurnSpurNearClick(poly, clickPoint, hitRadius, maxStubLen);
+  if (spurPeeled) {
+    const clickAlong = distAlongPoly(poly, clickPoint);
+    const atStart = clickAlong <= polylineLength(poly) * 0.5;
+    const tipId = atStart ? clicked.source : clicked.target;
+    const tip = byId.get(tipId);
+    if (tip?.data.kind === "TIP") {
+      const newEnd = atStart ? spurPeeled[0]! : spurPeeled[spurPeeled.length - 1]!;
+      return {
+        action: "trimTip",
+        edgeId: targetId,
+        tipId,
+        trimmedPoly: spurPeeled,
+        tipPosition: { x: newEnd.x, y: newEnd.y - 4 },
+      };
+    }
+    return {
+      action: "trimTip",
+      edgeId: targetId,
+      tipId: atStart ? clicked.source : clicked.target,
+      trimmedPoly: spurPeeled,
+      tipPosition: byId.get(atStart ? clicked.source : clicked.target)?.position ?? {
+        x: 0,
+        y: 0,
+      },
+    };
+  }
+
+  // Free tip past an interior T-join: retract tip to the join (overhang stub).
+  {
+    const joins = findInteriorJoinsOnEdge(nodes, edges, clicked);
+    if (joins.length) {
+      const total = polylineLength(poly);
+      const ranked = joins
+        .map((p) => ({ p, along: distAlongPoly(poly, p) }))
+        .sort((a, b) => a.along - b.along);
+      for (const end of ends) {
+        if (end.degree !== 1) continue;
+        const overshoot = end.atStart
+          ? ranked[0]!.along
+          : total - ranked[ranked.length - 1]!.along;
+        if (overshoot < 8 || overshoot > maxStubLen + hitRadius) continue;
+        const join = end.atStart ? ranked[0]!.p : ranked[ranked.length - 1]!.p;
+        if (Math.hypot(clickPoint.x - end.pt.x, clickPoint.y - end.pt.y) > maxStubLen + hitRadius) {
+          continue;
+        }
+        const alongJoin = end.atStart ? ranked[0]!.along : ranked[ranked.length - 1]!.along;
+        // Build trimmed poly from join to the other end.
+        const trimmed: Point[] = [];
+        if (end.atStart) {
+          trimmed.push(join);
+          let along = 0;
+          for (let i = 0; i < poly.length - 1; i++) {
+            const a = poly[i]!;
+            const b = poly[i + 1]!;
+            const seg = dist(a, b);
+            if (along + seg > alongJoin + 0.5) {
+              if (!pointsEqual(trimmed[trimmed.length - 1]!, b)) trimmed.push(b);
+            }
+            along += seg;
+          }
+        } else {
+          let along = 0;
+          for (let i = 0; i < poly.length - 1; i++) {
+            const a = poly[i]!;
+            const b = poly[i + 1]!;
+            const seg = dist(a, b);
+            if (along < alongJoin - 0.5) {
+              if (!trimmed.length || !pointsEqual(trimmed[trimmed.length - 1]!, a)) {
+                trimmed.push(a);
+              }
+            }
+            along += seg;
+          }
+          if (!trimmed.length || !pointsEqual(trimmed[trimmed.length - 1]!, join)) {
+            trimmed.push(join);
+          }
+        }
+        const clean = collapseMicroBends(trimmed, 10);
+        if (clean.length >= 2) {
+          return {
+            action: "trimTip",
+            edgeId: targetId,
+            tipId: end.tipId,
+            trimmedPoly: clean,
+            tipPosition: { x: join.x, y: join.y - 4 },
+          };
+        }
+      }
+    }
+  }
+
+  ends.sort(
+    (a, b) =>
+      Math.hypot(clickPoint.x - a.pt.x, clickPoint.y - a.pt.y) -
+      Math.hypot(clickPoint.x - b.pt.x, clickPoint.y - b.pt.y),
+  );
+  const chosen = ends[0]!;
+  const distToTip = Math.hypot(clickPoint.x - chosen.pt.x, clickPoint.y - chosen.pt.y);
+  const segLen = terminalSegmentLen(poly, chosen.atStart);
+
+  if (distToTip > maxStubLen + hitRadius && segLen > maxStubLen) {
+    return { action: "delete", edgeId: targetId };
+  }
+  if (segLen > maxStubLen && distToTip > hitRadius) {
+    return { action: "delete", edgeId: targetId };
+  }
+  if (poly.length < 3 || segLen > maxStubLen) {
+    const total = polylineLength(poly);
+    if (total <= maxStubLen) return { action: "delete", edgeId: targetId };
+    // Do not wipe a long rail when we cannot safely peel a nub.
+    return null;
+  }
+
+  const trimmed = peelTerminal(poly, chosen.atStart);
+  if (!trimmed || trimmed.length < 2) {
+    return { action: "delete", edgeId: targetId };
+  }
+  const newEnd = chosen.atStart ? trimmed[0]! : trimmed[trimmed.length - 1]!;
+
+  if (chosen.degree === 1) {
+    return {
+      action: "trimTip",
+      edgeId: targetId,
+      tipId: chosen.tipId,
+      trimmedPoly: trimmed,
+      tipPosition: { x: newEnd.x, y: newEnd.y - 4 },
+    };
+  }
+
+  return {
+    action: "peelToNewTip",
+    edgeId: targetId,
+    oldTipId: chosen.tipId,
+    atStart: chosen.atStart,
+    trimmedPoly: trimmed,
+    newTipPosition: { x: newEnd.x, y: newEnd.y - 4 },
+  };
 }
 
 /** Distance along polyline from start to the closest point on the poly to `p`. */
@@ -563,7 +1008,6 @@ export function pruneDanglingJunctionStubs(
 
 /**
  * Collapse tiny orthogonal jogs / trailing nubs and rewrite edge waypoints.
- * Also removes short dangling stubs hanging off junction TIPs.
  * Only touches edges that already have authored waypoints or touch TIP nodes.
  */
 export function normalizeWires(
@@ -595,10 +1039,9 @@ export function normalizeWires(
   }
 
   const pruned = pruneOrphanTips(nextNodes, nextEdges);
-  const stubs = pruneDanglingJunctionStubs(pruned.nodes, pruned.edges, {
-    onlyShort: true,
-  });
-  // Heal rails split by a mid-wire branch after the branch stub is gone.
-  const collapsed = collapsePassThroughTips(stubs.nodes, stubs.edges);
+  // A short free tail can be an intentional branch saved with Esc. Do not
+  // delete it as a side effect of completing some unrelated wire. Explicit
+  // delete/reconnect flows may still call pruneDanglingJunctionStubs directly.
+  const collapsed = collapsePassThroughTips(pruned.nodes, pruned.edges);
   return { nodes: collapsed.nodes, edges: collapsed.edges };
 }

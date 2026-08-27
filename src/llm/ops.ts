@@ -5,7 +5,7 @@ import type { ComponentKind } from "../model/types";
 // ---------------------------------------------------------------------------
 
 export type Op =
-  | { type: "addComponent"; kind: ComponentKind }
+  | { type: "addComponent"; kind: ComponentKind; params?: Record<string, string> }
   | { type: "setParam"; refdes: string; key: string; value: string }
   | { type: "deleteComponent"; refdes: string }
   | {
@@ -147,7 +147,7 @@ function matchConnect(text: string): InterpretResult | null {
     };
     const aLabel = aPin ? `${aRefdes}.${aPin}` : aRefdes;
     const bLabel = bPin ? `${bRefdes}.${bPin}` : bRefdes;
-    return { ops: [op], reply: `Connected ${aLabel} → ${bLabel}.` };
+    return { ops: [op], reply: `Ready to connect ${aLabel} → ${bLabel}.` };
   }
   return null;
 }
@@ -177,7 +177,7 @@ function matchDisconnect(text: string): InterpretResult | null {
           ...(bPin ? { bPin } : {}),
         },
       ],
-      reply: `Disconnected ${aRefdes}${aPin ? "." + aPin : ""} from ${bRefdes}${bPin ? "." + bPin : ""}.`,
+      reply: `Ready to disconnect ${aRefdes}${aPin ? "." + aPin : ""} from ${bRefdes}${bPin ? "." + bPin : ""}.`,
     };
   }
 
@@ -190,13 +190,50 @@ function matchDisconnect(text: string): InterpretResult | null {
     const aPin = one[2]?.trim().toLowerCase();
     return {
       ops: [{ type: "disconnectPins", aRefdes, ...(aPin ? { aPin } : {}) }],
-      reply: aPin ? `Disconnected pin ${aRefdes}.${aPin}.` : `Disconnected all wires on ${aRefdes}.`,
+      reply: aPin ? `Ready to disconnect pin ${aRefdes}.${aPin}.` : `Ready to disconnect all wires on ${aRefdes}.`,
     };
   }
   return null;
 }
 
 function matchAdd(text: string): InterpretResult | null {
+  // "add 10k resistor" / "add resistor 10k" / "add a 4.7k resistor"
+  const withValueFirst = text.match(
+    new RegExp(
+      `^(?:${ADD_VERBS})\\s+(?:(?:a|an|another|one|new|the)\\s+)*([0-9.][\\w.]*)\\s+([a-z][a-z0-9]*)$`,
+      "i",
+    ),
+  );
+  if (withValueFirst) {
+    const value = withValueFirst[1]!;
+    const word = withValueFirst[2]!.toLowerCase().replace(/[^a-z]/g, "");
+    const kind = KIND_WORDS[word];
+    if (kind) {
+      return {
+        ops: [{ type: "addComponent", kind, params: { value } }],
+        reply: `Ready to add ${kind} (${value}) — confirm in the form.`,
+      };
+    }
+  }
+
+  const withValueLast = text.match(
+    new RegExp(
+      `^(?:${ADD_VERBS})\\s+(?:(?:a|an|another|one|new|the)\\s+)*([a-z][a-z0-9]*)\\s+([0-9.][\\w.]*)$`,
+      "i",
+    ),
+  );
+  if (withValueLast) {
+    const word = withValueLast[1]!.toLowerCase().replace(/[^a-z]/g, "");
+    const value = withValueLast[2]!;
+    const kind = KIND_WORDS[word];
+    if (kind) {
+      return {
+        ops: [{ type: "addComponent", kind, params: { value } }],
+        reply: `Ready to add ${kind} (${value}) — confirm in the form.`,
+      };
+    }
+  }
+
   const re = new RegExp(
     `^(?:${ADD_VERBS})\\s+(?:(?:a|an|another|one|new|the|another)\\s+)*([a-z][a-z0-9]*)`,
     "i",
@@ -206,7 +243,7 @@ function matchAdd(text: string): InterpretResult | null {
   const word = m[1].toLowerCase().replace(/[^a-z]/g, "");
   const kind = KIND_WORDS[word];
   if (!kind) return null;
-  return { ops: [{ type: "addComponent", kind }], reply: `Added ${kind}.` };
+  return { ops: [{ type: "addComponent", kind }], reply: `Ready to add ${kind} — confirm in the form.` };
 }
 
 function matchSet(text: string): InterpretResult | null {
@@ -221,7 +258,7 @@ function matchSet(text: string): InterpretResult | null {
     if (key && value) {
       return {
         ops: [{ type: "setParam", refdes, key, value }],
-        reply: `Set ${refdes} ${key} = ${value}.`,
+        reply: `Ready to set ${refdes} ${key} = ${value}.`,
       };
     }
   }
@@ -265,7 +302,7 @@ function matchSet(text: string): InterpretResult | null {
       if (refdes && key && value) {
         return {
           ops: [{ type: "setParam", refdes, key, value }],
-          reply: `Set ${refdes} ${key} = ${value}.`,
+          reply: `Ready to set ${refdes} ${key} = ${value}.`,
         };
       }
     }
@@ -276,7 +313,7 @@ function matchSet(text: string): InterpretResult | null {
       if (!value || /^(a|an|the)\b/i.test(value)) continue;
       return {
         ops: [{ type: "setParam", refdes, key: "value", value }],
-        reply: `Set ${refdes} value = ${value}.`,
+        reply: `Ready to set ${refdes} value = ${value}.`,
       };
     }
   }
@@ -299,7 +336,7 @@ function matchDelete(text: string): InterpretResult | null {
   const refdes = m[1].toUpperCase();
   return {
     ops: [{ type: "deleteComponent", refdes }],
-    reply: `Removed ${refdes}.`,
+    reply: `Ready to remove ${refdes}.`,
   };
 }
 

@@ -8,6 +8,7 @@ import {
   splitNetsAndParams,
   spicePinOrder,
 } from "./parseDeviceParams";
+import { extractNets } from "./nets";
 
 export interface ApplyNetlistResult {
   nodes: Node<ComponentData>[];
@@ -220,16 +221,53 @@ export function applyNetlistToGraph(
     }
   }
 
+  const endpointKey = (p: Endpoint) => `${p.nodeId}:${p.pinId}`;
+  const partitionKey = (groups: Iterable<Endpoint[]>) =>
+    [...groups]
+      .map((group) => [...new Set(group.map(endpointKey))].sort().join("|"))
+      .sort()
+      .join(";");
+
+  // If Apply only changed values/directives, preserve the hand-drawn wire
+  // geometry exactly. Comparing endpoint partitions ignores net names while
+  // still detecting any real connectivity change.
+  const alive = new Set(working.map((n) => n.id));
+  const aliveEdges = edges.filter((e) => alive.has(e.source) && alive.has(e.target));
+  const desiredEndpoints = [...netToPins.values()].flat();
+  const existingNets = extractNets(working, aliveEdges);
+  const existingGroups = new Map<string, Endpoint[]>();
+  for (const endpoint of desiredEndpoints) {
+    const net = existingNets.netOf(endpoint.nodeId, endpoint.pinId);
+    addEndpoint(existingGroups, net, endpoint.nodeId, endpoint.pinId);
+  }
+  const connectivityUnchanged =
+    partitionKey(netToPins.values()) === partitionKey(existingGroups.values());
+
+  if (connectivityUnchanged) {
+    return {
+      nodes: working,
+      edges: aliveEdges,
+      updated,
+      added,
+      deleted,
+      rewired: false,
+      skippedUnknown,
+    };
+  }
+
   const rebuilt = edgesFromNetMap(netToPins);
 
-  const alive = new Set(working.map((n) => n.id));
-  const kindOf = new Map(working.map((n) => [n.id, n.data.kind]));
+  // A topology rebuild replaces TIP-based wire geometry. Retaining those old
+  // segments as well as the new direct edges creates duplicate paths and
+  // dangling endpoint squares.
+  const rebuiltNodes = working.filter((n) => n.data.kind !== "TIP");
+  const rebuiltAlive = new Set(rebuiltNodes.map((n) => n.id));
+  const kindOf = new Map(rebuiltNodes.map((n) => [n.id, n.data.kind]));
   const preserved = edges.filter((e) => {
-    if (!alive.has(e.source) || !alive.has(e.target)) return false;
+    if (!rebuiltAlive.has(e.source) || !rebuiltAlive.has(e.target)) return false;
     const sk = kindOf.get(e.source);
     const tk = kindOf.get(e.target);
-    return sk === "VSENSE" || sk === "VPROBE" || tk === "VSENSE" || tk === "VPROBE"
-      || sk === "TIP" || tk === "TIP";
+    return sk === "VSENSE" || sk === "VPROBE" || tk === "VSENSE" || tk === "VPROBE";
   });
 
   const edgeKey = (e: Edge) =>
@@ -244,7 +282,7 @@ export function applyNetlistToGraph(
   });
 
   return {
-    nodes: working,
+    nodes: rebuiltNodes,
     edges: [...rebuilt, ...extra],
     updated,
     added,

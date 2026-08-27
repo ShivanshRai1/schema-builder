@@ -30,7 +30,21 @@ export function validateOps(raw: unknown): Op[] {
 
     if (type === "addComponent") {
       const kind = String(o.kind ?? "") as ComponentKind;
-      if (KINDS.has(kind)) out.push({ type: "addComponent", kind });
+      if (!KINDS.has(kind)) continue;
+      const paramsRaw = o.params;
+      let params: Record<string, string> | undefined;
+      if (paramsRaw && typeof paramsRaw === "object" && !Array.isArray(paramsRaw)) {
+        params = {};
+        for (const [k, v] of Object.entries(paramsRaw as Record<string, unknown>)) {
+          const key = String(k).trim();
+          const value = String(v ?? "").trim();
+          if (key && value) params[key] = value;
+        }
+        if (!Object.keys(params).length) params = undefined;
+      } else if (o.value != null && String(o.value).trim()) {
+        params = { value: String(o.value).trim() };
+      }
+      out.push(params ? { type: "addComponent", kind, params } : { type: "addComponent", kind });
       continue;
     }
 

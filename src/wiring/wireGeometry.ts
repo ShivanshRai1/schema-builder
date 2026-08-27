@@ -2,6 +2,7 @@ import type { Edge, Node } from "@xyflow/react";
 import type { ComponentData } from "../model/types";
 import {
   orthogonalPolyline,
+  outwardStub,
   routeWirePoints,
   snapCoord,
   snapPoint,
@@ -11,6 +12,32 @@ import {
 import { pinWorldPoint, pinWorldSide } from "./pinGeometry";
 
 const STUB = 16;
+
+/** Pin↔TIP: route toward the tip without backtracking out of the pin. */
+export function routePinToTipPoints(
+  pinPt: Point,
+  tipPt: Point,
+  pinSide: PinSide,
+  waypoints: Point[],
+): Point[] {
+  if (waypoints.length) {
+    return orthogonalPolyline([pinPt, ...waypoints, tipPt]);
+  }
+  if (Math.abs(pinPt.x - tipPt.x) < 0.5 || Math.abs(pinPt.y - tipPt.y) < 0.5) {
+    return orthogonalPolyline([pinPt, tipPt]);
+  }
+  const exit = outwardStub(pinPt, pinSide, STUB);
+  const exitAway =
+    Math.hypot(exit.x - tipPt.x, exit.y - tipPt.y) >
+    Math.hypot(pinPt.x - tipPt.x, pinPt.y - tipPt.y) + 4;
+  if (exitAway) {
+    if (pinSide === "left" || pinSide === "right") {
+      return orthogonalPolyline([pinPt, { x: tipPt.x, y: pinPt.y }, tipPt]);
+    }
+    return orthogonalPolyline([pinPt, { x: pinPt.x, y: tipPt.y }, tipPt]);
+  }
+  return orthogonalPolyline([pinPt, exit, tipPt]);
+}
 
 function distToSegment(p: Point, a: Point, b: Point): number {
   const dx = b.x - a.x;
@@ -43,7 +70,30 @@ export function computeEdgePolyline(
   const srcIsTip = src.data.kind === "TIP";
   const tgtIsTip = tgt.data.kind === "TIP";
 
-  if (srcIsTip || tgtIsTip || waypoints.length > 0) {
+  // Pin↔TIP: route toward the junction/free end (rotation-safe). TIP↔TIP keeps
+  // authored bends. Pin↔pin uses stub-aware routing below.
+  if (srcIsTip || tgtIsTip) {
+    if (srcIsTip && tgtIsTip) {
+      return orthogonalPolyline(
+        waypoints.length ? [start, ...waypoints, end] : [start, end],
+      );
+    }
+    const pinIsSource = !srcIsTip;
+    const pinNode = pinIsSource ? src : tgt;
+    const pinHandle = pinIsSource ? edge.sourceHandle : edge.targetHandle;
+    const pinSide = pinWorldSide(pinNode, pinHandle) ?? "left";
+    const pinPt = pinIsSource ? start : end;
+    const tipPt = pinIsSource ? end : start;
+    const core = routePinToTipPoints(pinPt, tipPt, pinSide, waypoints);
+    return pinIsSource ? core : core.slice().reverse();
+  }
+
+  // Scissors-trimmed pin↔pin paths: bake exact geometry so pin-exit stubs
+  // do not regenerate after a tip peel.
+  const directPath = Boolean(
+    (edge.data as { directPath?: boolean } | undefined)?.directPath,
+  );
+  if (directPath) {
     return orthogonalPolyline(
       waypoints.length ? [start, ...waypoints, end] : [start, end],
     );
@@ -56,7 +106,21 @@ export function computeEdgePolyline(
 
 /** Stored waypoints = interior bends (exclude pin + stub at each end). */
 export function polylineToWaypoints(polyline: Point[]): Point[] {
-  if (polyline.length <= 4) return [];
+  if (polyline.length <= 3) return [];
+  if (polyline.length === 4) {
+    // [pin, a, b, pin] after nub peel — keep the elbow when the path turns,
+    // but leave collinear stub↔stub runs empty so autoroute can rebuild stubs.
+    const p0 = polyline[0]!;
+    const a = polyline[1]!;
+    const b = polyline[2]!;
+    const p3 = polyline[3]!;
+    const cross = (u: Point, v: Point, w: Point) =>
+      (v.x - u.x) * (w.y - v.y) - (v.y - u.y) * (w.x - v.x);
+    if (Math.abs(cross(p0, a, b)) <= 1 && Math.abs(cross(a, b, p3)) <= 1) {
+      return [];
+    }
+    return [a, b];
+  }
   return polyline.slice(2, -2);
 }
 
@@ -66,10 +130,15 @@ export function polylineToStoredWaypoints(
   edge: Edge,
   polyline: Point[],
 ): Point[] {
-  void nodes;
-  void edge;
-  if (polyline.length <= 2) return [];
-  return polyline.slice(1, -1);
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const touchesTip =
+    byId.get(edge.source)?.data.kind === "TIP" ||
+    byId.get(edge.target)?.data.kind === "TIP";
+  if (touchesTip) {
+    if (polyline.length <= 2) return [];
+    return polyline.slice(1, -1);
+  }
+  return polylineToWaypoints(polyline);
 }
 
 export type WireDragHit =

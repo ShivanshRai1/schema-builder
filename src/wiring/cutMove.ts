@@ -253,6 +253,10 @@ export function applyCutMove(
  * back onto that wire — restoring the connection (and hence the netlist). This is
  * the inverse of detachPartForMove and powers "move a part away and back".
  *
+ * Only degree-1 free tips are eligible. Junction tips (2+ edges) must never be
+ * consumed here: picking the wrong edge on a T-junction rewires the rail and
+ * orphans the real part↔junction connection (seen when nudging C along R).
+ *
  * `nodes` must already carry the parts' final (dropped) positions.
  */
 export function reconnectPartsOnTips(
@@ -270,22 +274,36 @@ export function reconnectPartsOnTips(
     y: n.position.y + TIP_SIZE / 2,
   });
 
+  const tipDegree = (tipId: string, list: Edge[]) =>
+    list.reduce(
+      (n, e) => n + (e.source === tipId || e.target === tipId ? 1 : 0),
+      0,
+    );
+
+  const tipAlreadyOnPart = (tipId: string, partId: string, list: Edge[]) =>
+    list.some(
+      (e) =>
+        (e.source === tipId && e.target === partId) ||
+        (e.target === tipId && e.source === partId),
+    );
+
   for (const id of movedIds) {
     const part0 = nextNodes.find((n) => n.id === id);
     if (!part0 || part0.data.kind === "TIP") continue;
     const spec = COMPONENT_SPECS[part0.data.kind];
     const consumed = new Set<string>();
 
-    // 1) Find the closest pin↔tip pair within `radius`. Because the whole part
-    //    moves rigidly, that pair's offset tells us exactly how far to nudge the
-    //    part so its pins land dead-on the frozen wire ends (grid-snapping means a
-    //    "move back" often lands a cell off — this makes reconnect forgiving).
+    // 1) Closest free dangling tip within radius (not a junction, not already
+    //    wired to this part). Junction tips stay put while connected wires follow.
     let best: { off: Point; d: number } | null = null;
     for (const pin of spec.pins) {
       const pinPt = pinWorldPoint(part0, pin.id);
       if (!pinPt) continue;
       for (const n of nextNodes) {
         if (n.data.kind !== "TIP") continue;
+        if (consumed.has(n.id)) continue;
+        if (tipDegree(n.id, nextEdges) !== 1) continue;
+        if (tipAlreadyOnPart(n.id, id, nextEdges)) continue;
         const t = tipConnect(n);
         const d = Math.hypot(t.x - pinPt.x, t.y - pinPt.y);
         if (d <= radius && (!best || d < best.d)) {
@@ -302,12 +320,14 @@ export function reconnectPartsOnTips(
     };
     nextNodes = nextNodes.map((n) => (n.id === id ? shifted : n));
 
-    // 3) Reconnect every pin that now coincides with a tip (tiny epsilon).
+    // 3) Reconnect every pin that now coincides with a free tip.
     for (const pin of spec.pins) {
       const pinPt = pinWorldPoint(shifted, pin.id);
       if (!pinPt) continue;
       const tip = nextNodes.find((n) => {
         if (n.data.kind !== "TIP" || consumed.has(n.id)) return false;
+        if (tipDegree(n.id, nextEdges) !== 1) return false;
+        if (tipAlreadyOnPart(n.id, id, nextEdges)) return false;
         const t = tipConnect(n);
         return Math.hypot(t.x - pinPt.x, t.y - pinPt.y) <= 2.5;
       });

@@ -4,3 +4,4 @@ public/monaco
 server/node_modules
 .env
 .env.local
+php-sim/sim_config.php

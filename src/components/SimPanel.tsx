@@ -10,6 +10,7 @@ import {
   Filler,
   CategoryScale,
 } from "chart.js";
+import { SicComparePanel } from "./SicComparePanel";
 import { runSimulation, type SimEngine, type SimResult } from "../sim/runSimulation";
 
 Chart.register(
@@ -24,7 +25,7 @@ Chart.register(
 );
 
 /**
- * Step-4 seam: POST netlist → fleet sim_api.php.
+ * POST the live schematic netlist to sim_api.php (submit + poll).
  * If the API is missing or fails, runSimulation returns a demo plot.
  * Does not touch graph / netlist / assistant state.
  */
@@ -35,6 +36,7 @@ export function SimPanel({ netlist, onPopOut }: { netlist: string; onPopOut?: ()
   const [busy, setBusy] = useState(false);
   const [engine, setEngine] = useState<SimEngine>("D2SPICE");
   const [result, setResult] = useState<SimResult | null>(null);
+  const [tab, setTab] = useState<"circuit" | "sic">("circuit");
 
   useEffect(() => {
     return () => {
@@ -113,8 +115,17 @@ export function SimPanel({ netlist, onPopOut }: { netlist: string; onPopOut?: ()
   return (
     <div className="sim-panel">
       <div className="panel-header">
-        <span>simulation</span>
+        <span className="sim-tabs">
+          <button type="button" className={tab === "circuit" ? "sim-tab on" : "sim-tab"} onClick={() => setTab("circuit")}>
+            Circuit
+          </button>
+          <button type="button" className={tab === "sic" ? "sim-tab on" : "sim-tab"} onClick={() => setTab("sic")}>
+            SiC compare
+          </button>
+        </span>
         <div className="panel-header-right">
+          {tab === "circuit" && (
+            <>
           <select
             className="sim-engine"
             value={engine}
@@ -134,6 +145,8 @@ export function SimPanel({ netlist, onPopOut }: { netlist: string; onPopOut?: ()
           >
             {busy ? "Running…" : "Run"}
           </button>
+            </>
+          )}
           {onPopOut && (
             <button
               type="button"
@@ -146,6 +159,7 @@ export function SimPanel({ netlist, onPopOut }: { netlist: string; onPopOut?: ()
           )}
         </div>
       </div>
+      <div className={tab === "circuit" ? "sim-body" : "sim-body sim-body-hidden"}>
       {result && <div className="netlist-status">{result.message}</div>}
       <div className="sim-chart-wrap">
         <canvas ref={canvasRef} />
@@ -154,6 +168,10 @@ export function SimPanel({ netlist, onPopOut }: { netlist: string; onPopOut?: ()
             Run simulation to see a waveform
           </div>
         )}
+      </div>
+      </div>
+      <div className={tab === "sic" ? "sim-body" : "sim-body sim-body-hidden"}>
+        <SicComparePanel netlist={netlist} />
       </div>
     </div>
   );

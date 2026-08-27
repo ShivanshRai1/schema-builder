@@ -28,16 +28,20 @@ export function projectOrthogonal(
   const dx = Math.abs(snapped.x - from.x);
   const dy = Math.abs(snapped.y - from.y);
 
+  // Prefer sticking to the hinted axis (leave bus / leave pin). Only break
+  // when the cursor is essentially flat on that axis — otherwise diagonal
+  // aims still force a tiny H before a vertical.
   if (preferAxis === "v") {
-    if (dx > dy * 1.75 && dx >= grid) return { x: snapped.x, y: from.y };
+    if (dy < grid && dx >= grid) return { x: snapped.x, y: from.y };
     return { x: from.x, y: snapped.y };
   }
   if (preferAxis === "h") {
-    if (dy > dx * 1.75 && dy >= grid) return { x: from.x, y: snapped.y };
+    if (dx < grid && dy >= grid) return { x: from.x, y: snapped.y };
     return { x: snapped.x, y: from.y };
   }
 
-  if (dx >= dy) return { x: snapped.x, y: from.y };
+  // No hint: larger delta wins; vertical wins ties (easier pure verticals).
+  if (dx > dy) return { x: snapped.x, y: from.y };
   return { x: from.x, y: snapped.y };
 }
 
@@ -53,14 +57,14 @@ export function projectOrthogonalLive(
   const dx = Math.abs(cursor.x - from.x);
   const dy = Math.abs(cursor.y - from.y);
   if (preferAxis === "v") {
-    if (dx > dy * 1.75 && dx >= WIRE_GRID) return { x: cursor.x, y: from.y };
+    if (dy < WIRE_GRID && dx >= WIRE_GRID) return { x: cursor.x, y: from.y };
     return { x: from.x, y: cursor.y };
   }
   if (preferAxis === "h") {
-    if (dy > dx * 1.75 && dy >= WIRE_GRID) return { x: from.x, y: cursor.y };
+    if (dx < WIRE_GRID && dy >= WIRE_GRID) return { x: from.x, y: cursor.y };
     return { x: cursor.x, y: from.y };
   }
-  if (dx >= dy) return { x: cursor.x, y: from.y };
+  if (dx > dy) return { x: cursor.x, y: from.y };
   return { x: from.x, y: cursor.y };
 }
 
@@ -167,9 +171,26 @@ function clearApproachBend(
   stub: number,
 ): Point[] {
   if (pointsEqual(startOut, endOut)) return [];
-  const aligned =
-    Math.abs(startOut.x - endOut.x) < 0.5 || Math.abs(startOut.y - endOut.y) < 0.5;
-  if (aligned) return [];
+  // Exact or near-collinear (within one grid): a short stair is fine — do NOT
+  // loop around the part body. That detour was creating big steps/overhangs
+  // after moving parts that landed almost aligned.
+  const near = stub; // WIRE_GRID === 16, stub defaults to 16
+  if (
+    Math.abs(startOut.x - endOut.x) <= near ||
+    Math.abs(startOut.y - endOut.y) <= near
+  ) {
+    if (
+      Math.abs(startOut.x - endOut.x) < 0.5 ||
+      Math.abs(startOut.y - endOut.y) < 0.5
+    ) {
+      return [];
+    }
+    // Prefer a single elbow on the source row/col (no body pad detour).
+    if (sourceSide === "left" || sourceSide === "right") {
+      return [{ x: endOut.x, y: startOut.y }];
+    }
+    return [{ x: startOut.x, y: endOut.y }];
+  }
 
   const pad = stub * 3;
   const bends: Point[] = [];

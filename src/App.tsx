@@ -22,7 +22,8 @@ import { toNetlist } from "./netlist/toNetlist";
 import { extractDirectives } from "./netlist/parseDeviceParams";
 import { applyNetlistToGraph } from "./netlist/applyNetlistToGraph";
 import { createHistory, type CircuitSnapshot } from "./history/circuitHistory";
-import { downloadCircuit, readCircuitFile } from "./persistence/circuitFile";
+import { downloadCircuit, parseCircuitFile, readCircuitFile } from "./persistence/circuitFile";
+import starterCircuit from "../examples/demo-circuit.json";
 import type { Op } from "./llm/ops";
 import type { AssistantContext } from "./llm/assistantTypes";
 import {
@@ -34,14 +35,21 @@ import {
 } from "./llm/wireOps";
 import { applyCutMove, detachPartForMove, reconnectPartsOnTips, reconnectTipsOnPins, type FlowRect } from "./wiring/cutMove";
 import { clearTipStubsOnPins, pruneOrphanTips, collapsePassThroughTips } from "./wiring/tipCleanup";
-import { collapseMicroBends, detachWireForMove } from "./wiring/wireMove";
+import {
+  collapseMicroBends,
+  detachWireForMove,
+  finalizeConnectedPartMove,
+  planConnectedPartMove,
+  straightenWire,
+} from "./wiring/wireMove";
 import { pinWorldPoint } from "./wiring/pinGeometry";
-import { computeEdgePolyline } from "./wiring/wireGeometry";
+import { computeEdgePolyline, polylineToStoredWaypoints } from "./wiring/wireGeometry";
 import {
   cleanEdgeTrailingNubs,
   isDanglingOrTrailingEdge,
   isShortDanglingStub,
   normalizeWires,
+  planScissorWireDelete,
   removeDanglingOrTrailingEdges,
   trimEdgeEndsToJoins,
 } from "./wiring/normalizeWires";
@@ -126,6 +134,8 @@ export default function App() {
   const clipboard = useRef<Clipboard | null>(null);
   const history = useRef(createHistory());
   const dragOrigin = useRef<CircuitSnapshot | null>(null);
+  const connectedMoveRef = useRef(false);
+  const moveSeverGuard = useRef<{ nodeId: string; at: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [textEditMode, setTextEditMode] = useState(false);
@@ -163,6 +173,7 @@ export default function App() {
     directives: directivesRef.current,
     library: libraryRef.current,
   }), []);
+
 
   const pushHistory = useCallback(() => {
     history.current.push(snapshot());
@@ -284,7 +295,13 @@ export default function App() {
       );
       // Junction TIP (2+ edges) — just add the new edge, keep the junction node.
       if (srcTipEdges.length >= 2) {
-        setEdges((prev) => addEdge({ ...c, type: "schematic", data: { waypoints } }, prev));
+        const added = addEdge(
+          { ...c, type: "schematic", data: { waypoints } },
+          eds,
+        );
+        const normalized = normalizeWires(ns, added);
+        setNodes(normalized.nodes);
+        setEdges(normalized.edges);
         return;
       }
       const intoTip = srcTipEdges[0] ?? null;
@@ -369,7 +386,13 @@ export default function App() {
           (e.source === c.target && e.sourceHandle === "t"),
       );
       if (tipEdges.length >= 2) {
-        setEdges((prev) => addEdge({ ...c, type: "schematic", data: { waypoints } }, prev));
+        const added = addEdge(
+          { ...c, type: "schematic", data: { waypoints } },
+          eds,
+        );
+        const normalized = normalizeWires(ns, added);
+        setNodes(normalized.nodes);
+        setEdges(normalized.edges);
         return;
       }
       const intoTip = tipEdges[0] ?? null;
@@ -456,39 +479,61 @@ export default function App() {
       if (!freeStart) return;
       const a = newId();
       const b = newId();
-      setNodes((ns) => [...ns, makeTipNode(a, freeStart), makeTipNode(b, end)]);
-      setEdges((eds) =>
-        addEdge(
-          {
-            id: `${a}t-${b}t`,
-            type: "schematic",
-            source: a,
-            sourceHandle: "t",
-            target: b,
-            targetHandle: "t",
-            data: { waypoints },
-          },
-          eds,
-        ),
-      );
-      return;
-    }
-    const tipId = newId();
-    setNodes((ns) => [...ns, makeTipNode(tipId, end)]);
-    setEdges((eds) =>
-      addEdge(
+      const nextNodes = [
+        ...nodesRef.current,
+        makeTipNode(a, freeStart),
+        makeTipNode(b, end),
+      ];
+      const nextEdges = addEdge(
         {
-          id: `${source}${sourceHandle}-${tipId}t`,
+          id: `${a}t-${b}t`,
           type: "schematic",
-          source,
-          sourceHandle,
-          target: tipId,
+          source: a,
+          sourceHandle: "t",
+          target: b,
           targetHandle: "t",
           data: { waypoints },
         },
-        eds,
-      ),
+        edgesRef.current,
+      );
+      setNodes(nextNodes);
+      setEdges(nextEdges);
+      return;
+    }
+
+    const currentNodes = nodesRef.current;
+    const currentEdges = edgesRef.current;
+    const sourceNode = currentNodes.find((node) => node.id === source);
+    const sourceDegree = currentEdges.reduce(
+      (count, edge) =>
+        count + (edge.source === source || edge.target === source ? 1 : 0),
+      0,
     );
+    const tipId = newId();
+    const nextNodes = [...currentNodes, makeTipNode(tipId, end)];
+    const nextEdges = addEdge(
+      {
+        id: `${source}${sourceHandle}-${tipId}t`,
+        type: "schematic",
+        source,
+        sourceHandle,
+        target: tipId,
+        targetHandle: "t",
+        data: { waypoints },
+      },
+      currentEdges,
+    );
+    // Extending an existing free wire end turns that old TIP into a degree-2
+    // pass-through point. Merge both halves so a straight continuation does
+    // not display a false junction square. Real branch TIPs (degree 2+) stay.
+    if (sourceNode?.data.kind === "TIP" && sourceDegree === 1) {
+      const collapsed = collapsePassThroughTips(nextNodes, nextEdges);
+      setNodes(collapsed.nodes);
+      setEdges(collapsed.edges);
+      return;
+    }
+    setNodes(nextNodes);
+    setEdges(nextEdges);
   }, [setNodes, setEdges, pushHistory]);
 
   /**
@@ -512,6 +557,7 @@ export default function App() {
 
       let splitIdx = 0;
       let bestD = Infinity;
+      let splitPoint = poly[0]!;
       for (let i = 0; i < poly.length - 1; i++) {
         const a = poly[i]!;
         const b = poly[i + 1]!;
@@ -529,11 +575,28 @@ export default function App() {
         if (d < bestD) {
           bestD = d;
           splitIdx = i;
+          splitPoint = { x: cx, y: cy };
         }
       }
 
-      const beforeBranch = poly.slice(1, splitIdx + 1);
-      const afterBranch = poly.slice(splitIdx + 1, poly.length - 1);
+      const withoutAdjacentDuplicates = (points: Point[]) =>
+        points.filter(
+          (p, i) =>
+            i === 0 ||
+            Math.hypot(p.x - points[i - 1]!.x, p.y - points[i - 1]!.y) > 0.5,
+        );
+      const beforePath = withoutAdjacentDuplicates([
+        ...poly.slice(0, splitIdx + 1),
+        splitPoint,
+      ]);
+      const afterPath = withoutAdjacentDuplicates([
+        splitPoint,
+        ...poly.slice(splitIdx + 1),
+      ]);
+      // Both new edges touch a TIP, so their waypoints represent the complete
+      // rendered path between endpoints (including the original pin stub).
+      const beforeBranch = beforePath.slice(1, -1);
+      const afterBranch = afterPath.slice(1, -1);
       const tipId = newId();
       const TIP_SIZE = 8;
 
@@ -543,7 +606,7 @@ export default function App() {
           {
             id: tipId,
             type: "component" as const,
-            position: { x: branchPoint.x, y: branchPoint.y - TIP_SIZE / 2 },
+            position: { x: splitPoint.x, y: splitPoint.y - TIP_SIZE / 2 },
             data: { kind: "TIP" as const, refdes: "", params: {} },
             style: { width: TIP_SIZE, height: TIP_SIZE },
             selected: false,
@@ -577,12 +640,29 @@ export default function App() {
   );
 
   const onWireBranch = useCallback(
-    (edgeId: string, branchPoint: Point): string | null => {
+    (
+      edgeId: string,
+      branchPoint: Point,
+      graph?: { nodes: Node<ComponentData>[]; edges: Edge[] },
+    ): string | null => {
       pushHistory();
-      return splitEdgeAtPoint(edgeId, branchPoint);
+      return splitEdgeAtPoint(edgeId, branchPoint, graph);
     },
     [pushHistory, splitEdgeAtPoint],
   );
+
+  const onCancelWireBranch = useCallback((tipId: string) => {
+    const es = edgesRef.current;
+    const degree = es.reduce(
+      (count, edge) =>
+        count + (edge.source === tipId || edge.target === tipId ? 1 : 0),
+      0,
+    );
+    if (degree !== 2) return;
+    const collapsed = collapsePassThroughTips(nodesRef.current, es);
+    setNodes(collapsed.nodes);
+    setEdges(collapsed.edges);
+  }, [setNodes, setEdges]);
 
   const onSelectEdge = useCallback(
     (edgeId: string) => {
@@ -625,19 +705,81 @@ export default function App() {
     setEdges(result.edges);
   }, [setNodes, setEdges, pushHistory]);
 
-  const moveSeverGuard = useRef<{ nodeId: string; at: number } | null>(null);
-
   /**
-   * LTspice Move pickup: detach part from the net, return nodes to drag.
-   * After this, the part only connects to TIP nodes — never to R1/GND/etc.
+   * Move one part while keeping electrical edges attached. Long free TIP wires
+   * ride along; short stubs are dropped; pin↔pin / junction waypoints clear so
+   * routing follows the new pin poses. Drop runs finalizeConnectedPartMove.
+   * Reconnect-on-drop is disabled for this path — it used to consume nearby
+   * T-junction tips and sever C from the rail.
    */
   const onMoveDisconnect = useCallback(
     (nodeId: string, grabPoint?: { x: number; y: number }) => {
+      const nodesNow = nodesRef.current;
+      let edgesNow = edgesRef.current;
+
+      // Try to keep wires connected during the drag. This is possible when the
+      // part is connected via TIP nodes that we can re-route rather than sever.
+      const plan = planConnectedPartMove(nodesNow, edgesNow, nodeId);
+      if (plan) {
+        connectedMoveRef.current = true;
+        const dropTips = new Set(plan.dropStubTipIds);
+        const dropEdges = new Set(plan.dropStubEdgeIds);
+        const clearSet = new Set(plan.clearWaypointEdgeIds);
+        const needsGraphSync =
+          dropTips.size > 0 || dropEdges.size > 0 || clearSet.size > 0;
+        if (needsGraphSync) {
+          const nextNodes = dropTips.size
+            ? nodesNow.filter((n) => !dropTips.has(n.id))
+            : nodesNow;
+          const nextEdges = edgesNow
+            .filter((e) => !dropEdges.has(e.id))
+            .map((e) =>
+              clearSet.has(e.id)
+                ? { ...e, data: { ...(e.data as object), waypoints: [] } }
+                : e,
+            );
+          edgesNow = nextEdges;
+          flushSync(() => {
+            if (dropTips.size) setNodes(nextNodes);
+            setEdges(nextEdges);
+          });
+          const idSet = new Set(plan.moveIds);
+          const partOrigin = nextNodes.find((n) => n.id === nodeId);
+          const tipOrigins = nextNodes
+            .filter((n) => idSet.has(n.id) && n.id !== nodeId)
+            .map((n) => ({ id: n.id, x: n.position.x, y: n.position.y }));
+          if (!partOrigin) return null;
+          return {
+            moveIds: plan.moveIds,
+            origins: [
+              { id: nodeId, x: partOrigin.position.x, y: partOrigin.position.y },
+              ...tipOrigins,
+            ],
+            cutCount: 0,
+          };
+        }
+        const idSet = new Set(plan.moveIds);
+        const partOrigin = nodesNow.find((n) => n.id === nodeId);
+        const tipOrigins = nodesNow
+          .filter((n) => idSet.has(n.id) && n.id !== nodeId)
+          .map((n) => ({ id: n.id, x: n.position.x, y: n.position.y }));
+        if (!partOrigin) return null;
+        return {
+          moveIds: plan.moveIds,
+          origins: [
+            { id: nodeId, x: partOrigin.position.x, y: partOrigin.position.y },
+            ...tipOrigins,
+          ],
+          cutCount: 0,
+        };
+      }
+
+      // Fallback for parts with no wiring plan (disconnected / fresh parts).
+      connectedMoveRef.current = false;
       const now = Date.now();
       const prev = moveSeverGuard.current;
       if (prev && prev.nodeId === nodeId && now - prev.at < 300) {
-        // Same gesture — return current selection origins without re-cutting.
-        const ns = nodesRef.current;
+        const ns = nodesNow;
         const moveIds = ns.filter((n) => n.selected).map((n) => n.id);
         if (!moveIds.includes(nodeId)) moveIds.push(nodeId);
         return {
@@ -648,66 +790,47 @@ export default function App() {
           cutCount: 0,
         };
       }
-
-      // Snapshot the connected state BEFORE cutting so undo restores the wires.
       const before = snapshot();
-      const result = detachPartForMove(
-        nodesRef.current,
-        edgesRef.current,
-        nodeId,
-        newId,
-        grabPoint,
-      );
+      const result = detachPartForMove(nodesNow, edgesNow, nodeId, newId, grabPoint);
       const pruned = pruneOrphanTips(result.nodes, result.edges);
-
       moveSeverGuard.current = { nodeId, at: now };
-      if (result.didCut && !dragOrigin.current) {
-        dragOrigin.current = before;
-      }
-
+      if (result.didCut && !dragOrigin.current) dragOrigin.current = before;
       flushSync(() => {
-        // Do NOT normalizeWires here — that prunes short junction stubs and
-        // merges deg-2 tips, which destroys the frozen reconnect anchors and
-        // reshapes shared rails while the part is still moving.
         setNodes(pruned.nodes);
         setEdges(pruned.edges);
       });
-
-      // Verify: part must not link to any real component.
-      const stillLinked = pruned.edges.some((e) => {
-        if (e.source !== nodeId && e.target !== nodeId) return false;
-        const other = e.source === nodeId ? e.target : e.source;
-        const on = pruned.nodes.find((n) => n.id === other);
-        return on != null && on.data.kind !== "TIP";
-      });
-      if (stillLinked) {
-        console.error("[move] detach failed — part still linked to a real component");
-      }
-
-      const idSet = new Set(result.moveIds);
+      const idSet2 = new Set(result.moveIds);
       return {
         moveIds: result.moveIds,
         origins: pruned.nodes
-          .filter((n) => idSet.has(n.id))
+          .filter((n) => idSet2.has(n.id))
           .map((n) => ({ id: n.id, x: n.position.x, y: n.position.y })),
         cutCount: result.cutCount,
       };
     },
-    [setNodes, setEdges, snapshot],
+    [snapshot, setNodes, setEdges],
   );
 
   const rotateSelected = useCallback(() => {
-    const sel = nodes.filter((n) => n.selected);
+    const nodesNow = nodesRef.current;
+    const edgesNow = edgesRef.current;
+    const sel = nodesNow.filter((n) => n.selected && n.data.kind !== "TIP");
     if (!sel.length) return;
     pushHistory();
-    setNodes((ns) =>
-      ns.map((n) =>
-        n.selected
-          ? { ...n, data: { ...n.data, rotation: nextRotation(n.data.rotation) } }
-          : n,
-      ),
+    const moved = new Set(sel.map((n) => n.id));
+    const nextNodes = nodesNow.map((n) =>
+      moved.has(n.id)
+        ? { ...n, data: { ...n.data, rotation: nextRotation(n.data.rotation) } }
+        : n,
     );
-  }, [nodes, setNodes, pushHistory]);
+    const finalized = finalizeConnectedPartMove(nextNodes, edgesNow, moved);
+    nodesRef.current = finalized.nodes;
+    edgesRef.current = finalized.edges;
+    flushSync(() => {
+      setNodes(finalized.nodes);
+      setEdges(finalized.edges);
+    });
+  }, [setNodes, setEdges, pushHistory]);
 
 
   const addComponent = useCallback((kind: ComponentKind) => {
@@ -772,6 +895,176 @@ export default function App() {
     const idSet = new Set(ids);
     setNodes((ns) => ns.filter((n) => !idSet.has(n.id)));
     setEdges((es) => es.filter((e) => !idSet.has(e.source) && !idSet.has(e.target)));
+  }, [setNodes, setEdges, pushHistory]);
+
+  const deleteNodeWithTool = useCallback((nodeId: string) => {
+    const nodesNow = nodesRef.current;
+    if (!nodesNow.some((node) => node.id === nodeId)) return;
+    pushHistory();
+    const nextNodes = nodesNow.filter((node) => node.id !== nodeId);
+    const nextEdges = edgesRef.current.filter(
+      (edge) => edge.source !== nodeId && edge.target !== nodeId,
+    );
+    const pruned = pruneOrphanTips(nextNodes, nextEdges);
+    const collapsed = collapsePassThroughTips(pruned.nodes, pruned.edges);
+    setNodes(collapsed.nodes);
+    setEdges(collapsed.edges);
+  }, [setNodes, setEdges, pushHistory]);
+
+  const deleteEdgeWithTool = useCallback((edgeId: string, clickPoint?: Point) => {
+    const edgesNow = edgesRef.current;
+    const nodesNow = nodesRef.current;
+    const plan = planScissorWireDelete(nodesNow, edgesNow, edgeId, clickPoint);
+    if (!plan) return; // refuse to wipe a long rail when only a nub was clicked
+
+    if (plan.action === "trimTip") {
+      const clicked = edgesNow.find((edge) => edge.id === plan.edgeId);
+      if (!clicked) return;
+      pushHistory();
+      const tipNode = nodesNow.find((n) => n.id === plan.tipId);
+      const nextNodes =
+        tipNode?.data.kind === "TIP"
+          ? nodesNow.map((node) =>
+              node.id === plan.tipId
+                ? { ...node, position: plan.tipPosition }
+                : node,
+            )
+          : nodesNow;
+      // Pin↔pin tip peels: store the exact remaining path so pin-exit stubs
+      // do not regenerate. Tip wires keep the usual waypoint encoding.
+      const nextWaypoints = plan.directPath
+        ? plan.trimmedPoly.length <= 2
+          ? []
+          : plan.trimmedPoly.slice(1, -1)
+        : polylineToStoredWaypoints(nextNodes, clicked, plan.trimmedPoly);
+      const nextEdges = edgesNow.map((edge) =>
+        edge.id === plan.edgeId
+          ? {
+              ...edge,
+              data: {
+                ...(edge.data as object),
+                waypoints: nextWaypoints,
+                ...(plan.directPath ? { directPath: true } : {}),
+              },
+            }
+          : edge,
+      );
+      setNodes(nextNodes);
+      setEdges(nextEdges);
+      return;
+    }
+
+    if (plan.action === "peelToNewTip") {
+      const clicked = edgesNow.find((edge) => edge.id === plan.edgeId);
+      if (!clicked) return;
+      pushHistory();
+      const tipId = newId();
+      const TIP_SIZE = 8;
+      const newTip = {
+        id: tipId,
+        type: "component" as const,
+        position: plan.newTipPosition,
+        data: { kind: "TIP" as const, refdes: "", params: {} },
+        style: { width: TIP_SIZE, height: TIP_SIZE },
+      };
+      const nextNodes = [...nodesNow, newTip];
+      const rewired = {
+        ...clicked,
+        source: plan.atStart ? tipId : clicked.source,
+        target: plan.atStart ? clicked.target : tipId,
+        sourceHandle: plan.atStart ? "t" : clicked.sourceHandle,
+        targetHandle: plan.atStart ? clicked.targetHandle : "t",
+      };
+      const nextWaypoints = polylineToStoredWaypoints(
+        nextNodes,
+        rewired,
+        plan.trimmedPoly,
+      );
+      const nextEdges = edgesNow.map((edge) =>
+        edge.id === plan.edgeId
+          ? {
+              ...rewired,
+              data: { ...(edge.data as object), waypoints: nextWaypoints },
+            }
+          : edge,
+      );
+      const pruned = pruneOrphanTips(nextNodes, nextEdges);
+      setNodes(pruned.nodes);
+      setEdges(pruned.edges);
+      return;
+    }
+
+    pushHistory();
+    const nextEdges = edgesNow.filter((edge) => edge.id !== plan.edgeId);
+    const pruned = pruneOrphanTips(nodesNow, nextEdges);
+    const collapsed = collapsePassThroughTips(pruned.nodes, pruned.edges);
+    setNodes(collapsed.nodes);
+    setEdges(collapsed.edges);
+  }, [setNodes, setEdges, pushHistory]);
+
+  const straightenEdge = useCallback((edgeId: string, clickPoint?: Point) => {
+    const nodesNow = nodesRef.current;
+    const edgesNow = edgesRef.current;
+    const edge = edgesNow.find((candidate) => candidate.id === edgeId);
+    if (!edge) return;
+
+    const result = straightenWire(nodesNow, edge, clickPoint);
+    if (!result) return;
+
+    pushHistory();
+    let nextNodes = nodesNow;
+    if (result.tipMoves?.length) {
+      const byId = new Map(result.tipMoves.map((m) => [m.id, m]));
+      nextNodes = nodesNow.map((node) => {
+        const move = byId.get(node.id);
+        return move ? { ...node, position: { x: move.x, y: move.y } } : node;
+      });
+    }
+
+    let nextEdges = edgesNow.map((candidate) =>
+      candidate.id === edgeId
+        ? {
+            ...candidate,
+            data: { ...(candidate.data as object), waypoints: result.waypoints },
+            selected: true,
+          }
+        : candidate,
+    );
+
+    // Drop tiny dangling stubs that share a pin with this wire (leftover nubs
+    // after a part move often sit on the same pin as the real connection).
+    const pinKeys = new Set(
+      [
+        `${edge.source}:${edge.sourceHandle ?? ""}`,
+        `${edge.target}:${edge.targetHandle ?? ""}`,
+      ].filter((k) => !k.endsWith(":")),
+    );
+    const stubIds = nextEdges
+      .filter(
+        (candidate) =>
+          candidate.id !== edgeId &&
+          isShortDanglingStub(nextNodes, nextEdges, candidate) &&
+          (pinKeys.has(`${candidate.source}:${candidate.sourceHandle ?? ""}`) ||
+            pinKeys.has(`${candidate.target}:${candidate.targetHandle ?? ""}`)),
+      )
+      .map((candidate) => candidate.id);
+    if (stubIds.length) {
+      const pruned = removeDanglingOrTrailingEdges(nextNodes, nextEdges, {
+        onlyEdgeIds: stubIds,
+      });
+      nextNodes = pruned.nodes;
+      nextEdges = pruned.edges;
+    }
+
+    // Degree-2 tips that became collinear after the tip slide should collapse.
+    const collapsed = collapsePassThroughTips(nextNodes, nextEdges);
+    nextNodes = collapsed.nodes;
+    nextEdges = collapsed.edges.map((candidate) =>
+      candidate.id === edgeId ? { ...candidate, selected: true } : candidate,
+    );
+
+    setNodes(nextNodes);
+    setEdges(nextEdges);
   }, [setNodes, setEdges, pushHistory]);
 
   /**
@@ -1167,164 +1460,6 @@ export default function App() {
     [setNodes, setEdges, snapshot],
   );
 
-  const deleteSelectedEdges = useCallback(() => {
-    const nodesNow = nodesRef.current;
-    const edgesNow = edgesRef.current;
-    let selectedEdges = edgesNow.filter((e) => e.selected);
-    const selectedTipIds = new Set(
-      nodesNow.filter((n) => n.selected && n.data.kind === "TIP").map((n) => n.id),
-    );
-
-    // Tip selected but no edge selected → treat its dangling stub as selected.
-    if (!selectedEdges.length && selectedTipIds.size) {
-      selectedEdges = edgesNow.filter(
-        (e) =>
-          (selectedTipIds.has(e.source) || selectedTipIds.has(e.target)) &&
-          isDanglingOrTrailingEdge(nodesNow, edgesNow, e),
-      );
-    }
-
-    // Part selected, no wire: remove short dangling stubs hanging off its pins
-    // (common leftover after Move — stubs sit under the part and are hard to hit).
-    if (!selectedEdges.length && !selectedTipIds.size) {
-      const selectedParts = nodesNow.filter(
-        (n) => n.selected && n.data.kind !== "TIP",
-      );
-      if (selectedParts.length) {
-        const partIds = new Set(selectedParts.map((p) => p.id));
-        const stubsOnPart = edgesNow.filter((e) => {
-          if (!isShortDanglingStub(nodesNow, edgesNow, e)) return false;
-          return partIds.has(e.source) || partIds.has(e.target);
-        });
-        if (stubsOnPart.length) {
-          pushHistory();
-          const pruned = removeDanglingOrTrailingEdges(nodesNow, edgesNow, {
-            onlyEdgeIds: stubsOnPart.map((e) => e.id),
-          });
-          setNodes(pruned.nodes);
-          setEdges(pruned.edges);
-          return true;
-        }
-      }
-      return false;
-    }
-
-    if (!selectedEdges.length) return false;
-
-    const tipIds = new Set<string>(selectedTipIds);
-    for (const e of selectedEdges) {
-      const src = nodesNow.find((n) => n.id === e.source);
-      const tgt = nodesNow.find((n) => n.id === e.target);
-      if (src?.data.kind === "TIP") tipIds.add(e.source);
-      if (tgt?.data.kind === "TIP") tipIds.add(e.target);
-    }
-
-    const selectedStubs = selectedEdges.filter((e) =>
-      isShortDanglingStub(nodesNow, edgesNow, e),
-    );
-    const selectedMain = selectedEdges.filter(
-      (e) => !isShortDanglingStub(nodesNow, edgesNow, e),
-    );
-
-    // Only short stubs selected → delete those stubs.
-    if (selectedStubs.length && !selectedMain.length) {
-      pushHistory();
-      const pruned = removeDanglingOrTrailingEdges(nodesNow, edgesNow, {
-        onlyEdgeIds: selectedStubs.map((e) => e.id),
-      });
-      setNodes(pruned.nodes);
-      setEdges(pruned.edges);
-      return true;
-    }
-
-    // Any dangling (incl. longer) selected via tip → delete those edges.
-    const danglingSelected = selectedEdges.filter((e) =>
-      isDanglingOrTrailingEdge(nodesNow, edgesNow, e),
-    );
-    if (
-      danglingSelected.length &&
-      danglingSelected.length === selectedEdges.length
-    ) {
-      pushHistory();
-      const pruned = removeDanglingOrTrailingEdges(nodesNow, edgesNow, {
-        onlyEdgeIds: danglingSelected.map((e) => e.id),
-      });
-      setNodes(pruned.nodes);
-      setEdges(pruned.edges);
-      return true;
-    }
-
-    // Main / long wire selected: remove attached short dangling stubs first.
-    if (selectedMain.length && tipIds.size) {
-      const attachedShort = edgesNow.filter(
-        (e) =>
-          (tipIds.has(e.source) || tipIds.has(e.target)) &&
-          isShortDanglingStub(nodesNow, edgesNow, e) &&
-          !selectedMain.some((s) => s.id === e.id),
-      );
-      if (attachedShort.length) {
-        pushHistory();
-        const pruned = removeDanglingOrTrailingEdges(nodesNow, edgesNow, {
-          onlyEdgeIds: attachedShort.map((e) => e.id),
-        });
-        const keep = new Set(selectedMain.map((e) => e.id));
-        setNodes(pruned.nodes);
-        setEdges(
-          pruned.edges.map((e) => ({
-            ...e,
-            selected: keep.has(e.id),
-          })),
-        );
-        return true;
-      }
-    }
-
-    // Trim trailing nubs before deleting a main wire.
-    {
-      let cleanedAny = false;
-      let nextNodes = nodesNow;
-      let nextEdges = edgesNow;
-      for (const edge of selectedEdges) {
-        const cur = nextEdges.find((e) => e.id === edge.id) ?? edge;
-        const { edge: cleaned, nodes: ns, changed } = cleanEdgeTrailingNubs(
-          nextNodes,
-          nextEdges,
-          cur,
-        );
-        if (!changed) continue;
-        cleanedAny = true;
-        nextNodes = ns;
-        nextEdges = nextEdges.map((e) =>
-          e.id === edge.id ? { ...cleaned, selected: true } : e,
-        );
-      }
-      if (cleanedAny) {
-        pushHistory();
-        const keep = new Set(selectedEdges.map((e) => e.id));
-        setNodes(nextNodes);
-        setEdges(
-          nextEdges.map((e) => ({
-            ...e,
-            selected: keep.has(e.id),
-          })),
-        );
-        return true;
-      }
-    }
-
-    pushHistory();
-    const edgeIds = new Set(selectedEdges.map((e) => e.id));
-    const nextEdges = edgesNow.filter((e) => !edgeIds.has(e.id));
-    // Drop orphan tips, then heal degree-2 splice tips left on the rail
-    // (otherwise the junction square remains after deleting a branch).
-    const pruned = pruneOrphanTips(nodesNow, nextEdges);
-    const collapsed = collapsePassThroughTips(pruned.nodes, pruned.edges);
-    const normalized = normalizeWires(collapsed.nodes, collapsed.edges);
-    setNodes(normalized.nodes);
-    setEdges(normalized.edges);
-    return true;
-  }, [setNodes, setEdges, pushHistory]);
-
   const copySelection = useCallback(() => {
     const sel = nodes.filter((n) => n.selected);
     if (!sel.length) return;
@@ -1391,13 +1526,9 @@ export default function App() {
         downloadCircuit(snapshot());
       }
       else if (e.key === "Backspace" || e.key === "Delete") {
-        // Full remove: selected wires first, else selected components.
-        if (deleteSelectedEdges()) {
-          e.preventDefault();
-          return;
-        }
-        const ids = nodes.filter((n) => n.selected).map((n) => n.id);
-        if (ids.length) { e.preventDefault(); deleteNodes(ids); }
+        e.preventDefault();
+        if (e.repeat) return;
+        setCanvasMode((current) => current === "delete" ? "explore" : "delete");
       }
       else if (!mod && (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown")) {
         const sel = nodes.filter((n) => n.selected && n.data.kind !== "TIP");
@@ -1407,13 +1538,19 @@ export default function App() {
         const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
         const dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
         pushHistory();
-        setNodes((ns) =>
-          ns.map((n) =>
-            n.selected && n.data.kind !== "TIP"
-              ? { ...n, position: { x: n.position.x + dx, y: n.position.y + dy } }
-              : n,
-          ),
+        const moved = new Set(sel.map((n) => n.id));
+        const nodesNow = nodesRef.current;
+        const edgesNow = edgesRef.current;
+        const nextNodes = nodesNow.map((n) =>
+          moved.has(n.id)
+            ? { ...n, position: { x: n.position.x + dx, y: n.position.y + dy } }
+            : n,
         );
+        const finalized = finalizeConnectedPartMove(nextNodes, edgesNow, moved);
+        nodesRef.current = finalized.nodes;
+        edgesRef.current = finalized.edges;
+        setNodes(finalized.nodes);
+        setEdges(finalized.edges);
       }
       else if (!mod && e.key.toLowerCase() === "r") {
         const hasSel = nodes.some((n) => n.selected);
@@ -1422,7 +1559,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [copySelection, cutSelection, paste, deleteNodes, deleteSelectedEdges, nodes, undo, redo, snapshot, rotateSelected, setNodes, pushHistory]);
+    }, [copySelection, cutSelection, paste, nodes, undo, redo, snapshot, rotateSelected, setNodes, setEdges, pushHistory]);
 
   const startTextEdit = useCallback(() => {
     setDraftNetlist(netlist);
@@ -1478,23 +1615,57 @@ export default function App() {
           : [],
       );
       if (!placed.length) return;
+
       const idSet = new Set(placed.map((p) => p.id));
-      setNodes((ns) =>
-        ns.map((n) =>
-          idSet.has(n.id) && n.data.unplaced
-            ? { ...n, data: { ...n.data, unplaced: false } }
-            : n,
-        ),
-      );
-      // Reconnect any pin that was dropped back onto a dangling wire end.
-      reconnectDroppedParts(placed);
+      const nodesForRoute = nodesRef.current.map((node) => {
+        const p = placed.find((pl) => pl.id === node.id);
+        const positioned = p ? { ...node, position: p.position } : node;
+        return idSet.has(node.id) && positioned.data.unplaced
+          ? { ...positioned, data: { ...positioned.data, unplaced: false } }
+          : positioned;
+      });
+
+      if (connectedMoveRef.current) {
+        connectedMoveRef.current = false;
+        // Re-route + slide junction tips + attach/prune stubs for any circuit.
+        const movedParts = new Set(
+          placed
+            .map((p) => nodesForRoute.find((n) => n.id === p.id))
+            .filter((n): n is Node<ComponentData> => !!n && n.data.kind !== "TIP")
+            .map((n) => n.id),
+        );
+        const finalized = finalizeConnectedPartMove(
+          nodesForRoute,
+          edgesRef.current,
+          movedParts,
+        );
+        nodesRef.current = finalized.nodes;
+        edgesRef.current = finalized.edges;
+        setNodes(finalized.nodes);
+        setEdges(finalized.edges);
+      } else {
+        connectedMoveRef.current = false;
+        setNodes(nodesForRoute);
+        // Reconnect any pin that was dropped back onto a dangling wire end.
+        reconnectDroppedParts(placed);
+      }
     },
-    [onNodesChange, setNodes, snapshot, reconnectDroppedParts],
+    [onNodesChange, setNodes, setEdges, snapshot, reconnectDroppedParts],
   );
 
   const onSave = useCallback(() => {
     downloadCircuit(snapshot());
   }, [snapshot]);
+
+  const onRestoreStarter = useCallback(() => {
+    try {
+      pushHistory();
+      restore(parseCircuitFile(starterCircuit));
+      setNetlistStatus("restored starter circuit (examples/demo-circuit.json)");
+    } catch (e) {
+      setNetlistStatus(`restore failed: ${e instanceof Error ? e.message : "error"}`);
+    }
+  }, [pushHistory, restore]);
 
   const onLoadClick = useCallback(() => fileInputRef.current?.click(), []);
 
@@ -1517,50 +1688,64 @@ export default function App() {
   const applyOpsSafe = useCallback((ops: Op[]) => {
     if (!ops.length) return;
     pushHistory();
+    // Apply the whole batch on local copies so "add then connect" sees the new part.
+    let ns = nodesRef.current.slice();
+    let es = edgesRef.current.slice();
+    let changed = false;
+
     for (const op of ops) {
       if (op.type === "addComponent") {
-        setNodes((ns) => {
-          const alloc = makeAllocator(ns);
-          const k = placeCounter.current++;
-          return [...ns, mk(newId(), op.kind, alloc(op.kind), 240 + (k % 6) * 34, 200 + (k % 6) * 34)];
-        });
+        const alloc = makeAllocator(ns);
+        const k = placeCounter.current++;
+        const refdes = alloc(op.kind);
+        const node = mk(newId(), op.kind, refdes, 240 + (k % 6) * 34, 200 + (k % 6) * 34);
+        if (op.params) {
+          node.data = {
+            ...node.data,
+            params: { ...node.data.params, ...op.params },
+          };
+        }
+        ns = [...ns, node];
+        changed = true;
       } else if (op.type === "setParam") {
         const want = op.refdes.toUpperCase();
-        setNodes((ns) =>
-          ns.map((n) =>
-            n.data.refdes.toUpperCase() === want
-              ? { ...n, data: { ...n.data, params: { ...n.data.params, [op.key]: op.value } } }
-              : n,
-          ),
+        ns = ns.map((n) =>
+          n.data.refdes.toUpperCase() === want
+            ? { ...n, data: { ...n.data, params: { ...n.data.params, [op.key]: op.value } } }
+            : n,
         );
+        changed = true;
       } else if (op.type === "deleteComponent") {
         const want = op.refdes.toUpperCase();
-        const target = nodesRef.current.find((n) => n.data.refdes.toUpperCase() === want);
+        const target = ns.find((n) => n.data.refdes.toUpperCase() === want);
         if (target) {
           const idSet = new Set([target.id]);
-          setNodes((ns) => ns.filter((n) => !idSet.has(n.id)));
-          setEdges((es) => es.filter((e) => !idSet.has(e.source) && !idSet.has(e.target)));
+          ns = ns.filter((n) => !idSet.has(n.id));
+          es = es.filter((e) => !idSet.has(e.source) && !idSet.has(e.target));
+          changed = true;
         }
       } else if (op.type === "connectPins") {
-        setEdges((es) => {
-          const nodes = nodesRef.current;
-          const a = findNodeByRefdes(nodes, op.aRefdes);
-          const b = findNodeByRefdes(nodes, op.bRefdes);
-          if (!a || !b) return es;
+        const a = findNodeByRefdes(ns, op.aRefdes);
+        const b = findNodeByRefdes(ns, op.bRefdes);
+        if (a && b) {
           const aPin = op.aPin || defaultPin(a, "from");
           const bPin = op.bPin || defaultPin(b, "to");
-          return connectEndpoints(es, a, aPin, b, bPin);
-        });
+          es = connectEndpoints(es, a, aPin, b, bPin);
+          changed = true;
+        }
       } else if (op.type === "disconnectPins") {
-        setEdges((es) => {
-          const nodes = nodesRef.current;
-          const a = findNodeByRefdes(nodes, op.aRefdes);
-          if (!a) return es;
-          const b = op.bRefdes ? findNodeByRefdes(nodes, op.bRefdes) : undefined;
-          return disconnectEndpoints(es, a, op.aPin, b, op.bPin);
-        });
+        const a = findNodeByRefdes(ns, op.aRefdes);
+        if (a) {
+          const b = op.bRefdes ? findNodeByRefdes(ns, op.bRefdes) : undefined;
+          es = disconnectEndpoints(es, a, op.aPin, b, op.bPin);
+          changed = true;
+        }
       }
     }
+
+    if (!changed) return;
+    setNodes(ns);
+    setEdges(es);
   }, [pushHistory, setNodes, setEdges]);
 
   const getAssistantContext = useCallback((): AssistantContext => {
@@ -1621,10 +1806,21 @@ export default function App() {
           >
             Move
           </button>
+          <button
+            type="button"
+            className={`ghost-btn${canvasMode === "delete" ? " ghost-btn-active" : ""}`}
+            onClick={() => setCanvasMode((mode) => mode === "delete" ? "explore" : "delete")}
+            title="Delete tool — click any part or wire (Delete/Backspace)"
+          >
+            ✂ Delete
+          </button>
           <button type="button" className="ghost-btn" disabled={histTick < 0 || !history.current.canUndo()} onClick={undo} title="Undo (Ctrl+Z)">Undo</button>
           <button type="button" className="ghost-btn" disabled={histTick < 0 || !history.current.canRedo()} onClick={redo} title="Redo (Ctrl+Y)">Redo</button>
           <button type="button" className="ghost-btn" onClick={onSave} title="Save circuit JSON (Ctrl+S)">Save</button>
           <button type="button" className="ghost-btn" onClick={onLoadClick} title="Load circuit JSON">Load</button>
+          <button type="button" className="ghost-btn" onClick={onRestoreStarter} title="Reload the starter schematic">
+            Restore starter
+          </button>
           <button type="button" className="ghost-btn" onClick={() => setShowLibrary((v) => !v)}>
             {showLibrary ? "Hide models" : "Models"}
           </button>
@@ -1658,10 +1854,13 @@ export default function App() {
               <p className="mode-guide-lead">Draw and edit wires (crosshair cursor).</p>
               <ul className="mode-guide-list">
                 <li><kbd>Click</kbd> a pin or empty space to start · <kbd>Click</kbd> a pin to finish</li>
-                <li>While drawing: <kbd>Click</kbd> empty = bend · <kbd>Esc</kbd> / right-click = stop drawing</li>
-                <li><kbd>Click</kbd> a wire to branch · <kbd>Alt</kbd>+click a wire to select it (turns amber)</li>
+                <li>While drawing: <kbd>Click</kbd> empty = bend · click a pin/wire = finish</li>
+                <li>Right-click = keep white segments, discard blue preview, then stop · <kbd>Esc</kbd> = cancel draft</li>
+                <li><kbd>Click</kbd> a wire to branch at that column (first stroke prefers vertical off an H bus)</li>
+                <li><kbd>Alt</kbd>+click a wire to select it (turns amber)</li>
+                <li><kbd>Double-click</kbd> a wire to straighten it (pulls the run into the nearer pin)</li>
                 <li><kbd>Esc</kbd> on a selected wire: peels one bend at a time · also removes short dangling stubs</li>
-                <li><kbd>Delete</kbd> / <kbd>Backspace</kbd>: remove the selected wire completely</li>
+                <li><kbd>Delete</kbd> / <kbd>Backspace</kbd>: toggle scissors, then click any part or wire · <kbd>Esc</kbd> exits</li>
               </ul>
               <div className="mode-guide-legend" aria-label="Wire legend">
                 <span className="wl-item">
@@ -1678,8 +1877,9 @@ export default function App() {
             <>
               <p className="mode-guide-lead">Move parts. Press <kbd>M</kbd> to toggle Move / Wire.</p>
               <ul className="mode-guide-list">
-                <li><kbd>Click</kbd> a part to select · <kbd>Drag</kbd> to disconnect and move it</li>
+                <li><kbd>Click</kbd> a part to select · <kbd>Drag</kbd> to move it (wires stay attached and clean up on drop)</li>
                 <li>Drop near a wire end to reconnect · <kbd>Arrow</kbd> keys nudge (Shift = 1px)</li>
+                <li><kbd>Double-click</kbd> a wire to straighten it after a move</li>
                 <li><kbd>R</kbd> rotates the selected part · box-drag cuts a region to move together</li>
                 <li><kbd>Ctrl</kbd>+Z / Y undo·redo · <kbd>Ctrl</kbd>+C / V copy·paste</li>
               </ul>
@@ -1708,6 +1908,10 @@ export default function App() {
           onCutMoveRegion={onCutMoveRegion}
           onMoveDisconnect={onMoveDisconnect}
           onWireBranch={onWireBranch}
+          onCancelWireBranch={onCancelWireBranch}
+          onDeleteNode={deleteNodeWithTool}
+          onDeleteEdge={deleteEdgeWithTool}
+          onStraightenEdge={straightenEdge}
           onSelectEdge={onSelectEdge}
         />
 
