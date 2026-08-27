@@ -76,6 +76,14 @@ $ALLOWED_DOTS = array(
 // ---------------------------------------------------------------- helpers ---
 
 header('Content-Type: application/json');
+// Allow browser calls from the schematic UI (same host or separate static port).
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: POST, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type');
+if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    header('HTTP/1.1 204 No Content');
+    exit;
+}
 
 function fail($msg, $code) {
     header('HTTP/1.1 ' . $code . ' Error');
