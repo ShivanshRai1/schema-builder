@@ -1,0 +1,16 @@
+[Unit]
+Description=SimulAI schematic PHP sim API (localhost only)
+After=network.target
+
+[Service]
+Type=simple
+User=reactfe
+Group=reactfe
+WorkingDirectory=/home/reactfe/simulai-php
+ExecStart=/usr/bin/php -S 127.0.0.1:18091 -t /home/reactfe/simulai-php
+Restart=always
+RestartSec=3
+# Do not touch other services; bind localhost only.
+
+[Install]
+WantedBy=multi-user.target

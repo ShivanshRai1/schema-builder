@@ -1,0 +1,19 @@
+[Unit]
+Description=SimulAI schematic static UI + /sim_api.php proxy on :8088
+After=network.target simulai-php.service
+Wants=simulai-php.service
+
+[Service]
+Type=simple
+User=reactfe
+Group=reactfe
+WorkingDirectory=/home/reactfe/schema-builder-build/repo
+Environment=SIMULAI_DIST=/var/www/simulai-schematic/dist
+Environment=SIM_PHP_PORT=18091
+Environment=PORT=8088
+ExecStart=/usr/bin/node /home/reactfe/schema-builder-build/repo/scripts/serve-static-with-sim.mjs
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
