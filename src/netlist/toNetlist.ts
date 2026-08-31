@@ -2,6 +2,11 @@ import type { Edge, Node } from "@xyflow/react";
 import type { ComponentData } from "../model/types";
 import { COMPONENT_SPECS } from "../model/componentSpecs";
 import { extractNets } from "./nets";
+import {
+  buildMissingBuiltinLibrary,
+  collectRequiredModelNames,
+  parseDefinedSpiceNames,
+} from "./builtinLibrary";
 
 // ---------------------------------------------------------------------------
 // graph -> SPICE netlist. PURE FUNCTION: (nodes, edges) -> string.
@@ -21,10 +26,11 @@ export interface NetlistOptions {
   directives?: string[];
   /** Raw .subckt / .model library text inserted before device lines. */
   library?: string;
+  /** When true (default), inject built-in models for any missing references. */
+  autoModels?: boolean;
 }
 
 const DEFAULT_DIRECTIVES = [
-  ".model NMOS_GEN NMOS (level=1 Vto=2 Kp=20u)",
   ".tran 1u 1m",
   ".options reltol=1e-3",
 ];
@@ -42,10 +48,23 @@ export function toNetlist(
   lines.push(`* ${deviceCount} devices, ${nets.length} nets`);
   lines.push("");
 
-  const lib = opts.library?.trim();
-  if (lib) {
+  const userLib = opts.library?.trim() ?? "";
+  const directiveBlock = (opts.directives ?? DEFAULT_DIRECTIVES).join("\n");
+  const autoModels = opts.autoModels !== false;
+
+  if (autoModels) {
+    const required = collectRequiredModelNames(nodes);
+    const defined = parseDefinedSpiceNames(`${userLib}\n${directiveBlock}`);
+    const builtin = buildMissingBuiltinLibrary(required, defined);
+    if (builtin) {
+      lines.push(builtin);
+      lines.push("");
+    }
+  }
+
+  if (userLib) {
     lines.push("* --- .subckt library (user-attached) ---");
-    lines.push(lib);
+    lines.push(userLib);
     lines.push("");
   }
 

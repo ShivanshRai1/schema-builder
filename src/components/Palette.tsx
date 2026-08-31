@@ -42,7 +42,7 @@ export function Palette({
           <button
             type="button"
             className={`palette-item palette-tool${mode === "move" ? " is-active" : ""}`}
-            title="Move parts and wires"
+            title="Move — select, box-select, drag parts and wires"
             onClick={() => onModeChange("move")}
           >
             <span className="palette-glyph">✥</span>
@@ -61,8 +61,11 @@ export function Palette({
         {mode === "wire" && (
           <div className="palette-tool-hint">Click the grid to start a new wire</div>
         )}
+        {mode === "move" && (
+          <div className="palette-tool-hint">Drag empty canvas to box-select · click a wire or hollow wire-end square · Delete removes selection</div>
+        )}
         {mode === "delete" && (
-          <div className="palette-tool-hint">Click any part or wire · Esc exits · Delete key removes a selection without this mode</div>
+          <div className="palette-tool-hint">Click any part, wire, or hollow wire-end square · Esc exits · Delete key also removes a selection</div>
         )}
       </div>
       {PALETTE.map((group) => (
@@ -87,7 +90,7 @@ export function Palette({
                 >
                   {showSvg ? (
                     <span className="palette-glyph palette-glyph-svg">
-                      <SchematicSymbol kind={kind} />
+                      <SchematicSymbol kind={kind} preview />
                     </span>
                   ) : (
                     <span className="palette-glyph">{spec.glyph}</span>

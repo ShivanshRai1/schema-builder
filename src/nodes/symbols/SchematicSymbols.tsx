@@ -1,14 +1,26 @@
+import { createContext, useContext, type ReactNode } from "react";
 import type { ComponentKind } from "../../model/types";
 import { getSymbolLayout } from "./layout";
 
 const STROKE = "var(--symbol-stroke, #5eb0ff)";
 const SW = 1.6;
+/** LTspice-like strokes: butt caps + miter joins — no gaps at vertices or past pins. */
+const STROKE_BUTT = {
+  fill: "none" as const,
+  stroke: STROKE,
+  strokeWidth: SW,
+  strokeLinecap: "butt" as const,
+  strokeLinejoin: "miter" as const,
+};
+
+const SymbolPreviewCtx = createContext(false);
 
 type SymProps = { selected?: boolean; rotation?: number };
 
 /**
  * Draw path-space glyph (`w`×`h` viewBox) stretched to the grid-aligned
  * layout box so pin handles sit on the wire grid.
+ * In palette preview mode, keep aspect ratio (no pin stretch).
  */
 function SymbolSvg({
   kind,
@@ -19,11 +31,18 @@ function SymbolSvg({
   kind: ComponentKind;
   w: number;
   h: number;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
+  const preview = useContext(SymbolPreviewCtx);
   const box = getSymbolLayout(kind, 0) ?? { w, h };
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} width={box.w} height={box.h} aria-hidden>
+    <svg
+      viewBox={`0 0 ${w} ${h}`}
+      width={preview ? undefined : box.w}
+      height={preview ? undefined : box.h}
+      preserveAspectRatio={preview ? "xMidYMid meet" : "none"}
+      aria-hidden
+    >
       {children}
     </svg>
   );
@@ -38,17 +57,8 @@ function upright(rotation: number | undefined, cx: number, cy: number): string |
 function ResistorSymbol({ selected }: SymProps) {
   return (
     <SymbolSvg kind="R" w={48} h={24}>
-      <g
-        fill="none"
-        stroke={STROKE}
-        strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity={selected ? 1 : 0.92}
-      >
-        <path d="M0 12 H8" />
-        <path d="M8 12 L11 5 L15 19 L19 5 L23 19 L27 5 L31 19 L35 5 L39 12" />
-        <path d="M39 12 H48" />
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 12 H8 L11 5 L15 19 L19 5 L23 19 L27 5 L31 19 L35 5 L39 12 H48" />
       </g>
     </SymbolSvg>
   );
@@ -57,14 +67,7 @@ function ResistorSymbol({ selected }: SymProps) {
 function ResistorBoxSymbol({ selected }: SymProps) {
   return (
     <SymbolSvg kind="RBOX" w={48} h={24}>
-      <g
-        fill="none"
-        stroke={STROKE}
-        strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity={selected ? 1 : 0.92}
-      >
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
         <path d="M0 12 H10" />
         <rect x="10" y="6" width="28" height="12" />
         <path d="M38 12 H48" />
@@ -133,8 +136,8 @@ function PotSymbol({ selected }: SymProps) {
         fill="none"
         stroke={STROKE}
         strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
+        strokeLinecap="butt"
+        strokeLinejoin="miter"
         opacity={selected ? 1 : 0.92}
       >
         <path d="M0 20 H8" />
@@ -154,8 +157,8 @@ function PotBoxSymbol({ selected }: SymProps) {
         fill="none"
         stroke={STROKE}
         strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
+        strokeLinecap="butt"
+        strokeLinejoin="miter"
         opacity={selected ? 1 : 0.92}
       >
         <path d="M0 20 H10" />
@@ -169,16 +172,9 @@ function PotBoxSymbol({ selected }: SymProps) {
 }
 
 function CapacitorSymbol({ selected }: SymProps) {
-  // Non-polarized: two equal plates.
   return (
     <SymbolSvg kind="C" w={48} h={24}>
-      <g
-        fill="none"
-        stroke={STROKE}
-        strokeWidth={SW}
-        strokeLinecap="butt"
-        opacity={selected ? 1 : 0.92}
-      >
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
         <path d="M0 12 H19" />
         <path d="M19 4 V20" />
         <path d="M29 4 V20" />
@@ -199,12 +195,12 @@ function CapacitorPolSymbol({ selected }: SymProps) {
         strokeLinecap="butt"
         opacity={selected ? 1 : 0.92}
       >
-        <path d="M0 16 H18" />
-        <path d="M18 6 V26" />
-        <path d="M28 7 A9 9 0 0 1 28 25" />
-        <path d="M30 16 H48" />
-        <path d="M8 7 H12 M10 5 V9" strokeWidth={1.2} />
-        <path d="M36 7 H40" strokeWidth={1.2} />
+        <path d="M0 14 H18" />
+        <path d="M18 5 V23" />
+        <path d="M28 5 A9 9 0 0 1 28 23" />
+        <path d="M28 14 H48" />
+        <path d="M8 5 H12 M10 3 V7" strokeWidth={1.2} />
+        <path d="M36 5 H40" strokeWidth={1.2} />
       </g>
     </SymbolSvg>
   );
@@ -224,7 +220,7 @@ function CapacitorFixedSymbol({ selected }: SymProps) {
         <path d="M0 12 H18" />
         <path d="M18 4 V20" />
         <path d="M28 5 A8 8 0 0 1 28 19" />
-        <path d="M30 12 H48" />
+        <path d="M28 12 H48" />
       </g>
     </SymbolSvg>
   );
@@ -244,7 +240,7 @@ function CapacitorVarSymbol({ selected }: SymProps) {
         <path d="M0 14 H18" />
         <path d="M18 6 V22" />
         <path d="M28 7 A8 8 0 0 1 28 21" />
-        <path d="M30 14 H48" />
+        <path d="M28 14 H48" />
         <path d="M12 23 L36 3" strokeWidth={1.25} />
       </g>
       <path
@@ -258,21 +254,11 @@ function CapacitorVarSymbol({ selected }: SymProps) {
 }
 
 function InductorSymbol({ selected }: SymProps) {
+  // Three equal semicircular loops between symmetric leads (spring / coil style).
   return (
     <SymbolSvg kind="L" w={48} h={24}>
-      <g
-        fill="none"
-        stroke={STROKE}
-        strokeWidth={SW}
-        strokeLinecap="round"
-        opacity={selected ? 1 : 0.92}
-      >
-        <path d="M0 12 H6" />
-        <path d="M6 12 A6 6 0 0 1 12 12" />
-        <path d="M12 12 A6 6 0 0 1 18 12" />
-        <path d="M18 12 A6 6 0 0 1 24 12" />
-        <path d="M24 12 A6 6 0 0 1 30 12" />
-        <path d="M30 12 H48" />
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 12 H9 A5 5 0 0 1 19 12 A5 5 0 0 1 29 12 A5 5 0 0 1 39 12 H48" />
       </g>
     </SymbolSvg>
   );
@@ -286,21 +272,16 @@ function InductorVarSymbol({ selected }: SymProps) {
         fill="none"
         stroke={STROKE}
         strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
+        strokeLinecap="butt"
+        strokeLinejoin="miter"
         opacity={selected ? 1 : 0.92}
       >
-        <path d="M0 18 H6" />
-        <path d="M6 18 A6 6 0 0 1 12 18" />
-        <path d="M12 18 A6 6 0 0 1 18 18" />
-        <path d="M18 18 A6 6 0 0 1 24 18" />
-        <path d="M24 18 A6 6 0 0 1 30 18" />
-        <path d="M30 18 H48" />
-        <path d="M18 4 V12" strokeWidth={1.35} />
-        <path d="M18 4 H34" strokeWidth={1.35} />
+        <path d="M0 16 H9 A5 5 0 0 1 19 16 A5 5 0 0 1 29 16 A5 5 0 0 1 39 16 H48" />
+        <path d="M24 4 V12" strokeWidth={1.35} />
+        <path d="M24 4 H34" strokeWidth={1.35} />
       </g>
       <path
-        d="M18 14 L15.2 8.6 L20.8 8.6 Z"
+        d="M24 14 L21.2 8.6 L26.8 8.6 Z"
         fill={STROKE}
         stroke="none"
         opacity={selected ? 1 : 0.92}
@@ -312,18 +293,11 @@ function InductorVarSymbol({ selected }: SymProps) {
 function VoltageSymbol({ selected, rotation = 0 }: SymProps) {
   return (
     <SymbolSvg kind="V" w={40} h={80}>
-      {/* Opaque body so other wires don't show through the source. */}
       <circle cx="20" cy="40" r="16" fill="var(--bg, #0f1419)" stroke="none" />
-      <g
-        fill="none"
-        stroke={STROKE}
-        strokeWidth={SW}
-        strokeLinecap="round"
-        opacity={selected ? 1 : 0.92}
-      >
-        <path d="M20 0 V16" />
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M20 0 V24" />
         <circle cx="20" cy="40" r="16" />
-        <path d="M20 64 V80" />
+        <path d="M20 56 V80" />
       </g>
       <g
         fill={STROKE}
@@ -348,13 +322,7 @@ function VoltageSymbol({ selected, rotation = 0 }: SymProps) {
 function GroundSymbol({ selected }: SymProps) {
   return (
     <SymbolSvg kind="GND" w={36} h={28}>
-      <g
-        fill="none"
-        stroke={STROKE}
-        strokeWidth={SW}
-        strokeLinecap="round"
-        opacity={selected ? 1 : 0.92}
-      >
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
         <path d="M18 0 V9" />
         <path d="M8 9 H28" />
         <path d="M11 14 H25" />
@@ -367,17 +335,24 @@ function GroundSymbol({ selected }: SymProps) {
 function DiodeSymbol({ selected }: SymProps) {
   return (
     <SymbolSvg kind="D" w={48} h={24}>
-      <g
-        fill="none"
-        stroke={STROKE}
-        strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity={selected ? 1 : 0.92}
-      >
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
         <path d="M0 12 H16" />
         <path d="M16 4 L32 12 L16 20 Z" />
         <path d="M32 4 V20" />
+        <path d="M32 12 H48" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+function ZenerDiodeSymbol({ selected }: SymProps) {
+  // Diode body + Z-shaped cathode bar (wings at top-left / bottom-right).
+  return (
+    <SymbolSvg kind="DZ" w={48} h={24}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 12 H16" />
+        <path d="M16 4 L32 12 L16 20 Z" />
+        <path d="M28 0 L32 4 V20 L36 24" />
         <path d="M32 12 H48" />
       </g>
     </SymbolSvg>
@@ -388,17 +363,10 @@ function CurrentSymbol({ selected }: SymProps) {
   return (
     <SymbolSvg kind="I" w={40} h={80}>
       <circle cx="20" cy="40" r="16" fill="var(--bg, #0f1419)" stroke="none" />
-      <g
-        fill="none"
-        stroke={STROKE}
-        strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity={selected ? 1 : 0.92}
-      >
-        <path d="M20 0 V16" />
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M20 0 V24" />
         <circle cx="20" cy="40" r="16" />
-        <path d="M20 64 V80" />
+        <path d="M20 56 V80" />
         <path d="M20 28 V52" />
         <path d="M20 52 L15 44 M20 52 L25 44" />
       </g>
@@ -406,400 +374,418 @@ function CurrentSymbol({ selected }: SymProps) {
   );
 }
 
-function NmosSymbol({ selected }: SymProps) {
-  // Enhancement N-MOSFET: broken channel, body arrow in.
+/** Circled transistors — 1:1 in 96×128. Pins at (48,0), (0,64), (48,128). */
+const TX = { w: 96, h: 128, cx: 48, cy: 64, r: 32, gateSw: 3.8 };
+/** Filled polarity arrow. Lead should stop at `bx,by` so the triangle stays clean. */
+const ARROW_LEN = 8;
+const ARROW_HALF = 3.6;
+
+function txOpacity(selected?: boolean) {
+  return selected ? 1 : 0.92;
+}
+
+function lerp(x1: number, y1: number, x2: number, y2: number, t: number) {
+  return { x: x1 + (x2 - x1) * t, y: y1 + (y2 - y1) * t };
+}
+
+function filledArrow(
+  tipX: number,
+  tipY: number,
+  fromX: number,
+  fromY: number,
+  len = ARROW_LEN,
+  half = ARROW_HALF,
+) {
+  const dx = tipX - fromX;
+  const dy = tipY - fromY;
+  const L = Math.hypot(dx, dy) || 1;
+  const ux = dx / L;
+  const uy = dy / L;
+  const px = -uy;
+  const py = ux;
+  const bx = tipX - ux * len;
+  const by = tipY - uy * len;
+  return {
+    d: `M${tipX} ${tipY} L${bx + px * half} ${by + py * half} L${bx - px * half} ${by - py * half} Z`,
+    bx,
+    by,
+  };
+}
+
+function circledTransistor({
+  kind,
+  selected,
+  children,
+  arrow,
+}: {
+  kind: ComponentKind;
+  selected?: boolean;
+  children: ReactNode;
+  arrow?: string;
+}) {
   return (
-    <SymbolSvg kind="NMOS" w={40} h={56}>
-      <g
-        fill="none"
-        stroke={STROKE}
-        strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity={selected ? 1 : 0.92}
-      >
-        <path d="M22 0 V14" />
-        <path d="M22 42 V56" />
-        <path d="M16 14 V18" />
-        <path d="M16 25 V31" />
-        <path d="M16 38 V42" />
-        <path d="M16 16 H22" />
-        <path d="M16 28 H22" />
-        <path d="M16 40 H22" />
-        <path d="M0 28 H10" />
-        <path d="M10 14 V42" />
-        <path d="M22 28 H28" />
-        <path d="M28 28 L24 25 M28 28 L24 31" />
+    <SymbolSvg kind={kind} w={TX.w} h={TX.h}>
+      <g {...STROKE_BUTT} opacity={txOpacity(selected)}>
+        <circle cx={TX.cx} cy={TX.cy} r={TX.r} />
+        {children}
       </g>
+      {arrow ? <PolarityArrow d={arrow} selected={selected} /> : null}
     </SymbolSvg>
+  );
+}
+
+function PolarityArrow({
+  d,
+  selected,
+}: {
+  d: string;
+  selected?: boolean;
+}) {
+  return (
+    <path
+      d={d}
+      fill={STROKE}
+      stroke="none"
+      opacity={txOpacity(selected)}
+    />
+  );
+}
+
+function NmosSymbol({ selected }: SymProps) {
+  return (
+    <EnhMosfetBody kind="NMOS" selected={selected} depletion={false} pChannel={false} />
   );
 }
 
 function PmosSymbol({ selected }: SymProps) {
-  // Enhancement P-MOSFET: broken channel, body arrow out (D at bottom in catalog).
   return (
-    <SymbolSvg kind="PMOS" w={40} h={56}>
-      <g
-        fill="none"
-        stroke={STROKE}
-        strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity={selected ? 1 : 0.92}
-      >
-        <path d="M22 0 V14" />
-        <path d="M22 42 V56" />
-        <path d="M16 14 V18" />
-        <path d="M16 25 V31" />
-        <path d="M16 38 V42" />
-        <path d="M16 16 H22" />
-        <path d="M16 28 H22" />
-        <path d="M16 40 H22" />
-        <path d="M0 28 H10" />
-        <path d="M10 14 V42" />
-        <path d="M22 28 H26" />
-        <path d="M26 28 L30 25 M26 28 L30 31" />
-        <path d="M30 28 H32" />
-      </g>
-    </SymbolSvg>
+    <EnhMosfetBody kind="PMOS" selected={selected} depletion={false} pChannel={true} />
   );
 }
 
 function NmosDepSymbol({ selected }: SymProps) {
-  // Depletion N-MOSFET: solid channel, body arrow in.
   return (
-    <SymbolSvg kind="NMOS_D" w={40} h={56}>
-      <g
-        fill="none"
-        stroke={STROKE}
-        strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity={selected ? 1 : 0.92}
-      >
-        <path d="M22 0 V14" />
-        <path d="M22 42 V56" />
-        <path d="M16 14 V42" strokeWidth={2.2} />
-        <path d="M16 16 H22" />
-        <path d="M16 28 H22" />
-        <path d="M16 40 H22" />
-        <path d="M0 28 H10" />
-        <path d="M10 14 V42" />
-        <path d="M22 28 H28" />
-        <path d="M28 28 L24 25 M28 28 L24 31" />
-      </g>
-    </SymbolSvg>
+    <EnhMosfetBody kind="NMOS_D" selected={selected} depletion={true} pChannel={false} />
   );
 }
 
 function PmosDepSymbol({ selected }: SymProps) {
-  // Depletion P-MOSFET: solid channel, body arrow out.
   return (
-    <SymbolSvg kind="PMOS_D" w={40} h={56}>
-      <g
-        fill="none"
-        stroke={STROKE}
-        strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity={selected ? 1 : 0.92}
-      >
-        <path d="M22 0 V14" />
-        <path d="M22 42 V56" />
-        <path d="M16 14 V42" strokeWidth={2.2} />
-        <path d="M16 16 H22" />
-        <path d="M16 28 H22" />
-        <path d="M16 40 H22" />
-        <path d="M0 28 H10" />
-        <path d="M10 14 V42" />
-        <path d="M22 28 H26" />
-        <path d="M26 28 L30 25 M26 28 L30 31" />
-        <path d="M30 28 H32" />
-      </g>
-    </SymbolSvg>
+    <EnhMosfetBody kind="PMOS_D" selected={selected} depletion={true} pChannel={true} />
   );
+}
+
+/** Enhancement / depletion MOSFET — chart style: 3 clear horizontal channel dashes + body arrow. */
+function EnhMosfetBody({
+  kind,
+  selected,
+  depletion,
+  pChannel,
+}: SymProps & { kind: ComponentKind; depletion: boolean; pChannel: boolean }) {
+  const gateX = 22;
+  // Broken channel as three short horizontal bars ending at the D/S column (pin x).
+  const dashL = 30;
+  const col = TX.cx; // 48 — pin column
+  const yTop = 50;
+  const yMid = 64;
+  const yBot = 78;
+  // Arrow on mid dash: N → in (toward gate), P → out (away from gate).
+  // Tip sits mid-dash so left and right stubs stay visible.
+  const arr = pChannel
+    ? filledArrow(col - 8, yMid, dashL, yMid, 6.5, 3.2)
+    : filledArrow(dashL + 8, yMid, col, yMid, 6.5, 3.2);
+  const tipX = pChannel ? col - 8 : dashL + 8;
+
+  return circledTransistor({
+    kind,
+    selected,
+    arrow: arr.d,
+    children: (
+      <>
+        <path d={`M0 ${TX.cy} H${gateX - 4}`} />
+        <path d={`M${gateX} ${yTop - 4} V${yBot + 4}`} strokeWidth={TX.gateSw} />
+        {depletion ? (
+          <>
+            <path d={`M${dashL} ${yTop} V${yBot}`} strokeWidth={TX.gateSw * 0.85} />
+            <path d={`M${dashL} ${yMid} H${Math.min(arr.bx, tipX)}`} />
+            <path d={`M${Math.max(arr.bx, tipX)} ${yMid} H${col}`} />
+          </>
+        ) : (
+          <>
+            {/* Three distinct horizontal channel dashes */}
+            <path d={`M${dashL} ${yTop} H${col}`} strokeWidth={2.2} />
+            <path d={`M${dashL} ${yBot} H${col}`} strokeWidth={2.2} />
+            {/* Mid dash: stubs on both sides of the arrow */}
+            <path d={`M${dashL} ${yMid} H${Math.min(arr.bx, tipX)}`} strokeWidth={2.2} />
+            <path d={`M${Math.max(arr.bx, tipX)} ${yMid} H${col}`} strokeWidth={2.2} />
+          </>
+        )}
+        <path d={`M${col} 0 V${yTop} H${dashL}`} />
+        <path d={`M${col} ${TX.h} V${yBot} H${dashL}`} />
+        {/* Body tie: mid column → down to source */}
+        <path d={`M${col} ${yMid} V${yBot}`} />
+      </>
+    ),
+  });
 }
 
 function NjfetSymbol({ selected }: SymProps) {
-  // N-channel JFET: gate arrow into the channel.
-  return (
-    <SymbolSvg kind="NJFET" w={40} h={56}>
-      <g
-        fill="none"
-        stroke={STROKE}
-        strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity={selected ? 1 : 0.92}
-      >
-        <path d="M22 0 V56" />
-        <path d="M16 14 V42" />
-        <path d="M16 16 H22" />
-        <path d="M16 40 H22" />
-        <path d="M0 28 H10" />
-        <path d="M10 28 L16 28" />
-        <path d="M10 28 L14 24 M10 28 L14 32" />
-      </g>
-    </SymbolSvg>
-  );
+  return <JfetBody kind="NJFET" selected={selected} nChannel={true} />;
 }
 
 function PjfetSymbol({ selected }: SymProps) {
-  // P-channel JFET: gate arrow out of the channel.
-  return (
-    <SymbolSvg kind="PJFET" w={40} h={56}>
-      <g
-        fill="none"
-        stroke={STROKE}
-        strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity={selected ? 1 : 0.92}
-      >
-        <path d="M22 0 V56" />
-        <path d="M16 14 V42" />
-        <path d="M16 16 H22" />
-        <path d="M16 40 H22" />
-        <path d="M0 28 H8" />
-        <path d="M16 28 H12" />
-        <path d="M12 28 L8 24 M12 28 L8 32" />
-      </g>
-    </SymbolSvg>
-  );
+  return <JfetBody kind="PJFET" selected={selected} nChannel={false} />;
+}
+
+/** JFET — same family as BJT: compact channel, filled gate arrow with a gap. */
+function JfetBody({
+  kind,
+  selected,
+  nChannel,
+}: SymProps & { kind: ComponentKind; nChannel: boolean }) {
+  const ch = 38;
+  const yTop = 46;
+  const yBot = 82;
+  const cy = TX.cy;
+  const arr = nChannel
+    ? filledArrow(ch - 1.5, cy, 0, cy)
+    : filledArrow(20, cy, ch, cy);
+
+  return circledTransistor({
+    kind,
+    selected,
+    arrow: arr.d,
+    children: (
+      <>
+        <path d={`M${ch} ${yTop} H${TX.cx} V0`} />
+        <path d={`M${ch} ${yBot} H${TX.cx} V${TX.h}`} />
+        <path d={`M${ch} ${yTop} V${yBot}`} strokeWidth={TX.gateSw} />
+        {nChannel ? (
+          <path d={`M0 ${cy} H${arr.bx}`} />
+        ) : (
+          <path d={`M0 ${cy} H20 M${arr.bx} ${cy} H${ch}`} />
+        )}
+      </>
+    ),
+  });
 }
 
 function NpnSymbol({ selected }: SymProps) {
-  return (
-    <SymbolSvg kind="NPN" w={40} h={56}>
-      <g
-        fill="none"
-        stroke={STROKE}
-        strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity={selected ? 1 : 0.92}
-      >
-        <circle cx="22" cy="28" r="13" />
-        <path d="M22 0 V15" />
-        <path d="M22 41 V56" />
-        <path d="M0 28 H12" />
-        <path d="M12 20 V36" />
-        <path d="M12 22 L22 15" />
-        <path d="M12 34 L22 41" />
-        <path d="M22 41 L18 47 M22 41 L26 47" />
-      </g>
-    </SymbolSvg>
-  );
+  return <BjtBody kind="NPN" selected={selected} npn={true} />;
 }
 
 function PnpSymbol({ selected }: SymProps) {
-  return (
-    <SymbolSvg kind="PNP" w={40} h={56}>
-      <g
-        fill="none"
-        stroke={STROKE}
-        strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity={selected ? 1 : 0.92}
-      >
-        <circle cx="22" cy="28" r="13" />
-        <path d="M22 0 V15" />
-        <path d="M22 41 V56" />
-        <path d="M0 28 H12" />
-        <path d="M12 20 V36" />
-        <path d="M12 22 L22 15" />
-        <path d="M12 34 L22 41" />
-        <path d="M22 15 L18 21 M22 15 L26 19" />
-      </g>
-    </SymbolSvg>
-  );
+  return <BjtBody kind="PNP" selected={selected} npn={false} />;
+}
+
+/** BJT — compact junction in a large circle; filled emitter arrow on the diagonal. */
+function BjtBody({
+  kind,
+  selected,
+  npn,
+}: SymProps & { kind: ComponentKind; npn: boolean }) {
+  const barX = 36;
+  const barTop = 52;
+  const barBot = 76;
+  const kneeC = { x: TX.cx, y: 40 };
+  const kneeE = { x: TX.cx, y: 88 };
+
+  if (npn) {
+    // Filled triangle on emitter — tip must sit far enough out that the base
+    // stays on the diagonal (not behind the bar corner).
+    const dx = kneeE.x - barX;
+    const dy = kneeE.y - barBot;
+    const diagLen = Math.hypot(dx, dy) || 1;
+    const tipT = Math.min(0.58, (ARROW_LEN + 2) / diagLen);
+    const mid = lerp(barX, barBot, kneeE.x, kneeE.y, tipT);
+    const arr = filledArrow(mid.x, mid.y, barX, barBot);
+    return circledTransistor({
+      kind,
+      selected,
+      arrow: arr.d,
+      children: (
+        <>
+          <path d={`M0 ${TX.cy} H${barX}`} />
+          <path d={`M${barX} ${barTop} L${kneeC.x} ${kneeC.y} V0`} />
+          <path
+            d={`M${barX} ${barBot} L${arr.bx} ${arr.by} M${mid.x} ${mid.y} L${kneeE.x} ${kneeE.y} V${TX.h}`}
+          />
+          <path d={`M${barX} ${barTop} V${barBot}`} strokeWidth={TX.gateSw} />
+        </>
+      ),
+    });
+  }
+
+  const emit = (t: number) => lerp(barX, barBot, kneeE.x, kneeE.y, t);
+  const arr = filledArrow(emit(0.14).x, emit(0.14).y, kneeE.x, kneeE.y);
+  return circledTransistor({
+    kind,
+    selected,
+    arrow: arr.d,
+    children: (
+      <>
+        <path d={`M0 ${TX.cy} H${barX}`} />
+        <path d={`M${barX} ${barTop} L${kneeC.x} ${kneeC.y} V0`} />
+        <path d={`M${barX} ${barBot} L${kneeE.x} ${kneeE.y} V${TX.h}`} />
+        <path d={`M${barX} ${barTop} V${barBot}`} strokeWidth={TX.gateSw} />
+      </>
+    ),
+  });
+}
+
+/** Uncircled enhancement MOSFET core — same geometry as circled M-series. */
+function uncircledEnhMosCore() {
+  const ch = 38;
+  const gateX = 24;
+  const yTop = 48;
+  const yTopEnd = 54;
+  const yMidLo = 61;
+  const yMidHi = 67;
+  const yMid = 64;
+  const yBotStart = 74;
+  const yBot = 80;
+  const bodyX = 58;
+  const arr = filledArrow(ch + 1.2, yMid, bodyX, yMid);
+  return { ch, gateX, yTop, yTopEnd, yMidLo, yMidHi, yMid, yBotStart, yBot, bodyX, arr };
 }
 
 function IgbtSymbol({ selected }: SymProps) {
-  // Circled N-IGBT ≈ reference chart (drawn 1:1 in 64×96):
-  //   G lead → thick gate plate (gap) thin channel · C/E diagonals · big arrow out on E
-  const o = selected ? 1 : 0.92;
-  return (
-    <SymbolSvg kind="IGBT" w={64} h={96}>
-      <g
-        fill="none"
-        stroke={STROKE}
-        strokeWidth={1.5}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity={o}
-      >
-        <circle cx="32" cy="48" r="22" />
-        <path d="M0 48 H16" />
-        <path d="M16 30 V48" strokeWidth={2.6} strokeLinecap="butt" />
-        <path d="M26 26 V70" strokeLinecap="butt" />
-        <path d="M26 32 L40 18 V0" />
-        {/* Emitter: diagonal to arrow base, vertical from tip */}
-        <path d="M26 64 L33 71" />
-        <path d="M40 78 V96" />
-      </g>
-      {/* Filled arrowhead along emitter diagonal, tip at the corner toward E */}
-      <path
-        d="M40 78 L29 74.8 L36.8 67 Z"
-        fill={STROKE}
-        stroke={STROKE}
-        strokeWidth={0.3}
-        strokeLinejoin="round"
-        opacity={o}
-      />
-    </SymbolSvg>
-  );
+  const ch = 40;
+  const yBot = 78;
+  const kneeE = { x: TX.cx, y: 90 };
+  const mid = lerp(ch, yBot, kneeE.x, kneeE.y, 0.4);
+  const arr = filledArrow(mid.x, mid.y, ch, yBot);
+  return circledTransistor({
+    kind: "IGBT",
+    selected,
+    arrow: arr.d,
+    children: (
+      <>
+        <path d={`M0 ${TX.cy} H22`} />
+        <path d={`M22 48 V${TX.cy}`} strokeWidth={TX.gateSw} />
+        <path d={`M${ch} 46 V${yBot}`} />
+        <path d={`M${ch} 52 L${TX.cx} 38 V0`} />
+        <path
+          d={`M${ch} ${yBot} L${arr.bx} ${arr.by} M${mid.x} ${mid.y} L${kneeE.x} ${kneeE.y} V${TX.h}`}
+        />
+      </>
+    ),
+  });
 }
 
 function IgbtKelvinSymbol({ selected }: SymProps) {
-  const o = selected ? 1 : 0.92;
-  return (
-    <SymbolSvg kind="IGBT_K" w={64} h={96}>
-      <g
-        fill="none"
-        stroke={STROKE}
-        strokeWidth={1.5}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity={o}
-      >
-        <circle cx="32" cy="48" r="22" />
-        <path d="M0 48 H16" />
-        <path d="M16 30 V48" strokeWidth={2.6} strokeLinecap="butt" />
-        <path d="M26 26 V70" strokeLinecap="butt" />
-        <path d="M26 32 L40 18 V0" />
-        <path d="M26 64 L36 71" />
-        <path d="M46 78 V96" />
-        <path d="M26 64 L26 78 V96" strokeWidth={1.2} />
-      </g>
-      <path
-        d="M46 78 L35.5 74.5 L42.5 66.5 Z"
-        fill={STROKE}
-        stroke={STROKE}
-        strokeWidth={0.3}
-        strokeLinejoin="round"
-        opacity={o}
-      />
-    </SymbolSvg>
-  );
+  const ch = 40;
+  const yBot = 78;
+  const eX = 64;
+  const ekX = 32;
+  const kneeE = { x: eX, y: 96 };
+  const mid = lerp(ch, yBot, kneeE.x, kneeE.y, 0.35);
+  const arr = filledArrow(mid.x, mid.y, ch, yBot);
+  return circledTransistor({
+    kind: "IGBT_K",
+    selected,
+    arrow: arr.d,
+    children: (
+      <>
+        <path d={`M0 ${TX.cy} H22`} />
+        <path d={`M22 48 V${TX.cy}`} strokeWidth={TX.gateSw} />
+        <path d={`M${ch} 46 V${yBot}`} />
+        <path d={`M${ch} 52 L${TX.cx} 38 V0`} />
+        <path
+          d={`M${ch} ${yBot} L${arr.bx} ${arr.by} M${mid.x} ${mid.y} L${kneeE.x} ${kneeE.y} V${TX.h}`}
+        />
+        <path d={`M${ch} ${yBot} L${ekX} 104 V${TX.h}`} strokeWidth={1.3} />
+      </>
+    ),
+  });
 }
 
 function ScrSymbol({ selected }: SymProps) {
-  // Thyristor: diode body + gate from cathode junction, diagonal then down.
+  const cy = 32;
+  const bx = 28;
+  const ax = 54;
   return (
-    <SymbolSvg kind="SCR" w={48} h={36}>
-      <g
-        fill="none"
-        stroke={STROKE}
-        strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity={selected ? 1 : 0.92}
-      >
-        <path d="M0 14 H14" />
-        <path d="M14 5 L30 14 L14 23 Z" />
-        <path d="M30 5 V23" />
-        <path d="M30 14 H48" />
-        <path d="M30 14 L36 22 V36" />
+    <SymbolSvg kind="SCR" w={96} h={64}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d={`M0 ${cy} H${bx}`} />
+        <path d={`M${bx} ${cy - 14} L${ax} ${cy} L${bx} ${cy + 14} Z`} />
+        <path d={`M${ax} ${cy - 14} V${cy + 14}`} />
+        <path d={`M${ax} ${cy} H96`} />
+        <path d={`M${ax} ${cy + 5} L64 ${cy + 22} V64`} />
       </g>
     </SymbolSvg>
   );
 }
 
-/** Shared enhancement-MOSFET body (D top / G left / S bottom). */
+/** Uncircled enhancement MOSFET (GaN HEMT) — matches M-series without circle. */
 function MosfetBody({ selected, kind }: SymProps & { kind: ComponentKind }) {
-  const o = selected ? 1 : 0.92;
+  const c = uncircledEnhMosCore();
+  const o = txOpacity(selected);
   return (
-    <SymbolSvg kind={kind} w={40} h={56}>
-      <g
-        fill="none"
-        stroke={STROKE}
-        strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity={o}
-      >
-        <path d="M22 0 V14" />
-        <path d="M22 42 V56" />
-        <path d="M16 14 V18" />
-        <path d="M16 25 V31" />
-        <path d="M16 38 V42" />
-        <path d="M16 16 H22" />
-        <path d="M16 28 H22" />
-        <path d="M16 40 H22" />
-        <path d="M0 28 H10" />
-        <path d="M10 14 V42" />
-        <path d="M22 28 H28" />
-        <path d="M28 28 L24 25 M28 28 L24 31" />
+    <SymbolSvg kind={kind} w={TX.w} h={TX.h}>
+      <g {...STROKE_BUTT} opacity={o}>
+        <path d={`M0 ${TX.cy} H${c.gateX - 6}`} />
+        <path d={`M${c.gateX} ${c.yTop} V${c.yBot}`} strokeWidth={TX.gateSw} />
+        <path d={`M${c.ch} ${c.yTop} V${c.yTopEnd}`} />
+        <path d={`M${c.ch} ${c.yMidLo} V${c.yMidHi}`} />
+        <path d={`M${c.ch} ${c.yBotStart} V${c.yBot}`} />
+        <path d={`M${TX.cx} 0 V${c.yTop} H${c.ch}`} />
+        <path d={`M${TX.cx} ${TX.h} V${c.yBot} H${c.ch}`} />
+        <path d={`M${c.arr.bx} ${c.yMid} H${c.bodyX} V${c.yBot} H${TX.cx}`} />
       </g>
+      <PolarityArrow d={c.arr.d} selected={selected} />
     </SymbolSvg>
   );
 }
 
 function SicMosSymbol({ selected }: SymProps) {
-  // SiC MOSFET: enhancement FET + body diode (D→S).
-  const o = selected ? 1 : 0.92;
+  const c = uncircledEnhMosCore();
+  const dioX = 66;
+  const o = txOpacity(selected);
   return (
-    <SymbolSvg kind="SICMOS" w={40} h={56}>
-      <g
-        fill="none"
-        stroke={STROKE}
-        strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity={o}
-      >
-        <path d="M22 0 V14" />
-        <path d="M22 42 V56" />
-        <path d="M16 14 V18" />
-        <path d="M16 25 V31" />
-        <path d="M16 38 V42" />
-        <path d="M16 16 H22" />
-        <path d="M16 28 H22" />
-        <path d="M16 40 H22" />
-        <path d="M0 28 H10" />
-        <path d="M10 14 V42" />
-        <path d="M22 28 H28" />
-        <path d="M28 28 L24 25 M28 28 L24 31" />
-        {/* Body diode */}
-        <path d="M30 18 V38" />
-        <path d="M30 24 L34 28 L30 32 Z" />
-        <path d="M34 28 H36" />
+    <SymbolSvg kind="SICMOS" w={TX.w} h={TX.h}>
+      <g {...STROKE_BUTT} opacity={o}>
+        <path d={`M0 ${TX.cy} H${c.gateX - 6}`} />
+        <path d={`M${c.gateX} ${c.yTop} V${c.yBot}`} strokeWidth={TX.gateSw} />
+        <path d={`M${c.ch} ${c.yTop} V${c.yTopEnd}`} />
+        <path d={`M${c.ch} ${c.yMidLo} V${c.yMidHi}`} />
+        <path d={`M${c.ch} ${c.yBotStart} V${c.yBot}`} />
+        <path d={`M${TX.cx} 0 V${c.yTop} H${c.ch}`} />
+        <path d={`M${TX.cx} ${TX.h} V${c.yBot} H${c.ch}`} />
+        <path d={`M${c.arr.bx} ${c.yMid} H${c.bodyX} V${c.yBot} H${TX.cx}`} />
+        <path d={`M${dioX} ${c.yTop + 8} V${c.yBot - 8}`} />
+        <path d={`M${dioX} ${c.yMid - 5} L${dioX + 7} ${c.yMid} L${dioX} ${c.yMid + 5} Z`} fill={STROKE} />
+        <path d={`M${dioX + 7} ${c.yMid} H${dioX + 12}`} />
       </g>
+      <PolarityArrow d={c.arr.d} selected={selected} />
     </SymbolSvg>
   );
 }
 
 function SicMosKelvinSymbol({ selected }: SymProps) {
-  // SiC Kelvin: FET body + split source (S @0.7, SK @0.3).
-  const o = selected ? 1 : 0.92;
+  const c = uncircledEnhMosCore();
+  const dioX = 66;
+  const splitY = 104;
+  const sX = 64;
+  const skX = 32;
+  const o = txOpacity(selected);
   return (
-    <SymbolSvg kind="SICMOS_K" w={40} h={56}>
-      <g
-        fill="none"
-        stroke={STROKE}
-        strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity={o}
-      >
-        <path d="M22 0 V14" />
-        <path d="M16 14 V18" />
-        <path d="M16 25 V31" />
-        <path d="M16 38 V42" />
-        <path d="M16 16 H22" />
-        <path d="M16 28 H22" />
-        <path d="M16 40 H22" />
-        <path d="M0 28 H10" />
-        <path d="M10 14 V42" />
-        <path d="M22 28 H28" />
-        <path d="M28 28 L24 25 M28 28 L24 31" />
-        <path d="M22 42 L28 50 V56" />
-        <path d="M22 42 L12 50 V56" strokeWidth={1.3} />
-        <path d="M30 18 V36" />
-        <path d="M30 22 L34 26 L30 30 Z" />
+    <SymbolSvg kind="SICMOS_K" w={TX.w} h={TX.h}>
+      <g {...STROKE_BUTT} opacity={o}>
+        <path d={`M0 ${TX.cy} H${c.gateX - 6}`} />
+        <path d={`M${c.gateX} ${c.yTop} V${c.yBot}`} strokeWidth={TX.gateSw} />
+        <path d={`M${c.ch} ${c.yTop} V${c.yTopEnd}`} />
+        <path d={`M${c.ch} ${c.yMidLo} V${c.yMidHi}`} />
+        <path d={`M${c.ch} ${c.yBotStart} V${c.yBot}`} />
+        <path d={`M${TX.cx} 0 V${c.yTop} H${c.ch}`} />
+        <path d={`M${c.arr.bx} ${c.yMid} H${c.bodyX} V${c.yBot} H${TX.cx}`} />
+        <path d={`M${TX.cx} ${c.yBot} V${splitY} H${sX} V${TX.h}`} />
+        <path d={`M${TX.cx} ${splitY} H${skX} V${TX.h}`} strokeWidth={1.3} />
+        <path d={`M${dioX} ${c.yTop + 8} V${c.yBot - 8}`} />
+        <path d={`M${dioX} ${c.yMid - 5} L${dioX + 7} ${c.yMid} L${dioX} ${c.yMid + 5} Z`} fill={STROKE} />
+        <path d={`M${dioX + 7} ${c.yMid} H${dioX + 12}`} />
       </g>
+      <PolarityArrow d={c.arr.d} selected={selected} />
     </SymbolSvg>
   );
 }
@@ -817,8 +803,8 @@ function GateDrvSymbol({ selected }: SymProps) {
         fill="none"
         stroke={STROKE}
         strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
+        strokeLinecap="butt"
+        strokeLinejoin="miter"
         opacity={o}
       >
         <rect x="10" y="8" width="36" height="32" rx="1.5" />
@@ -852,8 +838,8 @@ function CompSymbol({ selected }: SymProps) {
         fill="none"
         stroke={STROKE}
         strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
+        strokeLinecap="butt"
+        strokeLinejoin="miter"
         opacity={selected ? 1 : 0.92}
       >
         <path d="M0 12 H10" />
@@ -877,8 +863,8 @@ function CsenseSymbol({ selected }: SymProps) {
         fill="none"
         stroke={STROKE}
         strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
+        strokeLinecap="butt"
+        strokeLinejoin="miter"
         opacity={selected ? 1 : 0.92}
       >
         <path d="M0 12 H8" />
@@ -898,8 +884,8 @@ function VsenseSymbol({ selected }: SymProps) {
         fill="none"
         stroke={STROKE}
         strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
+        strokeLinecap="butt"
+        strokeLinejoin="miter"
         opacity={selected ? 1 : 0.92}
       >
         <path d="M0 14 H14" />
@@ -931,7 +917,7 @@ function IprobeSymbol({ selected }: SymProps) {
         fill="none"
         stroke={STROKE}
         strokeWidth={SW}
-        strokeLinecap="round"
+        strokeLinecap="butt"
         opacity={selected ? 1 : 0.92}
       >
         <path d="M0 20 H6" />
@@ -962,8 +948,8 @@ function VprobeSymbol({ selected }: SymProps) {
         fill="none"
         stroke={STROKE}
         strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
+        strokeLinecap="butt"
+        strokeLinejoin="miter"
         opacity={selected ? 1 : 0.92}
       >
         <path d="M14 0 V22" />
@@ -995,8 +981,8 @@ function NodeSymbol({ selected }: SymProps) {
         fill="none"
         stroke={STROKE}
         strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
+        strokeLinecap="butt"
+        strokeLinejoin="miter"
         opacity={selected ? 1 : 0.92}
       >
         <path d="M0 12 H8" />
@@ -1014,8 +1000,8 @@ function OpAmpSymbol({ selected }: SymProps) {
         fill="none"
         stroke={STROKE}
         strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
+        strokeLinecap="butt"
+        strokeLinejoin="miter"
         opacity={selected ? 1 : 0.92}
       >
         <path d="M0 12 H10" />
@@ -1037,8 +1023,8 @@ function BasicOpampSymbol({ selected }: SymProps) {
         fill="none"
         stroke={STROKE}
         strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
+        strokeLinecap="butt"
+        strokeLinejoin="miter"
         opacity={selected ? 1 : 0.92}
       >
         <path d="M0 12 H10" />
@@ -1061,8 +1047,8 @@ function GeneralOpampSymbol({ selected, rotation = 0 }: SymProps) {
         fill="none"
         stroke={STROKE}
         strokeWidth={SW}
-        strokeLinecap="round"
-        strokeLinejoin="round"
+        strokeLinecap="butt"
+        strokeLinejoin="miter"
         opacity={selected ? 1 : 0.92}
       >
         <path d="M0 18 H10" />
@@ -1111,6 +1097,7 @@ const MAP: Partial<Record<ComponentKind, (p: SymProps) => JSX.Element>> = {
   V: VoltageSymbol,
   GND: GroundSymbol,
   D: DiodeSymbol,
+  DZ: ZenerDiodeSymbol,
   I: CurrentSymbol,
   NMOS: NmosSymbol,
   PMOS: PmosSymbol,
@@ -1142,12 +1129,19 @@ export function SchematicSymbol({
   kind,
   selected,
   rotation = 0,
+  preview = false,
 }: {
   kind: ComponentKind;
   selected?: boolean;
   rotation?: number;
+  /** Palette miniature — keep aspect ratio, ignore layout stretch. */
+  preview?: boolean;
 }) {
   const Comp = MAP[kind];
   if (!Comp) return null;
-  return <Comp selected={selected} rotation={rotation} />;
+  return (
+    <SymbolPreviewCtx.Provider value={preview}>
+      <Comp selected={selected} rotation={rotation} />
+    </SymbolPreviewCtx.Provider>
+  );
 }

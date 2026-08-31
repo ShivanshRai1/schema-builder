@@ -41,7 +41,7 @@ function expectOnGrid(kind: ComponentKind, pinId: string) {
   }
 }
 
-for (const kind of ["R", "C", "L", "V", "GND", "D", "I", "NMOS", "PMOS", "NPN", "PNP", "EAMP"] as const) {
+for (const kind of ["R", "C", "L", "V", "GND", "D", "I", "NMOS", "PMOS", "NPN", "PNP", "NJFET", "IGBT", "SCR", "OPAMP"] as const) {
   if (!hasSymbol(kind) || !getSymbolLayout(kind)) {
     console.error("FAIL missing symbol layout", kind);
     process.exit(1);
@@ -80,28 +80,27 @@ if (!n90 || n90.x !== 0 || n90.y !== 32) {
   process.exit(1);
 }
 
-// NMOS: D top, G left, S bottom. Layout 64×96
-expectPin("NMOS", "d", 32, 0);
-expectPin("NMOS", "g", 0, 48);
-expectPin("NMOS", "s", 32, 96);
+// NMOS: D top, G left, S bottom. Layout 96×128
+expectPin("NMOS", "d", 48, 0);
+expectPin("NMOS", "g", 0, 64);
+expectPin("NMOS", "s", 48, 128);
 
-// PMOS catalog inverts D/S vs NMOS.
-expectPin("PMOS", "s", 32, 0);
-expectPin("PMOS", "g", 0, 48);
-expectPin("PMOS", "d", 32, 96);
+expectPin("PMOS", "d", 48, 0);
+expectPin("PMOS", "g", 0, 64);
+expectPin("PMOS", "s", 48, 128);
 
-expectPin("NPN", "c", 32, 0);
-expectPin("NPN", "b", 0, 48);
-expectPin("NPN", "e", 32, 96);
+expectPin("NPN", "c", 48, 0);
+expectPin("NPN", "b", 0, 64);
+expectPin("NPN", "e", 48, 128);
 
-expectPin("PNP", "e", 32, 0);
-expectPin("PNP", "b", 0, 48);
-expectPin("PNP", "c", 32, 96);
+expectPin("PNP", "c", 48, 0);
+expectPin("PNP", "b", 0, 64);
+expectPin("PNP", "e", 48, 128);
 
 // Op-amp: + at 0.25, − at 0.75, out right-center. Layout 64×64
-expectPin("EAMP", "inp", 0, 16);
-expectPin("EAMP", "inn", 0, 48);
-expectPin("EAMP", "out", 64, 32);
+expectPin("OPAMP", "inp", 0, 16);
+expectPin("OPAMP", "inn", 0, 48);
+expectPin("OPAMP", "out", 64, 32);
 
 expectOnGrid("R", "a");
 expectOnGrid("GND", "g");

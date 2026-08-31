@@ -16,7 +16,7 @@ import { SimPanel } from "./components/SimPanel";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { FloatingWindow } from "./components/FloatingWindow";
 import { COMPONENT_SPECS, defaultParams } from "./model/componentSpecs";
-import type { ComponentData, ComponentKind } from "./model/types";
+import type { ComponentData, ComponentKind, LabelPosition } from "./model/types";
 import { nextRotation } from "./model/rotation";
 import { toNetlist } from "./netlist/toNetlist";
 import { extractDirectives } from "./netlist/parseDeviceParams";
@@ -943,6 +943,23 @@ export default function App() {
   const changeRefdes = useCallback((nodeId: string, refdes: string) => {
     pushHistory();
     setNodes((ns) => ns.map((n) => n.id === nodeId ? { ...n, data: { ...n.data, refdes } } : n));
+  }, [setNodes, pushHistory]);
+
+  const changeLabelPos = useCallback((nodeId: string, labelPos: LabelPosition) => {
+    pushHistory();
+    setNodes((ns) =>
+      ns.map((n) =>
+        n.id === nodeId
+          ? {
+              ...n,
+              data: {
+                ...n.data,
+                labelPos: labelPos === "auto" ? undefined : labelPos,
+              },
+            }
+          : n,
+      ),
+    );
   }, [setNodes, pushHistory]);
 
   const deleteNodes = useCallback((ids: string[]) => {
@@ -2002,16 +2019,22 @@ export default function App() {
       </header>
 
       <div className={`mode-guide mode-guide-${canvasMode}`} role="status">
-        <span className="mode-guide-badge">{canvasMode === "explore" ? "Explore" : canvasMode === "wire" ? "Wire" : "Move"}</span>
+        <span className="mode-guide-badge">
+          {canvasMode === "explore"
+            ? "Explore"
+            : canvasMode === "wire"
+              ? "Wire"
+              : canvasMode === "delete"
+                ? "Delete"
+                : "Move"}
+        </span>
         <div className="mode-guide-content">
           {canvasMode === "explore" ? (
             <>
               <p className="mode-guide-lead">Look around without changing the circuit.</p>
               <ul className="mode-guide-list">
-                <li><kbd>Drag</kbd> empty canvas to box-select parts · middle/right-drag to pan · <kbd>Scroll</kbd> to zoom</li>
-                <li><kbd>Click</kbd> a part to select · <kbd>Shift</kbd>+click to add/remove from selection</li>
-                <li><kbd>Delete</kbd> / <kbd>Backspace</kbd> removes the selection · with nothing selected, opens scissors</li>
-                <li><kbd>Ctrl</kbd>+C / V copy·paste the selection · Switch to <strong>Move</strong> to drag a group</li>
+                <li><kbd>Drag</kbd> anywhere to pan · <kbd>Scroll</kbd> to zoom</li>
+                <li>No selection here — switch to <strong>Move</strong> to select, move, or copy parts</li>
               </ul>
             </>
           ) : canvasMode === "wire" ? (
@@ -2024,6 +2047,7 @@ export default function App() {
                 <li><kbd>Click</kbd> a wire to branch at that column (first stroke prefers vertical off an H bus)</li>
                 <li><kbd>Alt</kbd>+click a wire to select it (turns amber)</li>
                 <li><kbd>Double-click</kbd> a wire to straighten it (pulls the run into the nearer pin)</li>
+                <li>Hollow square = free <strong>wire end</strong> — select it, then <kbd>Delete</kbd> to remove the stub</li>
                 <li><kbd>Esc</kbd> on a selected wire: peels one bend at a time · also removes short dangling stubs</li>
                 <li><kbd>Delete</kbd> / <kbd>Backspace</kbd>: remove selected part/wire · with nothing selected, toggle scissors · <kbd>Esc</kbd> exits scissors</li>
               </ul>
@@ -2038,11 +2062,22 @@ export default function App() {
                 </span>
               </div>
             </>
+          ) : canvasMode === "delete" ? (
+            <>
+              <p className="mode-guide-lead">Click anything to remove it (scissors cursor).</p>
+              <ul className="mode-guide-list">
+                <li><kbd>Click</kbd> a part, wire, or hollow <strong>wire end</strong> square to delete it</li>
+                <li>Short stubs are easiest to remove by clicking the square at the end</li>
+                <li><kbd>Esc</kbd> exits Delete mode · <kbd>Delete</kbd> with a selection also works in Move</li>
+              </ul>
+            </>
           ) : (
             <>
               <p className="mode-guide-lead">Move parts. Press <kbd>M</kbd> to toggle Move / Wire.</p>
               <ul className="mode-guide-list">
                 <li><kbd>Drag</kbd> empty canvas to box-select · <kbd>Shift</kbd>+drag empty = cut wires in the box</li>
+                <li><kbd>Click</kbd> a wire to select it (turns amber) · <kbd>Delete</kbd> removes selection</li>
+                <li>Hollow square = free <strong>wire end</strong> — click it, then <kbd>Delete</kbd> (tiny stubs are hard to click as wires)</li>
                 <li><kbd>Click</kbd> / <kbd>Shift</kbd>+click parts · <kbd>Drag</kbd> a selected part to move the whole group</li>
                 <li>Drop near a wire end to reconnect · <kbd>Arrow</kbd> keys nudge (Shift = 1px)</li>
                 <li><kbd>Double-click</kbd> a wire to straighten it after a move</li>
@@ -2053,7 +2088,7 @@ export default function App() {
         </div>
       </div>
 
-      <div className="workspace" style={{ gridTemplateColumns: `200px 1fr ${rightWidth}px` }}>
+      <div className="workspace" style={{ gridTemplateColumns: `280px 1fr ${rightWidth}px` }}>
         <Palette onAdd={addComponent} mode={canvasMode} onModeChange={setCanvasMode} />
 
         <Canvas
@@ -2093,6 +2128,7 @@ export default function App() {
               selectionCount={selected.filter((n) => n.data.kind !== "TIP").length}
               onChangeParam={changeParam}
               onChangeRefdes={changeRefdes}
+              onChangeLabelPos={changeLabelPos}
               onRotate={rotateSelected}
               onDelete={(id) => deleteNodes([id])}
             />

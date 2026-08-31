@@ -172,7 +172,7 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
   },
   PMOS: {
     kind: "PMOS", category: "Transistor", refdesPrefix: "M", label: "MOSFET P (enh)", glyph: "⊐P", emits: true,
-    pins: [pin("d", "D", "bottom"), pin("g", "G", "left"), pin("s", "S", "top")],
+    pins: [pin("d", "D", "top"), pin("g", "G", "left"), pin("s", "S", "bottom")],
     attributes: [modelAttr("PMOS_GEN")],
     toSpice: (r, n, p) => `${r} ${n("d")} ${n("g")} ${n("s")} ${n("s")} ${p.model ?? "PMOS_GEN"}`,
   },
@@ -208,7 +208,7 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
   },
   PNP: {
     kind: "PNP", category: "Transistor", refdesPrefix: "Q", label: "BJT (PNP)", glyph: "PNP", emits: true,
-    pins: [pin("c", "C", "bottom"), pin("b", "B", "left"), pin("e", "E", "top")],
+    pins: [pin("c", "C", "top"), pin("b", "B", "left"), pin("e", "E", "bottom")],
     attributes: [modelAttr("PNP_GEN")],
     toSpice: (r, n, p) => `${r} ${n("c")} ${n("b")} ${n("e")} ${p.model ?? "PNP_GEN"}`,
   },
@@ -220,6 +220,12 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
     attributes: [modelAttr("DGEN")],
     toSpice: (r, n, p) => `${r} ${n("a")} ${n("k")} ${p.model ?? "DGEN"}`,
   },
+  DZ: {
+    kind: "DZ", category: "Semiconductor", refdesPrefix: "D", label: "Zener diode", glyph: "▷|Z", emits: true,
+    pins: [pin("a", "A", "left"), pin("k", "K", "right")],
+    attributes: [modelAttr("DZEN")],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("k")} ${p.model ?? "DZEN"}`,
+  },
   SICMOS: {
     kind: "SICMOS", category: "Semiconductor", refdesPrefix: "XM", label: "SiC MOSFET", glyph: "SiC", emits: true,
     pins: [pin("d", "D", "top"), pin("g", "G", "left"), pin("s", "S", "bottom")],
@@ -229,7 +235,7 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
   SICMOS_K: {
     kind: "SICMOS_K", category: "Semiconductor", refdesPrefix: "XMK", label: "SiC MOSFET (Kelvin)", glyph: "SiCₖ", emits: true,
     // 4-terminal: power source S + Kelvin (gate-return) source SK.
-    pins: [pin("d", "D", "top"), pin("g", "G", "left"), pin("s", "S", "bottom", 0.7), pin("sk", "SK", "bottom", 0.3)],
+    pins: [pin("d", "D", "top"), pin("g", "G", "left"), pin("s", "S", "bottom", 2 / 3), pin("sk", "SK", "bottom", 1 / 3)],
     attributes: [modelAttr("SIC_MOS_KELVIN")],
     toSpice: subckt(["d", "g", "s", "sk"]),
   },
@@ -241,18 +247,18 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
   },
   IGBT: {
     kind: "IGBT", category: "Semiconductor", refdesPrefix: "XQ", label: "IGBT", glyph: "IGBT", emits: true,
-    // C/E sit on the right of the circle (matches reference); G on the left.
-    pins: [pin("c", "C", "top", 0.625), pin("g", "G", "left"), pin("e", "E", "bottom", 0.625)],
+    // C/E sit on the circle centerline (on-grid at 96×128).
+    pins: [pin("c", "C", "top"), pin("g", "G", "left"), pin("e", "E", "bottom")],
     attributes: [modelAttr("IGBT_GEN")],
     toSpice: subckt(["c", "g", "e"]),
   },
   IGBT_K: {
     kind: "IGBT_K", category: "Semiconductor", refdesPrefix: "XQK", label: "IGBT (Kelvin)", glyph: "IGBTₖ", emits: true,
     pins: [
-      pin("c", "C", "top", 0.625),
+      pin("c", "C", "top"),
       pin("g", "G", "left"),
-      pin("e", "E", "bottom", 0.72),
-      pin("ek", "EK", "bottom", 0.4),
+      pin("e", "E", "bottom", 2 / 3),
+      pin("ek", "EK", "bottom", 1 / 3),
     ],
     attributes: [modelAttr("IGBT_KELVIN")],
     toSpice: subckt(["c", "g", "e", "ek"]),
@@ -260,7 +266,7 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
   SCR: {
     kind: "SCR", category: "Semiconductor", refdesPrefix: "XT", label: "Thyristor / SCR", glyph: "▷|⊥", emits: true,
     // Chart orientation: anode–cathode horizontal, gate from cathode junction down.
-    pins: [pin("a", "A", "left"), pin("k", "K", "right"), pin("g", "G", "bottom", 0.75)],
+    pins: [pin("a", "A", "left"), pin("k", "K", "right"), pin("g", "G", "bottom", 2 / 3)],
     attributes: [modelAttr("SCR_GEN")],
     toSpice: subckt(["a", "k", "g"]),
   },
@@ -279,6 +285,7 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
     toSpice: subckt(["inp", "inn", "out"]),
   },
   EAMP: {
+    // Kept for old circuits only — not in the palette (use OPAMP).
     kind: "EAMP", category: "Control", refdesPrefix: "XEA", label: "Error amp / op-amp", glyph: "▷A", emits: true,
     // 0.25/0.75 keep +/− on the 16px wire grid with the 64×64 symbol box.
     pins: [pin("inp", "+", "left", 0.25), pin("inn", "−", "left", 0.75), pin("out", "OUT", "right")],
@@ -304,7 +311,7 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
       pin("vplus", "V+", "top"),
       pin("vminus", "V−", "bottom"),
     ],
-    attributes: [modelAttr("OPAMP")],
+    attributes: [modelAttr("OPAMP5")],
     toSpice: subckt(["inp", "inn", "out", "vplus", "vminus"]),
   },
 
@@ -365,30 +372,46 @@ export function defaultParams(kind: ComponentKind): Record<string, string> {
   return out;
 }
 
-/** Palette layout: kinds grouped and ordered by category. */
+/** Sort palette entries A→Z by visible label. */
+function paletteAlpha(kinds: ComponentKind[]): ComponentKind[] {
+  return [...kinds].sort((a, b) =>
+    COMPONENT_SPECS[a].label.localeCompare(COMPONENT_SPECS[b].label),
+  );
+}
+
+/** Primary parts — matches the core component checklist (fixed order). */
+const MOST_USED: ComponentKind[] = [
+  "R",
+  "C",
+  "CPOL",
+  "L",
+  "D",
+  "V",
+  "NMOS",
+  "PMOS",
+  "SICMOS",
+  "GANHEMT",
+  "IGBT",
+  "GND",
+];
+
+/** Palette layout: favorites first, then category sections A→Z with A→Z parts. */
 export const PALETTE: { category: Category; kinds: ComponentKind[] }[] = [
-  {
-    category: "Resistor",
-    // Chart order: fixed → variable/rheostat → potentiometer (zigzag + box each)
-    kinds: ["R", "RBOX", "RVAR", "RVARBOX", "POT", "POTBOX"],
-  },
-  {
-    category: "Capacitor",
-    kinds: ["C", "CPOL", "CFIXED", "CVAR"],
-  },
-  { category: "Inductor", kinds: ["L", "LVAR"] },
-  { category: "Source", kinds: ["V", "I"] },
-  {
-    category: "Transistor",
-    // Chart order: BJT → JFET → depletion MOSFET → enhancement MOSFET
-    kinds: ["NPN", "PNP", "NJFET", "PJFET", "NMOS_D", "PMOS_D", "NMOS", "PMOS"],
-  },
+  { category: "Most used", kinds: MOST_USED },
+  { category: "Capacitor", kinds: paletteAlpha(["CFIXED", "CVAR"]) },
+  { category: "Control", kinds: paletteAlpha(["COMP", "GATEDRV"]) },
+  { category: "Inductor", kinds: paletteAlpha(["LVAR"]) },
+  { category: "Opamp", kinds: paletteAlpha(["OPAMP", "OPAMP5"]) },
+  { category: "Resistor", kinds: paletteAlpha(["RVAR"]) },
   {
     category: "Semiconductor",
-    kinds: ["D", "SICMOS", "SICMOS_K", "GANHEMT", "IGBT", "IGBT_K", "SCR"],
+    kinds: paletteAlpha(["DZ", "IGBT_K", "NMOS_D", "PMOS_D", "SCR", "SICMOS_K"]),
   },
-  { category: "Opamp", kinds: ["OPAMP", "OPAMP5"] },
-  { category: "Control", kinds: ["GATEDRV", "COMP", "EAMP"] },
-  { category: "Sense / Probe", kinds: ["CSENSE", "VSENSE", "IPROBE", "VPROBE"] },
-  { category: "Structural", kinds: ["GND", "NODE"] },
+  {
+    category: "Sense / Probe",
+    kinds: paletteAlpha(["CSENSE", "IPROBE", "VPROBE", "VSENSE"]),
+  },
+  { category: "Source", kinds: paletteAlpha(["I"]) },
+  { category: "Structural", kinds: paletteAlpha(["NODE"]) },
+  { category: "Transistor", kinds: paletteAlpha(["NPN", "PNP", "NJFET", "PJFET"]) },
 ];

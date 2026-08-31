@@ -1,7 +1,17 @@
 import type { Node } from "@xyflow/react";
 import { COMPONENT_SPECS } from "../model/componentSpecs";
-import type { ComponentData } from "../model/types";
+import type { ComponentData, LabelPosition } from "../model/types";
 import { normalizeRotation } from "../model/rotation";
+import { hasSymbol } from "../nodes/symbols/layout";
+
+const LABEL_POSITION_OPTIONS: { value: LabelPosition; label: string }[] = [
+  { value: "auto", label: "Auto (avoid pins)" },
+  { value: "above", label: "Above" },
+  { value: "below", label: "Below" },
+  { value: "left", label: "Left" },
+  { value: "right", label: "Right" },
+  { value: "hidden", label: "Hidden" },
+];
 
 // ---------------------------------------------------------------------------
 // Attribute editor. Renders inputs from the selected component's declared
@@ -17,6 +27,7 @@ export function PropertiesPanel({
   selectionCount = 0,
   onChangeParam,
   onChangeRefdes,
+  onChangeLabelPos,
   onRotate,
   onDelete,
 }: {
@@ -25,6 +36,7 @@ export function PropertiesPanel({
   selectionCount?: number;
   onChangeParam: (nodeId: string, key: string, value: string) => void;
   onChangeRefdes: (nodeId: string, refdes: string) => void;
+  onChangeLabelPos?: (nodeId: string, labelPos: LabelPosition) => void;
   onRotate?: () => void;
   onDelete: (nodeId: string) => void;
 }) {
@@ -43,6 +55,7 @@ export function PropertiesPanel({
 
   const spec = COMPONENT_SPECS[node.data.kind];
   const rotation = normalizeRotation(node.data.rotation);
+  const showLabelPos = hasSymbol(node.data.kind) && onChangeLabelPos;
 
   return (
     <div className="props-panel">
@@ -72,6 +85,26 @@ export function PropertiesPanel({
               value={node.data.refdes}
               onChange={(e) => onChangeRefdes(node.id, e.target.value)}
             />
+          </label>
+        )}
+
+        {showLabelPos && (
+          <label className="prop-field">
+            <span className="prop-label">Label position</span>
+            <select
+              className="prop-input"
+              value={node.data.labelPos ?? "auto"}
+              onChange={(e) => onChangeLabelPos(node.id, e.target.value as LabelPosition)}
+            >
+              {LABEL_POSITION_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            <span className="prop-hint">
+              Auto: pin-aware layout (vertical parts → refdes/value split beside body, like LTspice).
+            </span>
           </label>
         )}
 

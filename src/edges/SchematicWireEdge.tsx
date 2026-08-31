@@ -83,7 +83,7 @@ export function SchematicWireEdge({
       id={id}
       path={path}
       markerEnd={markerEnd}
-      interactionWidth={24}
+      interactionWidth={32}
       style={{
         ...style,
         stroke: selected ? "#f0b429" : "#c8d1dc",

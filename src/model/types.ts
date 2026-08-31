@@ -25,7 +25,7 @@ export type ComponentKind =
   // sources
   | "V" | "I"
   // semiconductors
-  | "D" | "NMOS" | "PMOS" | "NMOS_D" | "PMOS_D" | "NJFET" | "PJFET"
+  | "D" | "DZ" | "NMOS" | "PMOS" | "NMOS_D" | "PMOS_D" | "NJFET" | "PJFET"
   | "SICMOS" | "SICMOS_K" | "GANHEMT"
   | "IGBT" | "IGBT_K" | "NPN" | "PNP" | "SCR"
   // drivers / control / opamps
@@ -36,6 +36,7 @@ export type ComponentKind =
   | "GND" | "NODE" | "TIP";
 
 export type Category =
+  | "Most used"
   | "Resistor"
   | "Capacitor"
   | "Inductor"
@@ -81,6 +82,9 @@ export interface AttributeSpec {
 /** Clockwise orientation; pin ids are stable — only Handle geometry changes. */
 export type ComponentRotation = 0 | 90 | 180 | 270;
 
+/** Where refdes / value text sits relative to the symbol body. */
+export type LabelPosition = "auto" | "above" | "right" | "left" | "below" | "hidden";
+
 /** Per-node data carried on every React Flow component node. */
 export interface ComponentData {
   kind: ComponentKind;
@@ -90,5 +94,7 @@ export interface ComponentData {
   params: Record<string, string>;
   /** Visual orientation (degrees CW). Omitted / 0 = catalog default. */
   rotation?: ComponentRotation;
+  /** Label placement; auto uses pin-aware LTspice-style layout. */
+  labelPos?: LabelPosition;
   [key: string]: unknown; // React Flow requires an index signature on node data
 }

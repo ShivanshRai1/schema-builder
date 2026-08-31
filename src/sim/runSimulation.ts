@@ -130,7 +130,8 @@ function jobIdFrom(data: unknown): string | null {
 
 /**
  * Fleet ngspice batch mode refuses a netlist with only .tran / .save.
- * Add .print on the submitted copy only — do not rewrite the editor text.
+ * `.print tran all` is the only form the fleet reliably returns as waveform data.
+ * (Explicit I(XM1) lists come back with empty analyses from ngspice/QSPICE workers.)
  */
 function withBatchPrint(netlist: string): string {
   if (/\.(print|plot|fourier)\b/i.test(netlist)) return netlist;
@@ -139,6 +140,66 @@ function withBatchPrint(netlist: string): string {
     return netlist.replace(/\.end\s*$/im, `${line}\n.end`);
   }
   return `${netlist.replace(/\s*$/, "")}\n${line}\n.end`;
+}
+
+/** Remove garbled hierarchy markers the fleet sometimes returns in column names. */
+export function cleanSignalName(raw: string): string {
+  let s = raw
+    .replace(/\uFFFD/g, "")
+    .replace(/[^\x20-\x7E]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // ngspice branch alias: xm1#branch → I(XM1)
+  const branch = /^([A-Za-z][A-Za-z0-9]*)#branch$/i.exec(s);
+  if (branch) return `I(${branch[1]!.toUpperCase()})`;
+
+  // Normalize v(1) → V(1), i(v1) → I(V1)
+  const fn = /^([A-Za-z])\((.+)\)$/.exec(s);
+  if (fn) {
+    const fnName = fn[1]!.toUpperCase();
+    const arg = fn[2]!;
+    if (/^\d+$/.test(arg)) return `${fnName}(${arg})`;
+    return `${fnName}(${arg.toUpperCase()})`;
+  }
+
+  return s;
+}
+
+/**
+ * Drop internal MOSFET leg currents (Id/Is/Ig/Ib of devices inside subcircuits).
+ * The schematic only has XM1 — not the hidden M1 inside the built-in SIC_MOS model.
+ */
+export function shouldShowInChart(name: string): boolean {
+  const n = cleanSignalName(name);
+  if (!n) return false;
+  if (/^I[dgsb]\(/i.test(n)) return false;
+  return true;
+}
+
+/** Is(M1#XM1) from QSPICE → I(XM1) (schematic refdes, not internal M1). */
+function subcktInstanceCurrentAlias(raw: string): string | null {
+  const bare = raw.replace(/[^\x20-\x7E]/g, "").replace(/\s/g, "");
+  if (!/^Is\(/i.test(bare)) return null;
+  const u = bare.toUpperCase();
+  const m = /^IS\(M1(X[A-Z0-9]+)\)$/.exec(u) ?? /^IS\(M1[^A-Z0-9]*(X[A-Z0-9]+)\)$/.exec(u);
+  return m ? `I(${m[1]})` : null;
+}
+
+/** Clean labels, map subckt source current to I(XM1), hide internal Mos legs. */
+export function formatSeriesForChart(series: SimSeries[]): SimSeries[] {
+  const aliases: SimSeries[] = [];
+  for (const s of series) {
+    const alias = subcktInstanceCurrentAlias(s.name);
+    if (alias) aliases.push({ ...s, name: alias });
+  }
+  const filtered = series
+    .filter((s) => shouldShowInChart(s.name))
+    .map((s) => ({ ...s, name: cleanSignalName(s.name) }));
+  for (const a of aliases) {
+    if (!filtered.some((f) => f.name === a.name)) filtered.push(a);
+  }
+  return filtered;
 }
 
 /** Submit + poll. No demo fallback — schematic Run and SiC compare share this. */
@@ -213,7 +274,7 @@ export async function runFleetJob(
 
 /**
  * Call sim_api.php with the current schematic netlist (submit + poll).
- * On any failure → demoWaveform (safe fallback; does not break the app).
+ * Returns an error result when the fleet call fails — no fake demo waveform.
  */
 export async function runSimulation(
   netlist: string,
@@ -222,14 +283,24 @@ export async function runSimulation(
   const engine = opts.engine ?? "D2SPICE";
   const job = await runFleetJob(netlist, opts);
   if (!job.ok) {
-    if (job.aborted) {
-      return { ok: false, source: "demo", message: job.error, series: [] };
-    }
-    const err = job.error;
-    return demoWaveform(err.startsWith("Simulation") ? err : `Simulation error: ${err}`);
+    return {
+      ok: false,
+      source: "demo",
+      message: job.error,
+      series: [],
+      engine,
+    };
   }
-  const series = normalizeSeries(job.data);
-  if (!series.length) return demoWaveform("Simulation returned no waveform data");
+  const series = formatSeriesForChart(normalizeSeries(job.data));
+  if (!series.length) {
+    return {
+      ok: false,
+      source: "demo",
+      message: "Simulation returned no waveform data",
+      series: [],
+      engine,
+    };
+  }
   return {
     ok: true,
     source: "fleet",
@@ -244,14 +315,24 @@ export function normalizeSeries(data: unknown): SimSeries[] {
   if (!data || typeof data !== "object") return [];
   const d = data as Record<string, unknown>;
 
+  // Fleet poll envelope: { status, result: { columns | analyses } }
+  if (d.result && typeof d.result === "object") {
+    const fromResult = normalizeSeries(d.result);
+    if (fromResult.length) return fromResult;
+  }
+
   if (Array.isArray(d.columns) && Array.isArray(d.rows)) {
     const table = tableToSeries(d.columns, d.rows);
     if (table.length) return table;
   }
 
-  if (Array.isArray(d.analyses) && d.analyses[0]) {
-    const inner = normalizeSeries(d.analyses[0]);
-    if (inner.length) return inner;
+  // ngspice: one table per signal group — merge them all (not just analyses[0]).
+  if (Array.isArray(d.analyses) && d.analyses.length > 0) {
+    const merged: SimSeries[] = [];
+    for (const a of d.analyses) {
+      merged.push(...normalizeSeries(a));
+    }
+    if (merged.length) return merged;
   }
 
   // { series: [{ name, x, y }] }
@@ -261,8 +342,7 @@ export function normalizeSeries(data: unknown): SimSeries[] {
       .filter((s): s is SimSeries => s !== null);
   }
 
-  // { data: { series: [...] } } or { result: { series } }
-  for (const nest of [d.data, d.result, d.payload]) {
+  for (const nest of [d.data, d.payload]) {
     if (nest && typeof nest === "object") {
       const inner = normalizeSeries(nest);
       if (inner.length) return inner;

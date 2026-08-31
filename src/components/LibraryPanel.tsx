@@ -1,4 +1,4 @@
-/** Attach vendor .subckt bodies — prepended to the generated netlist. */
+/** Attach vendor .subckt bodies — optional; overrides built-in placeholders. */
 export function LibraryPanel({
   library,
   onChange,
@@ -10,13 +10,14 @@ export function LibraryPanel({
     <div className="library-panel">
       <div className="panel-header">
         <span>.subckt library</span>
-        <span className="badge">prepended to netlist</span>
+        <span className="badge">optional override</span>
       </div>
       <textarea
         className="library-textarea"
         spellCheck={false}
         placeholder={
-          "Paste vendor .subckt bodies here, e.g.\n" +
+          "Optional — built-in models run automatically.\n" +
+          "Paste vendor .subckt bodies here to override, e.g.\n" +
           ".subckt SIC_MOS d g s\n...\n.ends SIC_MOS"
         }
         value={library}

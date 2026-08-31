@@ -19,6 +19,7 @@ export const SYMBOL_KINDS = new Set<ComponentKind>([
   "V",
   "GND",
   "D",
+  "DZ",
   "I",
   "NMOS",
   "PMOS",
@@ -64,23 +65,24 @@ export const NATIVE_SIZE: Partial<Record<ComponentKind, SymbolLayout>> = {
   L: { w: 48, h: 24 },
   LVAR: { w: 48, h: 32 },
   D: { w: 48, h: 24 },
+  DZ: { w: 48, h: 24 },
   V: { w: 40, h: 80 },
   I: { w: 40, h: 80 },
   GND: { w: 36, h: 28 },
-  NMOS: { w: 40, h: 56 },
-  PMOS: { w: 40, h: 56 },
-  NMOS_D: { w: 40, h: 56 },
-  PMOS_D: { w: 40, h: 56 },
-  NJFET: { w: 40, h: 56 },
-  PJFET: { w: 40, h: 56 },
-  NPN: { w: 40, h: 56 },
-  PNP: { w: 40, h: 56 },
-  SICMOS: { w: 40, h: 56 },
-  SICMOS_K: { w: 40, h: 56 },
-  GANHEMT: { w: 40, h: 56 },
-  IGBT: { w: 64, h: 96 },
-  IGBT_K: { w: 64, h: 96 },
-  SCR: { w: 48, h: 36 },
+  NMOS: { w: 96, h: 128 },
+  PMOS: { w: 96, h: 128 },
+  NMOS_D: { w: 96, h: 128 },
+  PMOS_D: { w: 96, h: 128 },
+  NJFET: { w: 96, h: 128 },
+  PJFET: { w: 96, h: 128 },
+  NPN: { w: 96, h: 128 },
+  PNP: { w: 96, h: 128 },
+  SICMOS: { w: 96, h: 128 },
+  SICMOS_K: { w: 96, h: 128 },
+  GANHEMT: { w: 96, h: 128 },
+  IGBT: { w: 96, h: 128 },
+  IGBT_K: { w: 96, h: 128 },
+  SCR: { w: 96, h: 64 },
   GATEDRV: { w: 56, h: 48 },
   COMP: { w: 56, h: 40 },
   EAMP: { w: 56, h: 40 },
@@ -116,24 +118,25 @@ const LAYOUT: Partial<Record<ComponentKind, SymbolLayout>> = {
   L: { w: 64, h: 32 },
   LVAR: { w: 64, h: 48 },
   D: { w: 64, h: 32 },
+  DZ: { w: 64, h: 32 },
   V: { w: 64, h: 112 },
   I: { w: 64, h: 112 },
   GND: { w: 32, h: 32 },
-  NMOS: { w: 64, h: 96 },
-  PMOS: { w: 64, h: 96 },
-  NMOS_D: { w: 64, h: 96 },
-  PMOS_D: { w: 64, h: 96 },
-  NJFET: { w: 64, h: 96 },
-  PJFET: { w: 64, h: 96 },
-  NPN: { w: 64, h: 96 },
-  PNP: { w: 64, h: 96 },
-  SICMOS: { w: 64, h: 96 },
-  SICMOS_K: { w: 64, h: 96 },
-  GANHEMT: { w: 64, h: 96 },
-  IGBT: { w: 64, h: 96 },
-  IGBT_K: { w: 64, h: 96 },
-  // Gate at bottom offset 0.75 → x=48 on a 64-wide box (on-grid).
-  SCR: { w: 64, h: 48 },
+  NMOS: { w: 96, h: 128 },
+  PMOS: { w: 96, h: 128 },
+  NMOS_D: { w: 96, h: 128 },
+  PMOS_D: { w: 96, h: 128 },
+  NJFET: { w: 96, h: 128 },
+  PJFET: { w: 96, h: 128 },
+  NPN: { w: 96, h: 128 },
+  PNP: { w: 96, h: 128 },
+  SICMOS: { w: 96, h: 128 },
+  SICMOS_K: { w: 96, h: 128 },
+  GANHEMT: { w: 96, h: 128 },
+  IGBT: { w: 96, h: 128 },
+  IGBT_K: { w: 96, h: 128 },
+  // Gate at bottom offset 2/3 → x=64 on a 96-wide box (on-grid).
+  SCR: { w: 96, h: 64 },
   GATEDRV: { w: 80, h: 64 },
   COMP: { w: 64, h: 64 },
   // 0.25 / 0.75 offsets → on-grid at h=64.
@@ -170,6 +173,40 @@ export function getSymbolLayout(
   const r = normalizeRotation(rotation);
   if (r === 90 || r === 270) return { w: base.h, h: base.w };
   return base;
+}
+
+/**
+ * Right edge of visible ink as a fraction of layout width (0–1).
+ * Labels anchor here instead of the grid box edge so text hugs the glyph.
+ */
+const INK_RIGHT: Partial<Record<ComponentKind, number>> = {
+  V: 0.9,
+  I: 0.9,
+  GND: 0.78,
+  NMOS: 0.76,
+  PMOS: 0.8,
+  NMOS_D: 0.76,
+  PMOS_D: 0.8,
+  NJFET: 0.76,
+  PJFET: 0.8,
+  NPN: 0.76,
+  PNP: 0.8,
+  SICMOS: 0.76,
+  SICMOS_K: 0.76,
+  GANHEMT: 0.76,
+  IGBT: 0.72,
+  IGBT_K: 0.72,
+  SCR: 1,
+  GATEDRV: 0.92,
+  OPAMP5: 0.88,
+  /** Flag fills most of the box — push text past the glyph. */
+  NODE: 1.02,
+  IPROBE: 0.85,
+  VPROBE: 0.85,
+};
+
+export function getLabelInkAnchorX(kind: ComponentKind): number {
+  return INK_RIGHT[kind] ?? 0.82;
 }
 
 /** Assert layout keeps center-style pins on the wire grid (dev / tests). */

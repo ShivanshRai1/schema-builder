@@ -74,6 +74,7 @@ body { background: var(--bg); color: var(--text); }
 .mode-guide-explore .mode-guide-badge { background: #9ad4ff; }
 .mode-guide-wire .mode-guide-badge { background: #7ec2ff; }
 .mode-guide-move .mode-guide-badge { background: #f0b429; color: #1a1408; }
+.mode-guide-delete .mode-guide-badge { background: #f07178; color: #1a0a0c; }
 .mode-guide-content {
   flex: 1;
   min-width: 0;
@@ -131,7 +132,7 @@ body { background: var(--bg); color: var(--text); }
 }
 .mode-guide-legend .wl-item svg { flex-shrink: 0; }
 
-.workspace { flex: 1; display: grid; grid-template-columns: 200px 1fr 380px; min-height: 0; position: relative; }
+.workspace { flex: 1; display: grid; grid-template-columns: 280px 1fr 380px; min-height: 0; position: relative; }
 .right-col {
   position: relative;
   display: flex; flex-direction: column; min-height: 0;
@@ -164,46 +165,107 @@ body { background: var(--bg); color: var(--text); }
 .panel-split:hover, .panel-split:active { background: var(--accent); }
 
 /* Palette (left sidebar) ------------------------------------------------- */
-.palette { padding: 10px 8px; background: var(--panel); border-right: 1px solid var(--border); overflow-y: auto; }
-.palette-group { margin-bottom: 14px; }
-.palette-title { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); margin-bottom: 6px; }
-.palette-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
-.palette-item {
-  display: flex; flex-direction: column; align-items: center; gap: 3px;
-  padding: 7px 4px; cursor: pointer;
-  background: var(--panel-2); color: var(--text);
-  border: 1px solid var(--border); border-radius: 7px; transition: border-color .12s, transform .05s;
+.palette { padding: 12px 10px; background: var(--panel); border-right: 1px solid var(--border); overflow-y: auto; }
+.palette-group { margin-bottom: 16px; }
+.palette-title {
+  font-size: 12px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.55px;
+  color: var(--text);
+  opacity: 0.78;
+  margin-bottom: 8px;
 }
-.palette-item:hover { border-color: var(--accent); }
-.palette-item:active { transform: translateY(1px); }
+.palette-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.palette-item {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 10px 6px 8px; cursor: pointer;
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px;
+  transition: border-color .14s ease, background .14s ease, transform .12s ease, box-shadow .14s ease;
+  min-height: 92px;
+}
+.palette-item:hover {
+  border-color: var(--accent);
+  background: rgba(77, 163, 255, 0.14);
+  box-shadow: 0 0 0 1px var(--accent-dim), 0 6px 16px rgba(0, 0, 0, 0.28);
+  transform: translateY(-2px);
+  --symbol-stroke: #c8e6ff;
+}
+.palette-item:hover .palette-glyph-svg {
+  --symbol-stroke: #c8e6ff;
+  filter: contrast(1.12) brightness(1.15);
+  transform: scale(1.18);
+  overflow: visible;
+}
+.palette-item:hover .palette-glyph-svg svg {
+  max-width: 108px !important;
+  max-height: 62px !important;
+}
+.palette-item:hover .palette-label {
+  color: #f0f6fc;
+  opacity: 1;
+  font-size: 13px;
+  font-weight: 700;
+}
+.palette-item:hover .palette-glyph {
+  font-size: 26px;
+  filter: brightness(1.2);
+  transform: scale(1.12);
+}
+.palette-item:active {
+  transform: translateY(0);
+  box-shadow: 0 0 0 1px var(--accent-dim);
+}
 .palette-item.is-active {
   border-color: var(--accent);
   background: rgba(77, 163, 255, 0.16);
   box-shadow: 0 0 0 1px var(--accent-dim);
 }
 .palette-item.is-active .palette-label { color: var(--text); font-weight: 650; }
+.palette-item.is-active .palette-glyph-svg {
+  --symbol-stroke: #b6dcff;
+}
 .palette-tool-hint {
   margin-top: 6px;
-  font-size: 10px;
-  line-height: 1.3;
+  font-size: 11px;
+  line-height: 1.35;
   color: var(--accent);
 }
-.palette-glyph { font-size: 15px; line-height: 1.1; }
+.palette-glyph {
+  font-size: 22px;
+  line-height: 1.1;
+  transition: font-size .14s ease, transform .14s ease, filter .14s ease;
+}
 .palette-glyph-svg {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 52px;
-  height: 28px;
+  width: 100%;
+  height: 56px;
   overflow: hidden;
+  --symbol-stroke: #8ec8ff;
+  filter: contrast(1.08);
+  transition: transform .14s ease, filter .14s ease;
 }
 .palette-glyph-svg svg {
-  max-width: 50px !important;
-  max-height: 26px !important;
+  max-width: 96px !important;
+  max-height: 54px !important;
   width: auto !important;
   height: auto !important;
 }
-.palette-label { font-size: 9.5px; color: var(--muted); text-align: center; line-height: 1.15; }
+.palette-label {
+  font-size: 11.5px;
+  font-weight: 550;
+  color: var(--text);
+  opacity: 0.88;
+  text-align: center;
+  line-height: 1.2;
+  padding: 0 2px;
+  overflow-wrap: anywhere;
+  hyphens: auto;
+  transition: font-size .14s ease, font-weight .14s ease, color .14s ease, opacity .14s ease;
+}
 .palette-subgroup { margin-bottom: 8px; }
 .palette-subtitle {
   display: flex;
@@ -257,7 +319,15 @@ body { background: var(--bg); color: var(--text); }
 .canvas .react-flow__edgelabel-renderer { z-index: 2 !important; }
 .canvas-explore .react-flow__pane { cursor: grab; }
 .canvas-explore .react-flow__pane:active { cursor: grabbing; }
-.canvas-explore .react-flow__node { cursor: pointer; }
+/* Pass drags through parts/wires so left-drag pans everywhere in Explore. */
+.canvas-explore .react-flow__node,
+.canvas-explore .react-flow__edge {
+  pointer-events: none;
+}
+.canvas-explore .react-flow__controls,
+.canvas-explore .react-flow__controls * {
+  pointer-events: auto;
+}
 .canvas-wire .react-flow__pane,
 .canvas-wiring .react-flow__pane { cursor: crosshair; }
 .canvas-wiring .react-flow__edge { cursor: crosshair; }
@@ -461,24 +531,89 @@ body { background: var(--bg); color: var(--text); }
   white-space: nowrap;
   pointer-events: none;
   z-index: 3;
-  line-height: 1.15;
-  padding: 1px 4px;
-  border-radius: 3px;
+  line-height: 1.1;
+  padding: 0 2px;
+  border-radius: 2px;
+  font-size: 10.5px;
   background: rgba(12, 16, 22, 0.82);
 }
-/* Pins on left/right (R, C, L, D, op-amp): sit above the body, not on the leads. */
+.symbol-labels .component-refdes {
+  margin-top: 0;
+  font-size: inherit;
+}
+.symbol-labels .component-params {
+  font-size: 9px;
+  margin-top: 0;
+}
+/* LTspice-style: refdes upper-right, value lower-right — top/bottom pins stay clear. */
+.symbol-labels-split {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+.symbol-labels-split .label-refdes,
+.symbol-labels-split .label-value {
+  position: absolute;
+  white-space: nowrap;
+  transform: translateY(-50%);
+  line-height: 1;
+}
+.symbol-labels-split.labels-split-right .label-refdes,
+.symbol-labels-split.labels-split-right .label-value {
+  left: calc(var(--label-x, 80%) + 2px);
+}
+.symbol-labels-split.labels-split-left .label-refdes,
+.symbol-labels-split.labels-split-left .label-value {
+  right: calc((100% - var(--label-x, 80%)) + 2px);
+  left: auto;
+  text-align: right;
+}
+.symbol-labels-split .label-refdes {
+  font-size: 11px;
+  font-weight: 650;
+}
+.symbol-labels-split .label-value {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.symbol-labels-split .label-unplaced {
+  position: absolute;
+  left: calc(var(--label-x, 80%) + 2px);
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 9px;
+  color: var(--warn, #e6a23c);
+}
+/* Horizontal parts (pins left+right): one block above the body. */
 .symbol-labels.labels-above {
   left: 50%;
   bottom: calc(100% + 3px);
   top: auto;
   transform: translateX(-50%);
 }
-/* Pins on top/bottom (V, I, GND, transistors): sit to the right of the body. */
 .symbol-labels.labels-right {
-  left: calc(100% + 6px);
+  left: calc(var(--label-x, 80%) + 2px);
   top: 50%;
   bottom: auto;
   transform: translateY(-50%);
+}
+.symbol-labels.labels-left {
+  right: calc(100% + 6px);
+  left: auto;
+  top: 50%;
+  bottom: auto;
+  transform: translateY(-50%);
+}
+.symbol-labels.labels-below {
+  left: 50%;
+  top: calc(100% + 3px);
+  bottom: auto;
+  transform: translateX(-50%);
+}
+.symbol-labels.labels-hidden {
+  display: none;
 }
 /* Pin junction squares on schematic symbols (LTspice-like). */
 .symbol-node .component-pin::after {
@@ -588,6 +723,33 @@ body { background: var(--bg); color: var(--text); }
   box-shadow: none !important;
   background: transparent !important;
 }
+.tip-delete-hint {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 10px);
+  transform: translateX(-50%);
+  z-index: 20;
+  white-space: nowrap;
+  pointer-events: none;
+  padding: 4px 8px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: #1a1408;
+  background: var(--select);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+.tip-delete-hint kbd {
+  display: inline-block;
+  margin: 0 1px;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 700;
+  background: rgba(26, 20, 8, 0.14);
+}
 /* Free wire end only: large hit target. Quiet until hover. */
 .tip-node.tip-free .component-pin,
 .tip-node.tip-free .react-flow__handle.component-pin {
@@ -656,9 +818,25 @@ body { background: var(--bg); color: var(--text); }
   border-radius: 0 !important;
   box-shadow: none !important;
   z-index: 4;
-  transform: translate(-50%, -50%) !important;
   transition: none !important;
   overflow: visible !important;
+}
+/* Center each handle on the node edge (RF defaults differ per side). */
+.react-flow__handle.component-pin.pin-side-left,
+.component-pin.pin-side-left {
+  transform: translate(-50%, -50%) !important;
+}
+.react-flow__handle.component-pin.pin-side-right,
+.component-pin.pin-side-right {
+  transform: translate(50%, -50%) !important;
+}
+.react-flow__handle.component-pin.pin-side-top,
+.component-pin.pin-side-top {
+  transform: translate(-50%, -50%) !important;
+}
+.react-flow__handle.component-pin.pin-side-bottom,
+.component-pin.pin-side-bottom {
+  transform: translate(-50%, 50%) !important;
 }
 .react-flow__handle.component-pin::before,
 .component-pin::before {
@@ -667,10 +845,15 @@ body { background: var(--bg); color: var(--text); }
   inset: -12px;
   border-radius: 4px;
 }
-.react-flow__handle.component-pin:hover,
-.component-pin:hover {
+.react-flow__handle.component-pin.pin-side-left:hover,
+.component-pin.pin-side-left:hover,
+.react-flow__handle.component-pin.pin-side-right:hover,
+.component-pin.pin-side-right:hover,
+.react-flow__handle.component-pin.pin-side-top:hover,
+.component-pin.pin-side-top:hover,
+.react-flow__handle.component-pin.pin-side-bottom:hover,
+.component-pin.pin-side-bottom:hover {
   background: transparent !important;
-  transform: translate(-50%, -50%) !important;
 }
 .pin-label {
   position: absolute;
@@ -900,6 +1083,9 @@ body { background: var(--bg); color: var(--text); }
   color: var(--muted);
   background: var(--panel-2);
   border-bottom: 1px solid var(--border);
+}
+.netlist-status-error {
+  color: #ff7b72;
 }
 
 .editor-wrap { flex: 1; min-height: 0; }

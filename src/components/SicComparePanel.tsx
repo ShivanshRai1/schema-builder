@@ -8,7 +8,7 @@ import {
   Legend,
   Title,
 } from "chart.js";
-import { normalizeSeries, runFleetJob, type SimEngine } from "../sim/runSimulation";
+import { formatSeriesForChart, normalizeSeries, runFleetJob, type SimEngine } from "../sim/runSimulation";
 import { analyseRR, fmt } from "../sim/sicCompare";
 
 Chart.register(LineController, LineElement, PointElement, LinearScale, Legend, Title);
@@ -149,7 +149,7 @@ export function SicComparePanel({ netlist }: { netlist: string }) {
         setStatus(job.error);
         return;
       }
-      const traces = normalizeSeries(job.data);
+      const traces = formatSeriesForChart(normalizeSeries(job.data));
       setSeries(traces);
       setSentNl(text);
       let rrNext: ReturnType<typeof analyseRR> | null = null;

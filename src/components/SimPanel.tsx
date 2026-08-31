@@ -26,8 +26,7 @@ Chart.register(
 
 /**
  * POST the live schematic netlist to sim_api.php (submit + poll).
- * If the API is missing or fails, runSimulation returns a demo plot.
- * Does not touch graph / netlist / assistant state.
+ * Built-in models are auto-injected into the netlist — no manual library paste required.
  */
 export function SimPanel({ netlist, onPopOut }: { netlist: string; onPopOut?: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -160,7 +159,11 @@ export function SimPanel({ netlist, onPopOut }: { netlist: string; onPopOut?: ()
         </div>
       </div>
       <div className={tab === "circuit" ? "sim-body" : "sim-body sim-body-hidden"}>
-      {result && <div className="netlist-status">{result.message}</div>}
+      {result && (
+        <div className={`netlist-status${result.ok ? "" : " netlist-status-error"}`}>
+          {result.message}
+        </div>
+      )}
       <div className="sim-chart-wrap">
         <canvas ref={canvasRef} />
         {!result && !busy && (

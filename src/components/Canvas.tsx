@@ -62,6 +62,46 @@ const MOVE_DRAG_THRESHOLD = 4;
 /** Hit radius for ending a draft on an existing wire (incl. under parts). */
 const WIRE_JOIN_RADIUS = 16;
 
+/** Click/tap tolerance for selecting or deleting thin / short wire segments. */
+const WIRE_HIT_RADIUS = 28;
+
+/**
+ * Free tip squares sit on top of micro stubs and steal pointer events.
+ * Prefer the short dangling stub attached to that tip (else any attached edge).
+ */
+function preferredEdgeForTip(
+  nodes: Node<ComponentData>[],
+  edges: Edge[],
+  tipId: string,
+): Edge | null {
+  const attached = edges.filter((e) => e.source === tipId || e.target === tipId);
+  if (!attached.length) return null;
+  const stub = attached.find((e) => isShortDanglingStub(nodes, edges, e, 96));
+  return stub ?? attached[0]!;
+}
+
+/** Prefer a short stub under the cursor when it overlaps a longer rail. */
+function preferShortStubHit(
+  nodes: Node<ComponentData>[],
+  edges: Edge[],
+  cursor: Point,
+  base: { edgeId: string; point: Point; dist: number } | null,
+): { edgeId: string; point: Point; dist: number } | null {
+  let bestStub: { edgeId: string; dist: number } | null = null;
+  for (const edge of edges) {
+    if (!isShortDanglingStub(nodes, edges, edge, 96)) continue;
+    const poly = computeEdgePolyline(nodes, edge);
+    if (poly.length < 2) continue;
+    const d = distToPolyline(poly, cursor);
+    if (d > WIRE_HIT_RADIUS + 4) continue;
+    if (!bestStub || d < bestStub.dist) bestStub = { edgeId: edge.id, dist: d };
+  }
+  if (bestStub) {
+    return { edgeId: bestStub.edgeId, point: cursor, dist: bestStub.dist };
+  }
+  return base;
+}
+
 /**
  * Must be this close to commit to another pin on the *same* part you started
  * from — otherwise body-hover wrongly snaps V+ → V− while aiming at a rail.
@@ -1022,7 +1062,11 @@ export function Canvas({
       setMoveHint(null);
       const drag = moveDragRef.current;
       moveDragRef.current = null;
-      if (!armed || !drag) return;
+      if (!armed) {
+        onSelectEdgeRef.current(edgeId);
+        return;
+      }
+      if (!drag) return;
       onNodesChangeRef.current(
         drag.origins.map((o) => {
           const n = rfRef.current?.getNode(o.id);
@@ -1096,10 +1140,10 @@ export function Canvas({
   }, [mode, beginWireMoveDrag]);
 
 
-  // Box-select marquee on empty canvas (explore + move).
+  // Box-select marquee on empty canvas (Move only — Explore is pan/zoom only).
   // Move + Shift: keep the older cut-move (sever wires in the box).
   useEffect(() => {
-    if (mode !== "move" && mode !== "explore") return;
+    if (mode !== "move") return;
     const root = canvasElRef.current;
     if (!root) return;
 
@@ -1177,8 +1221,8 @@ export function Canvas({
   }, [mode]);
 
   // Scissors hit-test in capture phase so small wire tails remain deletable.
-  // Component artwork must stay with the node handler: pin stems are part of
-  // the symbol, not separate wire edges.
+  // Free tip squares cover micro stubs — treat tip clicks as wire deletes.
+  // Real component artwork stays with the node handler (pin stems ≠ wires).
   useEffect(() => {
     if (mode !== "delete") return;
     const root = canvasElRef.current;
@@ -1187,29 +1231,82 @@ export function Canvas({
     const onClick = (event: MouseEvent) => {
       const target = event.target as HTMLElement | null;
       if (target?.closest?.(".react-flow__controls, .react-flow__minimap")) return;
-      if (target?.closest?.(".react-flow__node")) return;
       const rf = rfRef.current;
       if (!rf) return;
       const cursor = rf.screenToFlowPosition({ x: event.clientX, y: event.clientY });
       const nodes = nodesRef.current;
       const edges = edgesRef.current;
-      // Prefer a short dangling stub when it and a long rail are both under the click.
-      let hit = findNearestWireHit(nodes, edges, cursor, 14, SCHEMATIC_GRID);
-      let bestStub: { edgeId: string; dist: number } | null = null;
-      for (const edge of edges) {
-        if (!isShortDanglingStub(nodes, edges, edge, 96)) continue;
-        const poly = computeEdgePolyline(nodes, edge);
-        if (poly.length < 2) continue;
-        const d = distToPolyline(poly, cursor);
-        if (d > 22) continue;
-        if (!bestStub || d < bestStub.dist) bestStub = { edgeId: edge.id, dist: d };
+
+      const nodeEl = target?.closest?.(".react-flow__node") as HTMLElement | null;
+      if (nodeEl) {
+        const nodeId = nodeEl.getAttribute("data-id");
+        const node = nodeId ? nodes.find((n) => n.id === nodeId) : null;
+        if (node?.data.kind === "TIP") {
+          const edge = preferredEdgeForTip(nodes, edges, node.id);
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          if (edge) onDeleteEdgeRef.current(edge.id, cursor);
+          else onDeleteNodeRef.current(node.id);
+          return;
+        }
+        // Real parts: leave click to onNodeClick / pin handlers.
+        return;
       }
-      if (bestStub) hit = { edgeId: bestStub.edgeId, point: cursor, dist: bestStub.dist };
+
+      let hit = findNearestWireHit(nodes, edges, cursor, WIRE_HIT_RADIUS, SCHEMATIC_GRID);
+      hit = preferShortStubHit(nodes, edges, cursor, hit);
       if (!hit) return;
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
       onDeleteEdgeRef.current(hit.edgeId, cursor);
+    };
+
+    root.addEventListener("click", onClick, true);
+    return () => root.removeEventListener("click", onClick, true);
+  }, [mode]);
+
+  // Move: generous hit-test so tiny wire stubs still select (then Delete removes them).
+  // Free tip squares cover stubs — clicking a tip selects its attached wire.
+  useEffect(() => {
+    if (mode !== "move") return;
+    const root = canvasElRef.current;
+    if (!root) return;
+
+    const onClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest?.(".react-flow__controls, .react-flow__minimap")) return;
+      const rf = rfRef.current;
+      if (!rf) return;
+      const cursor = rf.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      const nodes = nodesRef.current;
+      const edges = edgesRef.current;
+
+      const nodeEl = target?.closest?.(".react-flow__node") as HTMLElement | null;
+      if (nodeEl) {
+        const nodeId = nodeEl.getAttribute("data-id");
+        const node = nodeId ? nodes.find((n) => n.id === nodeId) : null;
+        if (node?.data.kind === "TIP") {
+          const edge = preferredEdgeForTip(nodes, edges, node.id);
+          if (!edge) return;
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          onSelectEdgeRef.current(edge.id);
+          return;
+        }
+        return;
+      }
+      if (target?.closest?.(".react-flow__edge")) return;
+
+      let hit = findNearestWireHit(nodes, edges, cursor, WIRE_HIT_RADIUS, SCHEMATIC_GRID);
+      hit = preferShortStubHit(nodes, edges, cursor, hit);
+      if (!hit) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      onSelectEdgeRef.current(hit.edgeId);
     };
 
     root.addEventListener("click", onClick, true);
@@ -1235,7 +1332,7 @@ export function Canvas({
         nodesRef.current,
         edgesRef.current,
         cursor,
-        14,
+        WIRE_HIT_RADIUS,
         SCHEMATIC_GRID,
       );
       if (!hit) return;
@@ -1263,6 +1360,29 @@ export function Canvas({
             onReplaceRef.current(nodeId, kind);
           }}
           onPinClick={(nodeId, pinId) => {
+            const modeNow = modeRef.current;
+            const node = nodesRef.current.find((n) => n.id === nodeId);
+            // Tip handles are large and sit on micro stubs — pin clicks must
+            // still cut / select the wire outside wire mode.
+            if (node?.data.kind === "TIP" && modeNow === "delete") {
+              const edge = preferredEdgeForTip(
+                nodesRef.current,
+                edgesRef.current,
+                nodeId,
+              );
+              if (edge) onDeleteEdgeRef.current(edge.id);
+              else onDeleteNodeRef.current(nodeId);
+              return;
+            }
+            if (node?.data.kind === "TIP" && modeNow === "move") {
+              const edge = preferredEdgeForTip(
+                nodesRef.current,
+                edgesRef.current,
+                nodeId,
+              );
+              if (edge) onSelectEdgeRef.current(edge.id);
+              return;
+            }
             applyPinHitRef.current(nodeId, pinId);
           }}
         />
@@ -1279,6 +1399,24 @@ export function Canvas({
     }),
     [],
   );
+
+  // Explore: drop any part/wire selection when entering the mode.
+  useEffect(() => {
+    if (mode !== "explore") return;
+    const selNodes = nodesRef.current.filter((n) => n.selected);
+    const selEdges = edgesRef.current.filter((e) => e.selected);
+    if (!selNodes.length && !selEdges.length) return;
+    if (selNodes.length) {
+      onNodesChange(
+        selNodes.map((n) => ({ type: "select" as const, id: n.id, selected: false })),
+      );
+    }
+    if (selEdges.length) {
+      onEdgesChange(
+        selEdges.map((e) => ({ type: "select" as const, id: e.id, selected: false })),
+      );
+    }
+  }, [mode, onNodesChange, onEdgesChange]);
 
   const defaultEdgeOptions = useMemo(
     () => ({
@@ -1460,7 +1598,7 @@ export function Canvas({
         return;
       }
       if (modeRef.current !== "wire") {
-        if (modeRef.current === "explore" || modeRef.current === "move") {
+        if (modeRef.current === "move") {
           e.stopPropagation();
           selectOnlyEdge(edge.id);
         }
@@ -1513,16 +1651,8 @@ export function Canvas({
       e.stopPropagation();
       return;
     }
-    // Explore: a pane click just clears selection — never draws a wire.
-    if (modeRef.current === "explore") {
-      const sel = nodesRef.current.filter((n) => n.selected);
-      if (sel.length) {
-        onNodesChangeRef.current(
-          sel.map((n) => ({ type: "select" as const, id: n.id, selected: false })),
-        );
-      }
-      return;
-    }
+    // Explore: pan/zoom only — pane clicks do nothing.
+    if (modeRef.current === "explore") return;
     if (modeRef.current === "move" || modeRef.current === "delete") return;
     const rf = rfRef.current;
     if (!rf) return;
@@ -1641,10 +1771,20 @@ export function Canvas({
         return;
       }
 
-      // Explore / Move: Shift+click toggles multi-select; plain click single-selects
-      // (unless clicking a member of an existing group in Move — keep the group).
-      if (modeRef.current === "explore" || modeRef.current === "move") {
-        if (node.data.kind === "TIP") return;
+      // Move: Shift+click toggles multi-select; plain click single-selects
+      // (unless clicking a member of an existing group — keep the group).
+      // Free tips: select the attached stub so Delete/Backspace removes it.
+      if (modeRef.current === "move") {
+        if (node.data.kind === "TIP") {
+          e.stopPropagation();
+          const edge = preferredEdgeForTip(
+            nodesRef.current,
+            edgesRef.current,
+            node.id,
+          );
+          if (edge) onSelectEdgeRef.current(edge.id);
+          return;
+        }
         if (e.shiftKey) {
           e.stopPropagation();
           onNodesChange([
@@ -1653,17 +1793,7 @@ export function Canvas({
           return;
         }
         e.stopPropagation();
-        if (modeRef.current === "explore") {
-          const changes = nodes.flatMap((n) => {
-            if (n.id === node.id) {
-              return n.selected ? [] : [{ type: "select" as const, id: n.id, selected: true }];
-            }
-            return n.selected ? [{ type: "select" as const, id: n.id, selected: false }] : [];
-          });
-          if (changes.length) onNodesChange(changes);
-          return;
-        }
-        // Move: keep cut-move / box group when clicking a selected member to drag.
+        // Keep cut-move / box group when clicking a selected member to drag.
         if (node.selected && nodes.some((n) => n.selected && n.id !== node.id)) {
           return;
         }
@@ -1705,15 +1835,15 @@ export function Canvas({
         onEdgesChange={onEdgesChange}
         onNodeClick={onNodeClick}
         onNodeMouseMove={onNodeMouseMove}
-        elementsSelectable={mode !== "wire" && mode !== "delete"}
-        nodesFocusable={mode !== "wire" && mode !== "delete"}
-        edgesFocusable={mode !== "delete"}
+        elementsSelectable={mode === "move"}
+        nodesFocusable={mode === "move"}
+        edgesFocusable={mode === "move"}
         nodesDraggable={false}
         nodesConnectable={false}
         multiSelectionKeyCode={null}
         selectionKeyCode={null}
         selectionOnDrag={false}
-        panOnDrag={mode === "explore" ? [1, 2] : mode === "wire" ? [1] : false}
+        panOnDrag={mode === "explore" ? true : mode === "wire" ? [1] : false}
         deleteKeyCode={null}
         connectionMode={ConnectionMode.Loose}
         defaultEdgeOptions={defaultEdgeOptions}
