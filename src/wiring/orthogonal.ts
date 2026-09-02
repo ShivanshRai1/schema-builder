@@ -45,6 +45,30 @@ export function projectOrthogonal(
   return { x: from.x, y: snapped.y };
 }
 
+/** Live preview / click corner when snapping onto a pin. */
+export function previewCornerToPin(
+  from: Point,
+  pin: Point,
+  incomingAxis: "h" | "v" | null,
+): Point {
+  if (incomingAxis === "v") {
+    return { x: from.x, y: pin.y };
+  }
+  return { x: pin.x, y: from.y };
+}
+
+/** One user bend at wire complete — turn on target column/row, no stub detour. */
+export function commitSingleBendCorner(
+  start: Point,
+  end: Point,
+  sourceSide: PinSide,
+): Point {
+  if (sourceSide === "left" || sourceSide === "right") {
+    return { x: end.x, y: start.y };
+  }
+  return { x: start.x, y: end.y };
+}
+
 /**
  * Live rubber-band: same H/V lock as projectOrthogonal, but unsnapped so the
  * free end tracks the cursor smoothly. Lock bends still use projectOrthogonal.

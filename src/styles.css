@@ -133,6 +133,69 @@ body { background: var(--bg); color: var(--text); }
 .mode-guide-legend .wl-item svg { flex-shrink: 0; }
 
 .workspace { flex: 1; display: grid; grid-template-columns: 280px 1fr 380px; min-height: 0; position: relative; }
+.canvas-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg);
+}
+.mode-toolbar {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  z-index: 4;
+}
+.mode-toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  min-height: 40px;
+  cursor: pointer;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  transition: border-color 0.14s ease, background 0.14s ease, box-shadow 0.14s ease;
+}
+.mode-toolbar-btn:hover {
+  border-color: var(--accent);
+  background: rgba(77, 163, 255, 0.14);
+  box-shadow: 0 0 0 1px var(--accent-dim);
+}
+.mode-toolbar-btn.is-active {
+  border-color: var(--accent);
+  background: rgba(77, 163, 255, 0.2);
+  box-shadow: 0 0 0 1px var(--accent), inset 0 0 0 1px rgba(77, 163, 255, 0.25);
+}
+.mode-toolbar-explore.is-active { border-color: #9ad4ff; background: rgba(154, 212, 255, 0.16); }
+.mode-toolbar-wire.is-active { border-color: #7ec2ff; background: rgba(126, 194, 255, 0.16); }
+.mode-toolbar-move.is-active {
+  border-color: var(--select);
+  background: rgba(240, 180, 41, 0.14);
+  box-shadow: 0 0 0 1px var(--select);
+}
+.mode-toolbar-delete.is-active {
+  border-color: #f07178;
+  background: rgba(240, 113, 120, 0.14);
+  box-shadow: 0 0 0 1px #f07178;
+}
+.mode-toolbar-glyph {
+  font-size: 18px;
+  line-height: 1;
+  width: 1.25em;
+  text-align: center;
+}
+.mode-toolbar-label { white-space: nowrap; }
+.canvas-col .canvas { flex: 1; min-height: 0; }
 .right-col {
   position: relative;
   display: flex; flex-direction: column; min-height: 0;
@@ -319,11 +382,8 @@ body { background: var(--bg); color: var(--text); }
 .canvas .react-flow__edgelabel-renderer { z-index: 2 !important; }
 .canvas-explore .react-flow__pane { cursor: grab; }
 .canvas-explore .react-flow__pane:active { cursor: grabbing; }
-/* Pass drags through parts/wires so left-drag pans everywhere in Explore. */
-.canvas-explore .react-flow__node,
-.canvas-explore .react-flow__edge {
-  pointer-events: none;
-}
+.canvas-explore .react-flow__node { cursor: default; }
+.canvas-explore .react-flow__edge { cursor: pointer; }
 .canvas-explore .react-flow__controls,
 .canvas-explore .react-flow__controls * {
   pointer-events: auto;

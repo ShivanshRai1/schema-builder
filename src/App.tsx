@@ -9,6 +9,7 @@ import {
 } from "@xyflow/react";
 import { Canvas, type CanvasMode, type WireCompletePayload, type WirePartialPayload } from "./components/Canvas";
 import { Palette } from "./components/Palette";
+import { ModeToolbar } from "./components/ModeToolbar";
 import { PropertiesPanel } from "./components/PropertiesPanel";
 import { NetlistPanel } from "./components/NetlistPanel";
 import { ChatPanel } from "./components/ChatPanel";
@@ -983,7 +984,10 @@ export default function App() {
     const selectedNodeIds = nodesNow.filter((n) => n.selected).map((n) => n.id);
     const selectedEdgeIds = edgesNow.filter((e) => e.selected).map((e) => e.id);
     if (!selectedNodeIds.length && !selectedEdgeIds.length) {
-      setCanvasMode((current) => (current === "delete" ? "explore" : "delete"));
+      setCanvasMode((current) => {
+        if (current === "wire") return current;
+        return current === "delete" ? "explore" : "delete";
+      });
       return;
     }
     pushHistory();
@@ -1019,8 +1023,14 @@ export default function App() {
   const deleteEdgeWithTool = useCallback((edgeId: string, clickPoint?: Point) => {
     const edgesNow = edgesRef.current;
     const nodesNow = nodesRef.current;
-    const plan = planScissorWireDelete(nodesNow, edgesNow, edgeId, clickPoint);
-    if (!plan) return; // refuse to wipe a long rail when only a nub was clicked
+    if (!edgesNow.some((edge) => edge.id === edgeId)) return;
+
+    let plan = planScissorWireDelete(nodesNow, edgesNow, edgeId, clickPoint);
+    // Scissors on a normal rail (e.g. pin↔pin): trim logic may refuse; still
+    // delete the clicked wire instead of silently no-op + leaving it selected.
+    if (!plan) {
+      plan = { action: "delete", edgeId };
+    }
 
     if (plan.action === "trimTip") {
       const clicked = edgesNow.find((edge) => edge.id === plan.edgeId);
@@ -1706,6 +1716,10 @@ export default function App() {
         e.preventDefault();
         downloadCircuit(snapshot());
       }
+      else if (mod && e.key.toLowerCase() === "o") {
+        e.preventDefault();
+        fileInputRef.current?.click();
+      }
       else if (e.key === "Backspace" || e.key === "Delete") {
         e.preventDefault();
         if (e.repeat) return;
@@ -1856,7 +1870,7 @@ export default function App() {
       const loaded = await readCircuitFile(file);
       pushHistory();
       restore(loaded);
-      setNetlistStatus(`loaded ${file.name}`);
+      setNetlistStatus(`opened ${file.name}`);
     } catch (e) {
       setNetlistStatus(`load failed: ${e instanceof Error ? e.message : "error"}`);
     }
@@ -1963,42 +1977,10 @@ export default function App() {
       <header className="app-header">
         <span className="app-title">SimulAI · Schematic Editor</span>
         <div className="app-actions">
-          <button
-            type="button"
-            className={`ghost-btn${canvasMode === "explore" ? " ghost-btn-active" : ""}`}
-            onClick={() => setCanvasMode("explore")}
-            title="Explore mode — pan, zoom, and inspect without editing"
-          >
-            Explore
-          </button>
-          <button
-            type="button"
-            className={`ghost-btn${canvasMode === "wire" ? " ghost-btn-active" : ""}`}
-            onClick={() => setCanvasMode("wire")}
-            title="Wire mode (click pins to route)"
-          >
-            Wire
-          </button>
-          <button
-            type="button"
-            className={`ghost-btn${canvasMode === "move" ? " ghost-btn-active" : ""}`}
-            onClick={() => setCanvasMode("move")}
-            title="Move mode (M) — click and drag parts"
-          >
-            Move
-          </button>
-          <button
-            type="button"
-            className={`ghost-btn${canvasMode === "delete" ? " ghost-btn-active" : ""}`}
-            onClick={() => setCanvasMode((mode) => mode === "delete" ? "explore" : "delete")}
-            title="Delete tool — click parts or wires. Delete/Backspace removes selection, or toggles scissors if nothing is selected"
-          >
-            ✂ Delete
-          </button>
           <button type="button" className="ghost-btn" disabled={histTick < 0 || !history.current.canUndo()} onClick={undo} title="Undo (Ctrl+Z)">Undo</button>
           <button type="button" className="ghost-btn" disabled={histTick < 0 || !history.current.canRedo()} onClick={redo} title="Redo (Ctrl+Y)">Redo</button>
           <button type="button" className="ghost-btn" onClick={onSave} title="Save circuit JSON (Ctrl+S)">Save</button>
-          <button type="button" className="ghost-btn" onClick={onLoadClick} title="Load circuit JSON">Load</button>
+          <button type="button" className="ghost-btn" onClick={onLoadClick} title="Open circuit JSON (Ctrl+O)">Open</button>
           <button type="button" className="ghost-btn" onClick={onRestoreStarter} title="Reload the starter schematic">
             Restore starter
           </button>
@@ -2031,10 +2013,11 @@ export default function App() {
         <div className="mode-guide-content">
           {canvasMode === "explore" ? (
             <>
-              <p className="mode-guide-lead">Look around without changing the circuit.</p>
+              <p className="mode-guide-lead">Pan and zoom, or click to select parts and wires.</p>
               <ul className="mode-guide-list">
-                <li><kbd>Drag</kbd> anywhere to pan · <kbd>Scroll</kbd> to zoom</li>
-                <li>No selection here — switch to <strong>Move</strong> to select, move, or copy parts</li>
+                <li><kbd>Drag</kbd> empty canvas to pan · <kbd>Scroll</kbd> to zoom</li>
+                <li><kbd>Click</kbd> a part or wire to select · hollow square = free wire end</li>
+                <li><kbd>Delete</kbd> / <kbd>Backspace</kbd> removes selection · switch to <strong>Move</strong> to drag parts</li>
               </ul>
             </>
           ) : canvasMode === "wire" ? (
@@ -2068,7 +2051,7 @@ export default function App() {
               <ul className="mode-guide-list">
                 <li><kbd>Click</kbd> a part, wire, or hollow <strong>wire end</strong> square to delete it</li>
                 <li>Short stubs are easiest to remove by clicking the square at the end</li>
-                <li><kbd>Esc</kbd> exits Delete mode · <kbd>Delete</kbd> with a selection also works in Move</li>
+                <li><kbd>Esc</kbd> exits Delete mode · <kbd>Delete</kbd> / <kbd>Backspace</kbd> removes a selection in any mode</li>
               </ul>
             </>
           ) : (
@@ -2081,7 +2064,7 @@ export default function App() {
                 <li><kbd>Click</kbd> / <kbd>Shift</kbd>+click parts · <kbd>Drag</kbd> a selected part to move the whole group</li>
                 <li>Drop near a wire end to reconnect · <kbd>Arrow</kbd> keys nudge (Shift = 1px)</li>
                 <li><kbd>Double-click</kbd> a wire to straighten it after a move</li>
-                <li><kbd>R</kbd> rotates selected parts · <kbd>Delete</kbd> removes selection · <kbd>Ctrl</kbd>+C / V copy·paste</li>
+                <li><kbd>R</kbd> rotates selected parts · <kbd>Delete</kbd> / <kbd>Backspace</kbd> removes selection · <kbd>Ctrl</kbd>+C / V copy·paste</li>
               </ul>
             </>
           )}
@@ -2089,32 +2072,35 @@ export default function App() {
       </div>
 
       <div className="workspace" style={{ gridTemplateColumns: `280px 1fr ${rightWidth}px` }}>
-        <Palette onAdd={addComponent} mode={canvasMode} onModeChange={setCanvasMode} />
+        <Palette onAdd={addComponent} />
 
-        <Canvas
-          nodes={nodes}
-          edges={edges}
-          mode={canvasMode}
-          onModeChange={setCanvasMode}
-          onNodesChange={handleNodesChange}
-          onEdgesChange={handleEdgesChange}
-          onWire={onWire}
-          onWirePartial={onWirePartial}
-          onTrimWire={trimSelectedWires}
-          onWirePathUpdate={onWirePathUpdate}
-          onMoveWireDisconnect={onMoveWireDisconnect}
-          onReplace={replaceComponent}
-          onAddAt={addComponentAt}
-          onCutMoveRegion={onCutMoveRegion}
-          onSelectRegion={onSelectRegion}
-          onMoveDisconnect={onMoveDisconnect}
-          onWireBranch={onWireBranch}
-          onCancelWireBranch={onCancelWireBranch}
-          onDeleteNode={deleteNodeWithTool}
-          onDeleteEdge={deleteEdgeWithTool}
-          onStraightenEdge={straightenEdge}
-          onSelectEdge={onSelectEdge}
-        />
+        <div className="canvas-col">
+          <ModeToolbar mode={canvasMode} onModeChange={setCanvasMode} />
+          <Canvas
+            nodes={nodes}
+            edges={edges}
+            mode={canvasMode}
+            onModeChange={setCanvasMode}
+            onNodesChange={handleNodesChange}
+            onEdgesChange={handleEdgesChange}
+            onWire={onWire}
+            onWirePartial={onWirePartial}
+            onTrimWire={trimSelectedWires}
+            onWirePathUpdate={onWirePathUpdate}
+            onMoveWireDisconnect={onMoveWireDisconnect}
+            onReplace={replaceComponent}
+            onAddAt={addComponentAt}
+            onCutMoveRegion={onCutMoveRegion}
+            onSelectRegion={onSelectRegion}
+            onMoveDisconnect={onMoveDisconnect}
+            onWireBranch={onWireBranch}
+            onCancelWireBranch={onCancelWireBranch}
+            onDeleteNode={deleteNodeWithTool}
+            onDeleteEdge={deleteEdgeWithTool}
+            onStraightenEdge={straightenEdge}
+            onSelectEdge={onSelectEdge}
+          />
+        </div>
 
         <div className="right-col" ref={rightColRef}>
           <div

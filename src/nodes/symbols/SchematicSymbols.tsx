@@ -291,13 +291,18 @@ function InductorVarSymbol({ selected }: SymProps) {
 }
 
 function VoltageSymbol({ selected, rotation = 0 }: SymProps) {
+  // Tight viewBox: short leads + large circle (pins stay at layout box top/bottom).
+  const cx = 20;
+  const cy = 32;
+  const r = 18;
+  const h = 64;
   return (
-    <SymbolSvg kind="V" w={40} h={80}>
-      <circle cx="20" cy="40" r="16" fill="var(--bg, #0f1419)" stroke="none" />
+    <SymbolSvg kind="V" w={40} h={h}>
+      <circle cx={cx} cy={cy} r={r} fill="var(--bg, #0f1419)" stroke="none" />
       <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
-        <path d="M20 0 V24" />
-        <circle cx="20" cy="40" r="16" />
-        <path d="M20 56 V80" />
+        <path d={`M${cx} 0 V${cy - r}`} />
+        <circle cx={cx} cy={cy} r={r} />
+        <path d={`M${cx} ${cy + r} V${h}`} />
       </g>
       <g
         fill={STROKE}
@@ -308,10 +313,10 @@ function VoltageSymbol({ selected, rotation = 0 }: SymProps) {
         textAnchor="middle"
         opacity={selected ? 1 : 0.92}
       >
-        <text x="20" y="32" dominantBaseline="central" transform={upright(rotation, 20, 32)}>
+        <text x={cx} y={26} dominantBaseline="central" transform={upright(rotation, cx, 26)}>
           +
         </text>
-        <text x="20" y="50" dominantBaseline="central" transform={upright(rotation, 20, 50)}>
+        <text x={cx} y={38} dominantBaseline="central" transform={upright(rotation, cx, 38)}>
           −
         </text>
       </g>
@@ -360,15 +365,19 @@ function ZenerDiodeSymbol({ selected }: SymProps) {
 }
 
 function CurrentSymbol({ selected }: SymProps) {
+  const cx = 20;
+  const cy = 32;
+  const r = 18;
+  const h = 64;
   return (
-    <SymbolSvg kind="I" w={40} h={80}>
-      <circle cx="20" cy="40" r="16" fill="var(--bg, #0f1419)" stroke="none" />
+    <SymbolSvg kind="I" w={40} h={h}>
+      <circle cx={cx} cy={cy} r={r} fill="var(--bg, #0f1419)" stroke="none" />
       <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
-        <path d="M20 0 V24" />
-        <circle cx="20" cy="40" r="16" />
-        <path d="M20 56 V80" />
-        <path d="M20 28 V52" />
-        <path d="M20 52 L15 44 M20 52 L25 44" />
+        <path d={`M${cx} 0 V${cy - r}`} />
+        <circle cx={cx} cy={cy} r={r} />
+        <path d={`M${cx} ${cy + r} V${h}`} />
+        <path d={`M${cx} ${cy - 6} V${cy + 6}`} />
+        <path d={`M${cx} ${cy + 6} L${cx - 5} ${cy - 2} M${cx} ${cy + 6} L${cx + 5} ${cy - 2}`} />
       </g>
     </SymbolSvg>
   );
@@ -376,6 +385,10 @@ function CurrentSymbol({ selected }: SymProps) {
 
 /** Circled transistors — 1:1 in 96×128. Pins at (48,0), (0,64), (48,128). */
 const TX = { w: 96, h: 128, cx: 48, cy: 64, r: 32, gateSw: 3.8 };
+/** Depletion channel extends past D/S tees (textbook solid bar). */
+const DEP_CH_EXT = 6;
+/** Uncircled MOSFET gate plate — slightly heavier than channel, not as thick as circled parts. */
+const MOS_GATE_SW = 2.2;
 /** Filled polarity arrow. Lead should stop at `bx,by` so the triangle stays clean. */
 const ARROW_LEN = 8;
 const ARROW_HALF = 3.6;
@@ -409,6 +422,8 @@ function filledArrow(
     d: `M${tipX} ${tipY} L${bx + px * half} ${by + py * half} L${bx - px * half} ${by - py * half} Z`,
     bx,
     by,
+    tipX,
+    tipY,
   };
 }
 
@@ -451,82 +466,152 @@ function PolarityArrow({
   );
 }
 
-function NmosSymbol({ selected }: SymProps) {
+/** Schematic diode on a vertical branch (triangle + bar — not a channel arrow). */
+function verticalBodyDiode(
+  x: number,
+  yHigh: number,
+  yLow: number,
+  pointToHigh: boolean,
+) {
+  const triHalf = 6.5;
+  const barHalf = 8;
+  if (pointToHigh) {
+    // N-channel: anode at S, cathode at D — triangle tip + bar toward D (top)
+    const yBase = yLow - 14;
+    const yTip = yBase - 13;
+    return (
+      <>
+        <path d={`M${x} ${yLow} V${yBase}`} />
+        <path
+          d={`M${x - triHalf} ${yBase} L${x} ${yTip} L${x + triHalf} ${yBase} Z`}
+          fill={STROKE}
+          stroke="none"
+        />
+        <path d={`M${x - barHalf} ${yTip} H${x + barHalf}`} strokeWidth={SW} />
+        <path d={`M${x} ${yTip} V${yHigh}`} />
+      </>
+    );
+  }
+  // P-channel: tip + bar toward S (bottom)
+  const yBase = yHigh + 14;
+  const yTip = yBase + 13;
   return (
-    <EnhMosfetBody kind="NMOS" selected={selected} depletion={false} pChannel={false} />
+    <>
+      <path d={`M${x} ${yHigh} V${yBase}`} />
+      <path
+        d={`M${x - triHalf} ${yBase} L${x} ${yTip} L${x + triHalf} ${yBase} Z`}
+        fill={STROKE}
+        stroke="none"
+      />
+      <path d={`M${x - barHalf} ${yTip} H${x + barHalf}`} strokeWidth={SW} />
+      <path d={`M${x} ${yTip} V${yLow}`} />
+    </>
   );
 }
 
-function PmosSymbol({ selected }: SymProps) {
-  return (
-    <EnhMosfetBody kind="PMOS" selected={selected} depletion={false} pChannel={true} />
-  );
-}
-
-function NmosDepSymbol({ selected }: SymProps) {
-  return (
-    <EnhMosfetBody kind="NMOS_D" selected={selected} depletion={true} pChannel={false} />
-  );
-}
-
-function PmosDepSymbol({ selected }: SymProps) {
-  return (
-    <EnhMosfetBody kind="PMOS_D" selected={selected} depletion={true} pChannel={true} />
-  );
-}
-
-/** Enhancement / depletion MOSFET — chart style: 3 clear horizontal channel dashes + body arrow. */
-function EnhMosfetBody({
+/** Standard textbook MOSFET — uncircled, body diode, enh = dashed channel / dep = solid. */
+function StandardMosfetBody({
   kind,
   selected,
   depletion,
   pChannel,
 }: SymProps & { kind: ComponentKind; depletion: boolean; pChannel: boolean }) {
-  const gateX = 22;
-  // Broken channel as three short horizontal bars ending at the D/S column (pin x).
-  const dashL = 30;
-  const col = TX.cx; // 48 — pin column
-  const yTop = 50;
-  const yMid = 64;
-  const yBot = 78;
-  // Arrow on mid dash: N → in (toward gate), P → out (away from gate).
-  // Tip sits mid-dash so left and right stubs stay visible.
-  const arr = pChannel
-    ? filledArrow(col - 8, yMid, dashL, yMid, 6.5, 3.2)
-    : filledArrow(dashL + 8, yMid, col, yMid, 6.5, 3.2);
-  const tipX = pChannel ? col - 8 : dashL + 8;
+  const c = uncircledEnhMosCore(pChannel);
+  const o = txOpacity(selected);
 
-  return circledTransistor({
-    kind,
-    selected,
-    arrow: arr.d,
-    children: (
-      <>
-        <path d={`M0 ${TX.cy} H${gateX - 4}`} />
-        <path d={`M${gateX} ${yTop - 4} V${yBot + 4}`} strokeWidth={TX.gateSw} />
+  return (
+    <SymbolSvg kind={kind} w={TX.w} h={TX.h}>
+      <g {...STROKE_BUTT} opacity={o}>
         {depletion ? (
           <>
-            <path d={`M${dashL} ${yTop} V${yBot}`} strokeWidth={TX.gateSw * 0.85} />
-            <path d={`M${dashL} ${yMid} H${Math.min(arr.bx, tipX)}`} />
-            <path d={`M${Math.max(arr.bx, tipX)} ${yMid} H${col}`} />
+            {/* Depletion: gate pin → bottom of gate plate (inverted L). */}
+            <path d={`M0 ${c.gateFootY} H${c.gateX}`} />
+            <path d={`M${c.gateX} ${c.yTop} V${c.gateFootY}`} strokeWidth={MOS_GATE_SW} />
           </>
         ) : (
           <>
-            {/* Three distinct horizontal channel dashes */}
-            <path d={`M${dashL} ${yTop} H${col}`} strokeWidth={2.2} />
-            <path d={`M${dashL} ${yBot} H${col}`} strokeWidth={2.2} />
-            {/* Mid dash: stubs on both sides of the arrow */}
-            <path d={`M${dashL} ${yMid} H${Math.min(arr.bx, tipX)}`} strokeWidth={2.2} />
-            <path d={`M${Math.max(arr.bx, tipX)} ${yMid} H${col}`} strokeWidth={2.2} />
+            {/* Enhancement M1/M2: inverted-L gate (pin at bottom of gate plate). */}
+            <path d={`M0 ${c.gateFootY} H${c.gateX}`} />
+            <path d={`M${c.gateX} ${c.yTop} V${c.gateFootY}`} strokeWidth={MOS_GATE_SW} />
           </>
         )}
-        <path d={`M${col} 0 V${yTop} H${dashL}`} />
-        <path d={`M${col} ${TX.h} V${yBot} H${dashL}`} />
-        {/* Body tie: mid column → down to source */}
-        <path d={`M${col} ${yMid} V${yBot}`} />
-      </>
-    ),
-  });
+
+        {depletion ? (
+          <path d={`M${c.ch} ${c.yTop - DEP_CH_EXT} V${c.yBot + DEP_CH_EXT}`} strokeWidth={SW} />
+        ) : (
+          <>
+            <path d={`M${c.ch} ${c.yTop} V${c.yTopEnd}`} />
+            <path d={`M${c.ch} ${c.yMidLo} V${c.yMidHi}`} />
+            <path d={`M${c.ch} ${c.yBotStart} V${c.yBot}`} />
+          </>
+        )}
+
+        {depletion ? (
+          pChannel ? (
+            <>
+              <path d={`M${TX.cx} 0 V${c.yTop} H${c.ch}`} />
+              <path d={`M${c.ch} ${c.yBot} H${c.arr.tipX}`} />
+              <path d={`M${c.ch} ${c.yMid} H${c.arr.bx}`} />
+              <path d={`M${c.arr.tipX} ${c.yMid} V${TX.h}`} />
+            </>
+          ) : (
+            <>
+              <path d={`M${TX.cx} 0 V${c.yTop} H${c.ch}`} />
+              <path d={`M${c.ch} ${c.yBot} H${TX.cx}`} />
+              <path d={`M${c.ch} ${c.yMid} H${c.arr.bx}`} />
+              <path d={`M${c.arr.bx} ${c.yMid} H${TX.cx} V${TX.h}`} />
+            </>
+          )
+        ) : (
+          <>
+            {/* D rail; S pin + body tie share one vertical at TX.cx (no offset). */}
+            <path d={`M${TX.cx} 0 V${c.yTopMid} H${c.dioX}`} />
+            <path d={`M${c.ch} ${c.yTopMid} H${c.bodyX}`} />
+            <path d={`M${c.ch} ${c.yBotMid} H${TX.cx}`} />
+            <path d={`M${c.ch} ${c.yMid} H${c.arr.bx}`} />
+            <path d={`M${c.arr.bx} ${c.yMid} H${TX.cx} V${TX.h}`} />
+            <path d={`M${TX.cx} ${c.yBotMid} H${c.dioX}`} />
+          </>
+        )}
+
+        {/* Body diode — D/S rails above for enhancement */}
+        {depletion ? (
+          <>
+            <path d={`M${TX.cx} ${c.yTop} H${c.dioX}`} />
+            {verticalBodyDiode(c.dioX, c.yTop, c.yBot, !pChannel)}
+            <path d={`M${c.dioX} ${c.yBot} H${pChannel ? c.arr.tipX : TX.cx}`} />
+          </>
+        ) : (
+          verticalBodyDiode(c.dioX, c.yTopMid, c.yBotMid, !pChannel)
+        )}
+      </g>
+      <PolarityArrow d={c.arr.d} selected={selected} />
+    </SymbolSvg>
+  );
+}
+
+function NmosSymbol({ selected }: SymProps) {
+  return (
+    <StandardMosfetBody kind="NMOS" selected={selected} depletion={false} pChannel={false} />
+  );
+}
+
+function PmosSymbol({ selected }: SymProps) {
+  return (
+    <StandardMosfetBody kind="PMOS" selected={selected} depletion={false} pChannel={true} />
+  );
+}
+
+function NmosDepSymbol({ selected }: SymProps) {
+  return (
+    <StandardMosfetBody kind="NMOS_D" selected={selected} depletion={true} pChannel={false} />
+  );
+}
+
+function PmosDepSymbol({ selected }: SymProps) {
+  return (
+    <StandardMosfetBody kind="PMOS_D" selected={selected} depletion={true} pChannel={true} />
+  );
 }
 
 function NjfetSymbol({ selected }: SymProps) {
@@ -634,19 +719,43 @@ function BjtBody({
 }
 
 /** Uncircled enhancement MOSFET core — same geometry as circled M-series. */
-function uncircledEnhMosCore() {
-  const ch = 38;
-  const gateX = 24;
-  const yTop = 48;
-  const yTopEnd = 54;
-  const yMidLo = 61;
-  const yMidHi = 67;
+function uncircledEnhMosCore(pChannel = false) {
+  const ch = 30;
+  const gateX = 20;
+  const yTop = 28;
+  const yTopEnd = 34;
+  const yTopMid = (yTop + yTopEnd) / 2;
+  const yMidLo = 58;
+  const yMidHi = 70;
   const yMid = 64;
-  const yBotStart = 74;
-  const yBot = 80;
+  const yBotStart = 94;
+  const yBot = 100;
+  const yBotMid = (yBotStart + yBot) / 2;
   const bodyX = 58;
-  const arr = filledArrow(ch + 1.2, yMid, bodyX, yMid);
-  return { ch, gateX, yTop, yTopEnd, yMidLo, yMidHi, yMid, yBotStart, yBot, bodyX, arr };
+  /** Gate lead meets bottom of gate plate (textbook L). */
+  const gateFootY = yBot;
+  /** Horizontal gap between body-tie column and parallel body-diode branch. */
+  const dioX = bodyX + 16;
+  const arr = pChannel
+    ? filledArrow(bodyX - 1.2, yMid, ch, yMid)
+    : filledArrow(ch + 1.2, yMid, bodyX, yMid);
+  return {
+    ch,
+    gateX,
+    yTop,
+    yTopEnd,
+    yTopMid,
+    yMidLo,
+    yMidHi,
+    yMid,
+    yBotStart,
+    yBot,
+    yBotMid,
+    gateFootY,
+    bodyX,
+    dioX,
+    arr,
+  };
 }
 
 function IgbtSymbol({ selected }: SymProps) {
@@ -724,8 +833,8 @@ function MosfetBody({ selected, kind }: SymProps & { kind: ComponentKind }) {
   return (
     <SymbolSvg kind={kind} w={TX.w} h={TX.h}>
       <g {...STROKE_BUTT} opacity={o}>
-        <path d={`M0 ${TX.cy} H${c.gateX - 6}`} />
-        <path d={`M${c.gateX} ${c.yTop} V${c.yBot}`} strokeWidth={TX.gateSw} />
+        <path d={`M0 ${c.gateFootY} H${c.gateX}`} />
+        <path d={`M${c.gateX} ${c.yTop} V${c.gateFootY}`} strokeWidth={MOS_GATE_SW} />
         <path d={`M${c.ch} ${c.yTop} V${c.yTopEnd}`} />
         <path d={`M${c.ch} ${c.yMidLo} V${c.yMidHi}`} />
         <path d={`M${c.ch} ${c.yBotStart} V${c.yBot}`} />
@@ -745,8 +854,8 @@ function SicMosSymbol({ selected }: SymProps) {
   return (
     <SymbolSvg kind="SICMOS" w={TX.w} h={TX.h}>
       <g {...STROKE_BUTT} opacity={o}>
-        <path d={`M0 ${TX.cy} H${c.gateX - 6}`} />
-        <path d={`M${c.gateX} ${c.yTop} V${c.yBot}`} strokeWidth={TX.gateSw} />
+        <path d={`M0 ${c.gateFootY} H${c.gateX}`} />
+        <path d={`M${c.gateX} ${c.yTop} V${c.gateFootY}`} strokeWidth={MOS_GATE_SW} />
         <path d={`M${c.ch} ${c.yTop} V${c.yTopEnd}`} />
         <path d={`M${c.ch} ${c.yMidLo} V${c.yMidHi}`} />
         <path d={`M${c.ch} ${c.yBotStart} V${c.yBot}`} />
@@ -773,7 +882,7 @@ function SicMosKelvinSymbol({ selected }: SymProps) {
     <SymbolSvg kind="SICMOS_K" w={TX.w} h={TX.h}>
       <g {...STROKE_BUTT} opacity={o}>
         <path d={`M0 ${TX.cy} H${c.gateX - 6}`} />
-        <path d={`M${c.gateX} ${c.yTop} V${c.yBot}`} strokeWidth={TX.gateSw} />
+        <path d={`M${c.gateX} ${c.yTop} V${c.yBot}`} strokeWidth={MOS_GATE_SW} />
         <path d={`M${c.ch} ${c.yTop} V${c.yTopEnd}`} />
         <path d={`M${c.ch} ${c.yMidLo} V${c.yMidHi}`} />
         <path d={`M${c.ch} ${c.yBotStart} V${c.yBot}`} />

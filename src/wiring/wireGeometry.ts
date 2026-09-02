@@ -101,6 +101,11 @@ export function computeEdgePolyline(
 
   const sourceSide = pinWorldSide(src, edge.sourceHandle) ?? "left";
   const targetSide = pinWorldSide(tgt, edge.targetHandle) ?? "right";
+  // User-clicked bends: pin → bends → pin directly (no auto stubs — those
+  // jogged off-grid and fought the preview the user saw while drawing).
+  if (waypoints.length > 0) {
+    return orthogonalPolyline([start, ...waypoints, end]);
+  }
   return routeWirePoints(start, end, waypoints, sourceSide, targetSide, STUB);
 }
 

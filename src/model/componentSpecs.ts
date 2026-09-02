@@ -166,25 +166,26 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
   // ---- Transistors -------------------------------------------------------
   NMOS: {
     kind: "NMOS", category: "Transistor", refdesPrefix: "M", label: "MOSFET N (enh)", glyph: "⊐N", emits: true,
-    pins: [pin("d", "D", "top"), pin("g", "G", "left"), pin("s", "S", "bottom")],
+    pins: [pin("d", "D", "top"), pin("g", "G", "left", 100 / 128), pin("s", "S", "bottom")],
     attributes: [modelAttr("NMOS_GEN"), A("bulk", "Bulk", "select", "source", { options: ["source", "explicit"] })],
     toSpice: (r, n, p) => `${r} ${n("d")} ${n("g")} ${n("s")} ${n("s")} ${p.model ?? "NMOS_GEN"}`,
   },
   PMOS: {
     kind: "PMOS", category: "Transistor", refdesPrefix: "M", label: "MOSFET P (enh)", glyph: "⊐P", emits: true,
-    pins: [pin("d", "D", "top"), pin("g", "G", "left"), pin("s", "S", "bottom")],
+    pins: [pin("d", "D", "top"), pin("g", "G", "left", 100 / 128), pin("s", "S", "bottom")],
     attributes: [modelAttr("PMOS_GEN")],
     toSpice: (r, n, p) => `${r} ${n("d")} ${n("g")} ${n("s")} ${n("s")} ${p.model ?? "PMOS_GEN"}`,
   },
   NMOS_D: {
     kind: "NMOS_D", category: "Transistor", refdesPrefix: "M", label: "MOSFET N (dep)", glyph: "⊐Nd", emits: true,
-    pins: [pin("d", "D", "top"), pin("g", "G", "left"), pin("s", "S", "bottom")],
+    pins: [pin("d", "D", "top"), pin("g", "G", "left", 100 / 128), pin("s", "S", "bottom")],
     attributes: [modelAttr("NMOS_DEP")],
     toSpice: (r, n, p) => `${r} ${n("d")} ${n("g")} ${n("s")} ${n("s")} ${p.model ?? "NMOS_DEP"}`,
   },
   PMOS_D: {
     kind: "PMOS_D", category: "Transistor", refdesPrefix: "M", label: "MOSFET P (dep)", glyph: "⊐Pd", emits: true,
-    pins: [pin("d", "D", "top"), pin("g", "G", "left"), pin("s", "S", "bottom")],
+    // S pin at arrow-tip column (bodyX − 1.2 in 96×128 symbol) — straight body tie, no jog.
+    pins: [pin("d", "D", "top"), pin("g", "G", "left", 100 / 128), pin("s", "S", "bottom", (58 - 1.2) / 96)],
     attributes: [modelAttr("PMOS_DEP")],
     toSpice: (r, n, p) => `${r} ${n("d")} ${n("g")} ${n("s")} ${n("s")} ${p.model ?? "PMOS_DEP"}`,
   },
