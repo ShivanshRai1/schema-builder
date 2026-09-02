@@ -4,11 +4,19 @@ import { PALETTE_DND_MIME } from "../dnd";
 import { hasSymbol } from "../nodes/symbols/layout";
 import { SchematicSymbol } from "../nodes/symbols/SchematicSymbols";
 
-// Component palette — parts only (modes live in the canvas toolbar).
+/** Single-line label for titles/tooltips (palette may use \\n for wrapping). */
+function flatLabel(label: string): string {
+  return label.replace(/\n/g, " ");
+}
+
+// Component palette — click enters LTspice-style stamp tool (no auto-drop).
+// Drag-and-drop onto the canvas / a part still works for one-shot place/replace.
 export function Palette({
-  onAdd,
+  activeKind,
+  onPick,
 }: {
-  onAdd: (kind: ComponentKind) => void;
+  activeKind: ComponentKind | null;
+  onPick: (kind: ComponentKind) => void;
 }) {
   return (
     <div className="palette">
@@ -19,14 +27,21 @@ export function Palette({
             {group.kinds.map((kind) => {
               const spec = COMPONENT_SPECS[kind];
               const showSvg = hasSymbol(kind);
+              const active = activeKind === kind;
+              const tip = flatLabel(spec.label);
               return (
                 <button
                   key={kind}
                   type="button"
-                  className="palette-item"
-                  title={`${spec.label} — click to add, or drag onto canvas / a part`}
+                  className={`palette-item${active ? " is-active" : ""}`}
+                  title={
+                    active
+                      ? `${tip} — left-click canvas to place, right-click to cancel`
+                      : `${tip} — click to place (stamp), or drag onto canvas / a part`
+                  }
+                  aria-pressed={active}
                   draggable
-                  onClick={() => onAdd(kind)}
+                  onClick={() => onPick(kind)}
                   onDragStart={(e) => {
                     e.dataTransfer.setData(PALETTE_DND_MIME, kind);
                     e.dataTransfer.effectAllowed = "copy";
@@ -46,6 +61,12 @@ export function Palette({
           </div>
         </div>
       ))}
+      {activeKind ? (
+        <p className="palette-tool-hint">
+          Placing {flatLabel(COMPONENT_SPECS[activeKind].label)}: left-click to stamp ·
+          right-click / Esc to cancel
+        </p>
+      ) : null}
     </div>
   );
 }

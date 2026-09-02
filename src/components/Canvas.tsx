@@ -38,7 +38,7 @@ import {
   WIRE_GRID,
   type Point,
 } from "../wiring/orthogonal";
-import { findNearestPin, findNearestPinOnNode, PIN_SNAP_RADIUS, pinWorldPoint, pinWorldSide, snapPositionToPeerPins } from "../wiring/pinGeometry";
+import { findNearestPin, findNearestPinOnNode, PIN_SNAP_RADIUS, pinWorldPoint, pinWorldSide, snapDropPositionToPeerPins, snapPositionToPeerPins, stampPositionFromCursor } from "../wiring/pinGeometry";
 import {
   computeEdgePolyline,
   closestPointOnPolyline,
@@ -53,6 +53,8 @@ import {
   type FlowRect,
 } from "../wiring/cutMove";
 import { translatePoints } from "../wiring/wireMove";
+import { SchematicSymbol } from "../nodes/symbols/SchematicSymbols";
+import { getSymbolLayout, hasSymbol } from "../nodes/symbols/layout";
 import { findWireJunctions } from "../wiring/junctions";
 
 /** Match Background gap — snap placement and wire corners to this grid. */
@@ -63,6 +65,46 @@ const MOVE_DRAG_THRESHOLD = 4;
 
 /** Hit radius for ending a draft on an existing wire (incl. under parts). */
 const WIRE_JOIN_RADIUS = 16;
+
+/** Ctrl+click (Win/Linux) or ⌘+click (Mac) — toggle item in the selection. */
+function isMultiSelectModifier(e: { ctrlKey?: boolean; metaKey?: boolean }): boolean {
+  return Boolean(e.ctrlKey || e.metaKey);
+}
+
+function edgeDeselectChanges(edges: Edge[]) {
+  return edges
+    .filter((ed) => ed.selected)
+    .map((ed) => ({ type: "select" as const, id: ed.id, selected: false }));
+}
+
+/** Part click selection — graph-owned, not React Flow's built-in single-select. */
+function applyPartSelectClick(
+  nodes: Node<ComponentData>[],
+  nodeId: string,
+  multi: boolean,
+  onNodesChange: OnNodesChange<Node<ComponentData>>,
+  onEdgesChange: OnEdgesChange,
+  edges: Edge[],
+) {
+  const node = nodes.find((n) => n.id === nodeId);
+  if (!node || node.data.kind === "TIP") return;
+
+  if (multi) {
+    onNodesChange([{ type: "select", id: nodeId, selected: !node.selected }]);
+  } else {
+    // Clicking one member of a multi-select keeps the group (for dragging).
+    if (node.selected && nodes.some((n) => n.selected && n.id !== nodeId)) return;
+    const changes = nodes.flatMap((n) => {
+      if (n.id === nodeId) {
+        return n.selected ? [] : [{ type: "select" as const, id: n.id, selected: true }];
+      }
+      return n.selected ? [{ type: "select" as const, id: n.id, selected: false }] : [];
+    });
+    if (changes.length) onNodesChange(changes);
+  }
+  const edgeClears = edgeDeselectChanges(edges);
+  if (edgeClears.length) onEdgesChange(edgeClears);
+}
 
 /** Click/tap tolerance for selecting or deleting thin / short wire segments. */
 const WIRE_HIT_RADIUS = 28;
@@ -259,6 +301,42 @@ function CutMarqueeOverlay({ rect }: { rect: FlowRect | null }) {
     </svg>
   );
 }
+
+/** Ghost part that follows the cursor while the stamp tool is active. */
+function PlaceGhostOverlay({
+  kind,
+  position,
+}: {
+  kind: ComponentKind;
+  position: Point | null;
+}) {
+  if (!position) return null;
+  const layout = getSymbolLayout(kind, 0) ?? { w: 92, h: 54 };
+  const label = COMPONENT_SPECS[kind]?.label ?? kind;
+  return (
+    <ViewportPortal>
+      <div
+        className="place-ghost"
+        style={{
+          position: "absolute",
+          left: position.x,
+          top: position.y,
+          width: layout.w,
+          height: layout.h,
+          pointerEvents: "none",
+          zIndex: 8,
+        }}
+        aria-hidden
+      >
+        {hasSymbol(kind) ? (
+          <SchematicSymbol kind={kind} selected={false} />
+        ) : (
+          <div className="place-ghost-card">{label}</div>
+        )}
+      </div>
+    </ViewportPortal>
+  );
+}
 /** Draft polyline lives in flow coords; transform with the viewport.
  * Rubber band is updated via DOM (no React re-render per mousemove). */
 function WireDraftOverlay({
@@ -371,6 +449,9 @@ export function Canvas({
   edges,
   mode,
   onModeChange,
+  placeKind,
+  onPlaceAt,
+  onCancelPlace,
   onNodesChange,
   onEdgesChange,
   onWire,
@@ -389,11 +470,16 @@ export function Canvas({
   onDeleteEdge,
   onStraightenEdge,
   onSelectEdge,
+  onOpenComponentProps,
 }: {
   nodes: Node<ComponentData>[];
   edges: Edge[];
   mode: CanvasMode;
   onModeChange: (mode: CanvasMode) => void;
+  /** Active palette stamp tool (null = not placing). */
+  placeKind: ComponentKind | null;
+  onPlaceAt: (kind: ComponentKind, x: number, y: number) => void;
+  onCancelPlace: () => void;
   onNodesChange: OnNodesChange<Node<ComponentData>>;
   onEdgesChange: OnEdgesChange;
   onWire: (payload: WireCompletePayload) => void;
@@ -410,7 +496,7 @@ export function Canvas({
   onReplace: (nodeId: string, kind: ComponentKind) => void;
   onAddAt: (kind: ComponentKind, x: number, y: number) => void;
   onCutMoveRegion: (rect: FlowRect) => void;
-  /** Box-select parts in a rectangle; additive when Shift is held. */
+  /** Box-select parts in a rectangle; additive when Ctrl/⌘ is held. */
   onSelectRegion: (rect: FlowRect, additive: boolean) => void;
   /** Split edge at point; returns new TIP id. Optional pre-extended graph. */
   onWireBranch: (
@@ -425,9 +511,12 @@ export function Canvas({
   onStraightenEdge: (edgeId: string, clickPoint?: Point) => void;
   /** Select exactly one edge; clear all node selection. */
   onSelectEdge: (edgeId: string) => void;
+  /** Right-click a real part → open LTspice-style properties dialog. */
+  onOpenComponentProps: (nodeId: string, clientX: number, clientY: number) => void;
   onMoveDisconnect: (
     nodeId: string,
     grabPoint?: { x: number; y: number },
+    opts?: { additive?: boolean },
   ) => {
     moveIds: string[];
     origins: { id: string; x: number; y: number }[];
@@ -453,6 +542,9 @@ export function Canvas({
   const [, setMoveHint] = useState<string | null>(null);
   const modeRef = useRef(mode);
   modeRef.current = mode;
+  const placeKindRef = useRef(placeKind);
+  placeKindRef.current = placeKind;
+  const [placeGhost, setPlaceGhost] = useState<Point | null>(null);
 
   type MoveDrag = {
     startFlow: Point;
@@ -486,6 +578,12 @@ export function Canvas({
   onStraightenEdgeRef.current = onStraightenEdge;
   const onSelectEdgeRef = useRef(onSelectEdge);
   onSelectEdgeRef.current = onSelectEdge;
+  const onPlaceAtRef = useRef(onPlaceAt);
+  onPlaceAtRef.current = onPlaceAt;
+  const onCancelPlaceRef = useRef(onCancelPlace);
+  onCancelPlaceRef.current = onCancelPlace;
+  const onOpenComponentPropsRef = useRef(onOpenComponentProps);
+  onOpenComponentPropsRef.current = onOpenComponentProps;
   onReplaceRef.current = onReplace;
   onWireRef.current = onWire;
   onWirePartialRef.current = onWirePartial;
@@ -926,7 +1024,69 @@ export function Canvas({
     setMarquee(null);
   }, [mode, cancelWiringDraft]);
 
-  const beginMoveDrag = useCallback((nodeId: string, clientX: number, clientY: number) => {
+  // Entering stamp tool: drop any wire draft; leaving clears the ghost.
+  useEffect(() => {
+    if (!placeKind) {
+      setPlaceGhost(null);
+      return;
+    }
+    cancelWiringDraft();
+  }, [placeKind, cancelWiringDraft]);
+
+  const stampAtClient = useCallback((clientX: number, clientY: number) => {
+    const kind = placeKindRef.current;
+    const rf = rfRef.current;
+    if (!kind || !rf || kind === "TIP") return;
+    const cursor = rf.screenToFlowPosition({ x: clientX, y: clientY });
+    // Exact center-under-cursor + grid — no peer magnetic shift (avoids "lands nearby").
+    const pos = stampPositionFromCursor(kind, cursor, SCHEMATIC_GRID);
+    onPlaceAtRef.current(kind, pos.x, pos.y);
+    setPlaceGhost(pos);
+  }, []);
+
+  // Stamp tool: ghost follows cursor; left-click places; right-click cancels.
+  useEffect(() => {
+    if (!placeKind) return;
+    const root = canvasElRef.current;
+    if (!root) return;
+
+    const onMove = (e: PointerEvent) => {
+      const rf = rfRef.current;
+      const kind = placeKindRef.current;
+      if (!rf || !kind) return;
+      const cursor = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+      setPlaceGhost(stampPositionFromCursor(kind, cursor, SCHEMATIC_GRID));
+    };
+
+    const onClick = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.(".react-flow__controls, .react-flow__minimap")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      stampAtClient(e.clientX, e.clientY);
+    };
+
+    const onContext = (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      onCancelPlaceRef.current();
+    };
+
+    root.addEventListener("pointermove", onMove);
+    root.addEventListener("click", onClick, true);
+    root.addEventListener("contextmenu", onContext, true);
+    return () => {
+      root.removeEventListener("pointermove", onMove);
+      root.removeEventListener("click", onClick, true);
+      root.removeEventListener("contextmenu", onContext, true);
+    };
+  }, [placeKind, stampAtClient]);
+
+  const beginMoveDrag = useCallback(
+    (nodeId: string, clientX: number, clientY: number, multiToggle = false) => {
     if (modeRef.current !== "move") return;
     if (moveDragRef.current) return;
     const rf = rfRef.current;
@@ -935,12 +1095,14 @@ export function Canvas({
     const grabPoint = rf.screenToFlowPosition({ x: clientX, y: clientY });
     const startClient = { x: clientX, y: clientY };
 
-    // Keep an existing multi-selection when dragging one of its members.
+    // Keep an existing multi-selection when dragging one of its members, or
+    // when Ctrl/⌘+click will toggle — don't wipe before the click handler runs.
     const selectedParts = nodesRef.current.filter(
       (n) => n.selected && n.data.kind !== "TIP",
     );
     const keepGroup =
-      selectedParts.length > 1 && selectedParts.some((n) => n.id === nodeId);
+      multiToggle ||
+      (selectedParts.length > 1 && selectedParts.some((n) => n.id === nodeId));
     if (!keepGroup) {
       onNodesChangeRef.current(
         nodesRef.current.map((n) => ({
@@ -956,7 +1118,9 @@ export function Canvas({
     // Start the drag once movement is confirmed. Connected edges stay in the
     // graph, so only their moving endpoint is redrawn.
     const arm = () => {
-      const pickup = onMoveDisconnectRef.current(nodeId, grabPoint);
+      const pickup = onMoveDisconnectRef.current(nodeId, grabPoint, {
+        additive: multiToggle,
+      });
       if (!pickup || !pickup.origins.length) return false;
       setMoveHint("Moving with connected wires…");
       moveDragRef.current = { startFlow: grabPoint, origins: pickup.origins };
@@ -1034,7 +1198,9 @@ export function Canvas({
 
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
-  }, []);
+  },
+  [],
+  );
 
   /** Whole-wire cut + translate (tips + path move together). */
   const beginWireMoveDrag = useCallback((edgeId: string, clientX: number, clientY: number) => {
@@ -1142,6 +1308,7 @@ export function Canvas({
 
     const onDown = (e: PointerEvent) => {
       if (e.button !== 0) return;
+      if (placeKindRef.current) return;
       if (moveDragRef.current) return;
       const t = e.target as HTMLElement | null;
       const nodeEl = t?.closest?.(".react-flow__node") as HTMLElement | null;
@@ -1153,7 +1320,7 @@ export function Canvas({
 
       e.preventDefault();
       e.stopPropagation();
-      beginMoveDrag(id, e.clientX, e.clientY);
+      beginMoveDrag(id, e.clientX, e.clientY, isMultiSelectModifier(e));
     };
 
     root.addEventListener("pointerdown", onDown, true);
@@ -1169,6 +1336,7 @@ export function Canvas({
 
     const onDown = (e: PointerEvent) => {
       if (e.button !== 0) return;
+      if (placeKindRef.current) return;
       if (wiringRef.current) return;
       if (moveDragRef.current) return;
       const t = e.target as HTMLElement | null;
@@ -1203,7 +1371,11 @@ export function Canvas({
       setMarquee(null);
       if (!draft) return;
       const rect = normalizeRect(draft.start, draft.end);
-      if (!rectMeaningful(rect)) return;
+      if (!rectMeaningful(rect)) {
+        // Plain click on empty canvas — deselect (Ctrl/⌘ plain click leaves selection).
+        if (!cutMove && !additive) onSelectEdgeRef.current("");
+        return;
+      }
       // mouseup is followed by a click on the pane — don't clear the new selection.
       skipPaneClickRef.current = true;
       if (cutMove) onCutMoveRef.current(rect);
@@ -1212,6 +1384,7 @@ export function Canvas({
 
     const onDown = (e: MouseEvent) => {
       if (e.button !== 0) return;
+      if (placeKindRef.current) return;
       if (moveDragRef.current) return;
       const t = e.target as HTMLElement | null;
       if (t?.closest?.(".react-flow__node, .react-flow__controls, .react-flow__minimap, .wire-draft-hint")) {
@@ -1224,10 +1397,8 @@ export function Canvas({
       e.preventDefault();
       e.stopPropagation();
 
-      const additive = e.shiftKey;
       const cutMove = mode === "move" && e.shiftKey;
-      // Shift+drag in move = cut-move (not additive select).
-      const selectAdditive = additive && !cutMove;
+      const selectAdditive = isMultiSelectModifier(e);
 
       const start = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
       marqueeRef.current = { start, end: start };
@@ -1279,6 +1450,7 @@ export function Canvas({
     if (!root) return;
 
     const onClick = (event: MouseEvent) => {
+      if (placeKindRef.current) return;
       const target = event.target as HTMLElement | null;
       if (target?.closest?.(".react-flow__controls, .react-flow__minimap")) return;
       const rf = rfRef.current;
@@ -1349,6 +1521,7 @@ export function Canvas({
     if (!root) return;
 
     const onClick = (event: MouseEvent) => {
+      if (placeKindRef.current) return;
       const target = event.target as HTMLElement | null;
       if (target?.closest?.(".react-flow__controls, .react-flow__minimap")) return;
       const rf = rfRef.current;
@@ -1384,6 +1557,63 @@ export function Canvas({
 
     root.addEventListener("click", onClick, true);
     return () => root.removeEventListener("click", onClick, true);
+  }, [mode]);
+
+  // Explore / Move: capture part clicks before React Flow can single-select.
+  useEffect(() => {
+    if (mode !== "move" && mode !== "explore") return;
+    const root = canvasElRef.current;
+    if (!root) return;
+
+    const onClick = (event: MouseEvent) => {
+      if (placeKindRef.current) return;
+      if (event.button !== 0) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest?.(".react-flow__controls, .react-flow__minimap")) return;
+      if (target?.closest?.(".component-pin, .react-flow__handle")) return;
+
+      const nodeEl = target?.closest?.(".react-flow__node") as HTMLElement | null;
+      if (!nodeEl) return;
+      const nodeId = nodeEl.getAttribute("data-id");
+      if (!nodeId) return;
+      const node = nodesRef.current.find((n) => n.id === nodeId);
+      if (!node || node.data.kind === "TIP") return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      applyPartSelectClick(
+        nodesRef.current,
+        nodeId,
+        isMultiSelectModifier(event),
+        onNodesChangeRef.current,
+        onEdgesChangeRef.current,
+        edgesRef.current,
+      );
+    };
+
+    root.addEventListener("click", onClick, true);
+    return () => root.removeEventListener("click", onClick, true);
+  }, [mode]);
+
+  // Explore: block React Flow mousedown selection (Move uses beginMoveDrag below).
+  useEffect(() => {
+    if (mode !== "explore") return;
+    const root = canvasElRef.current;
+    if (!root) return;
+
+    const onDown = (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      const nodeEl = (e.target as HTMLElement | null)?.closest?.(
+        ".react-flow__node",
+      ) as HTMLElement | null;
+      if (!nodeEl) return;
+      if (nodeEl.querySelector(".component-node.tip-node")) return;
+      e.stopPropagation();
+    };
+
+    root.addEventListener("pointerdown", onDown, true);
+    return () => root.removeEventListener("pointerdown", onDown, true);
   }, [mode]);
 
   // Double-click hit-test so thin post-move wires still straighten even when
@@ -1516,6 +1746,12 @@ export function Canvas({
         return;
       }
       if (e.key !== "Escape") return;
+      if (placeKindRef.current) {
+        e.preventDefault();
+        e.stopPropagation();
+        onCancelPlaceRef.current();
+        return;
+      }
       if (modeRef.current === "delete") {
         e.preventDefault();
         e.stopPropagation();
@@ -1727,9 +1963,20 @@ export function Canvas({
       e.stopPropagation();
       return;
     }
-    // Explore: pan/zoom only — pane clicks do nothing.
-    if (modeRef.current === "explore") return;
-    if (modeRef.current === "move" || modeRef.current === "delete") return;
+    // Explore / Move / Delete: empty-pane click clears selection (Move also
+    // handles this via the marquee mouseup path; Explore uses this handler).
+    if (
+      modeRef.current === "explore" ||
+      modeRef.current === "move" ||
+      modeRef.current === "delete"
+    ) {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.(".react-flow__node, .react-flow__edge, .component-pin, .react-flow__handle, .tip-node")) {
+        return;
+      }
+      onSelectEdgeRef.current("");
+      return;
+    }
     const rf = rfRef.current;
     if (!rf) return;
     const t = e.target as HTMLElement | null;
@@ -1853,43 +2100,8 @@ export function Canvas({
         if (hit) applyPinHit(hit.nodeId, hit.pinId);
         return;
       }
-
-      // Explore / Move: Shift+click toggles multi-select; plain click single-selects
-      // (unless clicking a member of an existing group — keep the group).
-      // Free tips: select the attached stub so Delete/Backspace removes it.
-      if (modeRef.current === "move" || modeRef.current === "explore") {
-        if (node.data.kind === "TIP") {
-          e.stopPropagation();
-          const edge = preferredEdgeForTip(
-            nodesRef.current,
-            edgesRef.current,
-            node.id,
-          );
-          if (edge) onSelectEdgeRef.current(edge.id);
-          return;
-        }
-        if (e.shiftKey) {
-          e.stopPropagation();
-          onNodesChange([
-            { type: "select" as const, id: node.id, selected: !node.selected },
-          ]);
-          return;
-        }
-        e.stopPropagation();
-        // Keep cut-move / box group when clicking a selected member to drag.
-        if (node.selected && nodes.some((n) => n.selected && n.id !== node.id)) {
-          return;
-        }
-        const changes = nodes.flatMap((n) => {
-          if (n.id === node.id) {
-            return n.selected ? [] : [{ type: "select" as const, id: n.id, selected: true }];
-          }
-          return n.selected ? [{ type: "select" as const, id: n.id, selected: false }] : [];
-        });
-        if (changes.length) onNodesChange(changes);
-      }
     },
-    [nodes, onNodesChange, tryMagneticComplete, applyPinHit],
+    [tryMagneticComplete, applyPinHit],
   );
 
   const lockedPath = useMemo(() => {
@@ -1907,7 +2119,7 @@ export function Canvas({
   return (
     <div
       ref={canvasElRef}
-      className={`canvas${mode === "explore" ? " canvas-explore" : ""}${mode === "wire" ? " canvas-wire" : ""}${wiring ? " canvas-wiring" : ""}${mode === "move" ? " canvas-move" : ""}${mode === "delete" ? " canvas-delete" : ""}${marquee ? " canvas-marquee" : ""}`}
+      className={`canvas${mode === "explore" ? " canvas-explore" : ""}${mode === "wire" ? " canvas-wire" : ""}${wiring ? " canvas-wiring" : ""}${mode === "move" ? " canvas-move" : ""}${mode === "delete" ? " canvas-delete" : ""}${marquee ? " canvas-marquee" : ""}${placeKind ? " canvas-placing" : ""}`}
     >
       <ReactFlow
         nodes={nodes}
@@ -1918,7 +2130,7 @@ export function Canvas({
         onEdgesChange={onEdgesChange}
         onNodeClick={onNodeClick}
         onNodeMouseMove={onNodeMouseMove}
-        elementsSelectable={mode === "explore" || mode === "move"}
+        elementsSelectable={false}
         nodesFocusable={mode === "explore" || mode === "move"}
         edgesFocusable={mode === "explore" || mode === "move"}
         nodesDraggable={false}
@@ -1926,7 +2138,7 @@ export function Canvas({
         multiSelectionKeyCode={null}
         selectionKeyCode={null}
         selectionOnDrag={false}
-        panOnDrag={mode === "explore" ? true : mode === "wire" ? [1] : false}
+        panOnDrag={placeKind ? false : mode === "explore" ? true : mode === "wire" ? [1] : false}
         deleteKeyCode={null}
         connectionMode={ConnectionMode.Loose}
         defaultEdgeOptions={defaultEdgeOptions}
@@ -1943,14 +2155,31 @@ export function Canvas({
         onPaneMouseMove={onPaneMouseMove}
         onPaneContextMenu={(e) => {
           e.preventDefault();
+          if (placeKindRef.current) {
+            onCancelPlaceRef.current();
+            return;
+          }
           if (wiringRef.current) finishOrKeepPartial();
         }}
-        onNodeContextMenu={(e) => {
+        onNodeContextMenu={(e, node) => {
           e.preventDefault();
-          if (wiringRef.current) finishOrKeepPartial();
+          if (placeKindRef.current) {
+            onCancelPlaceRef.current();
+            return;
+          }
+          if (wiringRef.current) {
+            finishOrKeepPartial();
+            return;
+          }
+          if (node.data.kind === "TIP") return;
+          onOpenComponentPropsRef.current(node.id, e.clientX, e.clientY);
         }}
         onEdgeContextMenu={(e) => {
           e.preventDefault();
+          if (placeKindRef.current) {
+            onCancelPlaceRef.current();
+            return;
+          }
           if (wiringRef.current) finishOrKeepPartial();
         }}
         onDragOver={(e) => {
@@ -1967,11 +2196,20 @@ export function Canvas({
           if (wiringRef.current) return;
           const kind = e.dataTransfer.getData(PALETTE_DND_MIME) as ComponentKind;
           if (!kind || !COMPONENT_SPECS[kind] || kind === "TIP" || !rfRef.current) return;
-          const pos = snapPoint(
-            rfRef.current.screenToFlowPosition({ x: e.clientX, y: e.clientY }),
-            SCHEMATIC_GRID,
+          const cursor = rfRef.current.screenToFlowPosition({
+            x: e.clientX,
+            y: e.clientY,
+          });
+          // Same center-under-cursor math as stamp; peer snap only when clearly near.
+          let pos = stampPositionFromCursor(kind, cursor, SCHEMATIC_GRID);
+          pos = snapDropPositionToPeerPins(
+            kind,
+            pos,
+            nodesRef.current,
+            SCHEMATIC_GRID * 2,
           );
           onAddAt(kind, pos.x, pos.y);
+          onCancelPlaceRef.current();
         }}
       >
         <Background gap={SCHEMATIC_GRID} />
@@ -1984,6 +2222,7 @@ export function Canvas({
         />
         <CutMarqueeOverlay rect={marqueeRect} />
         <JunctionOverlay junctions={wireMarks.junctions} crossings={wireMarks.crossings} />
+        {placeKind ? <PlaceGhostOverlay kind={placeKind} position={placeGhost} /> : null}
       </ReactFlow>
     </div>
   );

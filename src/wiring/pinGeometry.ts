@@ -1,5 +1,5 @@
 import type { Node } from "@xyflow/react";
-import type { ComponentData, PinSpec } from "../model/types";
+import type { ComponentData, ComponentKind, PinSpec } from "../model/types";
 import { COMPONENT_SPECS } from "../model/componentSpecs";
 import { getSymbolLayout } from "../nodes/symbols/layout";
 import { normalizeRotation, rotatePinSpec } from "../model/rotation";
@@ -128,16 +128,14 @@ export function pinWorldSide(node: Node<ComponentData>, pinId: string): PinSide 
  * Nudge a proposed part position so its pins line up with a nearby peer's pins
  * (e.g. stack V2 on V1's column/row). Threshold is flow units.
  */
-export function snapPositionToPeerPins(
-  nodes: Node<ComponentData>[],
-  movingId: string,
+function snapGhostToPeerPins(
+  ghost: Node<ComponentData>,
   position: Point,
-  threshold = 10,
+  nodes: Node<ComponentData>[],
+  excludeId: string | null,
+  threshold: number,
 ): Point {
-  const moving = nodes.find((n) => n.id === movingId);
-  if (!moving || moving.data.kind === "TIP") return position;
-  const ghost: Node<ComponentData> = { ...moving, position };
-  const pins = COMPONENT_SPECS[moving.data.kind].pins;
+  const pins = COMPONENT_SPECS[ghost.data.kind].pins;
   let bestX: number | null = null;
   let bestY: number | null = null;
   let bestXd = threshold;
@@ -147,7 +145,8 @@ export function snapPositionToPeerPins(
     const pt = pinWorldPoint(ghost, pin.id);
     if (!pt) continue;
     for (const other of nodes) {
-      if (other.id === movingId || other.data.kind === "TIP") continue;
+      if (excludeId && other.id === excludeId) continue;
+      if (other.data.kind === "TIP") continue;
       for (const op of COMPONENT_SPECS[other.data.kind].pins) {
         const ot = pinWorldPoint(other, op.id);
         if (!ot) continue;
@@ -168,4 +167,67 @@ export function snapPositionToPeerPins(
     x: bestX ?? position.x,
     y: bestY ?? position.y,
   };
+}
+
+/** Cursor → node top-left: symbol center under the mouse (LTspice-like grab). */
+export function paletteDropTopLeft(kind: ComponentKind, cursor: Point): Point {
+  const layout = getSymbolLayout(kind, 0);
+  if (!layout) {
+    // HTML-card fallback (no SVG layout) — still center the default box.
+    return { x: cursor.x - 46, y: cursor.y - 27 };
+  }
+  return {
+    x: cursor.x - layout.w / 2,
+    y: cursor.y - layout.h / 2,
+  };
+}
+
+/**
+ * Stamp / drop position from a flow-space cursor.
+ * Snap the cursor first, then center the part on that point so ghost and
+ * placed node share the same math (no post-place nudge).
+ */
+export function stampPositionFromCursor(
+  kind: ComponentKind,
+  cursor: Point,
+  grid: number,
+): Point {
+  const snappedCursor = {
+    x: Math.round(cursor.x / grid) * grid,
+    y: Math.round(cursor.y / grid) * grid,
+  };
+  const topLeft = paletteDropTopLeft(kind, snappedCursor);
+  return {
+    x: Math.round(topLeft.x / grid) * grid,
+    y: Math.round(topLeft.y / grid) * grid,
+  };
+}
+
+/** Palette drop: magnetic pin-row/column align when near an existing part. */
+export function snapDropPositionToPeerPins(
+  kind: ComponentKind,
+  position: Point,
+  nodes: Node<ComponentData>[],
+  threshold = 16,
+): Point {
+  if (kind === "TIP") return position;
+  const ghost: Node<ComponentData> = {
+    id: "__palette_drop__",
+    type: "component",
+    position,
+    data: { kind, refdes: "", params: {} },
+  };
+  return snapGhostToPeerPins(ghost, position, nodes, null, threshold);
+}
+
+export function snapPositionToPeerPins(
+  nodes: Node<ComponentData>[],
+  movingId: string,
+  position: Point,
+  threshold = 10,
+): Point {
+  const moving = nodes.find((n) => n.id === movingId);
+  if (!moving || moving.data.kind === "TIP") return position;
+  const ghost: Node<ComponentData> = { ...moving, position };
+  return snapGhostToPeerPins(ghost, position, nodes, movingId, threshold);
 }

@@ -10,15 +10,18 @@ import {
 import { Canvas, type CanvasMode, type WireCompletePayload, type WirePartialPayload } from "./components/Canvas";
 import { Palette } from "./components/Palette";
 import { ModeToolbar } from "./components/ModeToolbar";
-import { PropertiesPanel } from "./components/PropertiesPanel";
+import {
+  ComponentPropertiesDialog,
+  type ComponentPropsDraft,
+} from "./components/ComponentPropertiesDialog";
 import { NetlistPanel } from "./components/NetlistPanel";
 import { ChatPanel } from "./components/ChatPanel";
 import { SimPanel } from "./components/SimPanel";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { FloatingWindow } from "./components/FloatingWindow";
 import { COMPONENT_SPECS, defaultParams } from "./model/componentSpecs";
-import type { ComponentData, ComponentKind, LabelPosition } from "./model/types";
-import { nextRotation } from "./model/rotation";
+import type { ComponentData, ComponentKind } from "./model/types";
+import { nextRotation, normalizeRotation } from "./model/rotation";
 import { toNetlist } from "./netlist/toNetlist";
 import { extractDirectives } from "./netlist/parseDeviceParams";
 import { applyNetlistToGraph } from "./netlist/applyNetlistToGraph";
@@ -154,14 +157,19 @@ export default function App() {
   const [simFloating, setSimFloating] = useState(false);
   const [rightWidth, setRightWidth] = useState(380);
   const [slotFr, setSlotFr] = useState({
-    props: 0.9,
-    netlist: 1.15,
-    sim: 0.95,
+    netlist: 1.2,
+    sim: 1.0,
     chat: 1.0,
     library: 0.55,
   });
   const rightColRef = useRef<HTMLDivElement>(null);
   const [canvasMode, setCanvasMode] = useState<CanvasMode>("explore");
+  const [placeKind, setPlaceKind] = useState<ComponentKind | null>(null);
+  const [propsDialog, setPropsDialog] = useState<{
+    nodeId: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const [histTick, setHistTick] = useState(0);
 
   const nodesRef = useRef(nodes);
@@ -209,8 +217,14 @@ export default function App() {
     () => toNetlist(nodes, edges, { title: "SimulAI demo", directives, library }),
     [nodes, edges, directives, library],
   );
-  const selected = nodes.filter((n) => n.selected);
-  const selectedNode = selected.length === 1 ? selected[0] : null;
+  const propsDialogNode = propsDialog
+    ? nodes.find((n) => n.id === propsDialog.nodeId && n.data.kind !== "TIP") ?? null
+    : null;
+
+  // Part deleted/replaced while dialog open → close it.
+  useEffect(() => {
+    if (propsDialog && !propsDialogNode) setPropsDialog(null);
+  }, [propsDialog, propsDialogNode]);
 
   const beginRowSplit = useCallback(
     (upper: keyof typeof slotFr, lower: keyof typeof slotFr, e: React.PointerEvent) => {
@@ -711,7 +725,7 @@ export default function App() {
     setEdges(result.edges);
   }, [setNodes, setEdges, pushHistory]);
 
-  /** Box-select real parts in a rectangle (Shift = add to selection). */
+  /** Box-select real parts in a rectangle (Ctrl/⌘ = add to selection). */
   const onSelectRegion = useCallback(
     (rect: FlowRect, additive: boolean) => {
       const hit = new Set(
@@ -750,14 +764,25 @@ export default function App() {
    * T-junction tips and sever C from the rail.
    */
   const onMoveDisconnect = useCallback(
-    (nodeId: string, grabPoint?: { x: number; y: number }) => {
+    (
+      nodeId: string,
+      grabPoint?: { x: number; y: number },
+      opts?: { additive?: boolean },
+    ) => {
       const nodesNow = nodesRef.current;
       let edgesNow = edgesRef.current;
 
       // Multi-select: move the whole selected group of real parts together.
-      const selectedParts = nodesNow.filter(
+      let selectedParts = nodesNow.filter(
         (n) => n.selected && n.data.kind !== "TIP",
       );
+      const clicked = nodesNow.find((n) => n.id === nodeId);
+      if (opts?.additive && clicked && !clicked.selected && clicked.data.kind !== "TIP") {
+        selectedParts = [...selectedParts, clicked];
+        setNodes((ns) =>
+          ns.map((n) => (n.id === nodeId ? { ...n, selected: true } : n)),
+        );
+      }
       if (
         selectedParts.length > 1 &&
         selectedParts.some((n) => n.id === nodeId)
@@ -890,14 +915,12 @@ export default function App() {
   }, [setNodes, setEdges, pushHistory]);
 
 
-  const addComponent = useCallback((kind: ComponentKind) => {
-    pushHistory();
-    setNodes((ns) => {
-      const alloc = makeAllocator(ns);
-      const k = placeCounter.current++;
-      return [...ns, mk(newId(), kind, alloc(kind), 240 + (k % 6) * 34, 200 + (k % 6) * 34)];
-    });
-  }, [setNodes, pushHistory]);
+  /** Palette click: enter stamp tool (toggle off if same kind). */
+  const pickPlaceKind = useCallback((kind: ComponentKind) => {
+    setPlaceKind((cur) => (cur === kind ? null : kind));
+  }, []);
+
+  const cancelPlace = useCallback(() => setPlaceKind(null), []);
 
   const addComponentAt = useCallback((kind: ComponentKind, x: number, y: number) => {
     pushHistory();
@@ -906,6 +929,11 @@ export default function App() {
       return [...ns, mk(newId(), kind, alloc(kind), x, y)];
     });
   }, [setNodes, pushHistory]);
+
+  const setCanvasModeAndClearPlace = useCallback((mode: CanvasMode) => {
+    setPlaceKind(null);
+    setCanvasMode(mode);
+  }, []);
 
   const replaceComponent = useCallback((nodeId: string, kind: ComponentKind) => {
     const target = nodesRef.current.find((n) => n.id === nodeId);
@@ -936,32 +964,63 @@ export default function App() {
     );
   }, [setNodes, setEdges, pushHistory]);
 
-  const changeParam = useCallback((nodeId: string, key: string, value: string) => {
-    pushHistory();
-    setNodes((ns) => ns.map((n) => n.id === nodeId ? { ...n, data: { ...n.data, params: { ...n.data.params, [key]: value } } } : n));
-  }, [setNodes, pushHistory]);
+  const openComponentProps = useCallback(
+    (nodeId: string, x: number, y: number) => {
+      const node = nodesRef.current.find((n) => n.id === nodeId);
+      if (!node || node.data.kind === "TIP") return;
+      setNodes((ns) => ns.map((n) => ({ ...n, selected: n.id === nodeId })));
+      setEdges((es) => es.map((e) => (e.selected ? { ...e, selected: false } : e)));
+      setPropsDialog({ nodeId, x, y });
+    },
+    [setNodes, setEdges],
+  );
 
-  const changeRefdes = useCallback((nodeId: string, refdes: string) => {
-    pushHistory();
-    setNodes((ns) => ns.map((n) => n.id === nodeId ? { ...n, data: { ...n.data, refdes } } : n));
-  }, [setNodes, pushHistory]);
+  const applyComponentProps = useCallback(
+    (nodeId: string, draft: ComponentPropsDraft) => {
+      pushHistory();
+      setNodes((ns) =>
+        ns.map((n) => {
+          if (n.id !== nodeId) return n;
+          return {
+            ...n,
+            data: {
+              ...n.data,
+              refdes: draft.refdes,
+              params: { ...n.data.params, ...draft.params },
+              labelPos: draft.labelPos === "auto" ? undefined : draft.labelPos,
+              rotation: normalizeRotation(draft.rotation),
+            },
+          };
+        }),
+      );
+      setPropsDialog(null);
+    },
+    [setNodes, pushHistory],
+  );
 
-  const changeLabelPos = useCallback((nodeId: string, labelPos: LabelPosition) => {
-    pushHistory();
-    setNodes((ns) =>
-      ns.map((n) =>
+  const rotateNodeLive = useCallback(
+    (nodeId: string) => {
+      const nodesNow = nodesRef.current;
+      const edgesNow = edgesRef.current;
+      const target = nodesNow.find((n) => n.id === nodeId && n.data.kind !== "TIP");
+      if (!target) return;
+      pushHistory();
+      const moved = new Set([nodeId]);
+      const nextNodes = nodesNow.map((n) =>
         n.id === nodeId
-          ? {
-              ...n,
-              data: {
-                ...n.data,
-                labelPos: labelPos === "auto" ? undefined : labelPos,
-              },
-            }
+          ? { ...n, data: { ...n.data, rotation: nextRotation(n.data.rotation) } }
           : n,
-      ),
-    );
-  }, [setNodes, pushHistory]);
+      );
+      const finalized = finalizeConnectedPartMove(nextNodes, edgesNow, moved);
+      nodesRef.current = finalized.nodes;
+      edgesRef.current = finalized.edges;
+      flushSync(() => {
+        setNodes(finalized.nodes);
+        setEdges(finalized.edges);
+      });
+    },
+    [setNodes, setEdges, pushHistory],
+  );
 
   const deleteNodes = useCallback((ids: string[]) => {
     if (!ids.length) return;
@@ -984,6 +1043,7 @@ export default function App() {
     const selectedNodeIds = nodesNow.filter((n) => n.selected).map((n) => n.id);
     const selectedEdgeIds = edgesNow.filter((e) => e.selected).map((e) => e.id);
     if (!selectedNodeIds.length && !selectedEdgeIds.length) {
+      setPlaceKind(null);
       setCanvasMode((current) => {
         if (current === "wire") return current;
         return current === "delete" ? "explore" : "delete";
@@ -2016,7 +2076,10 @@ export default function App() {
               <p className="mode-guide-lead">Pan and zoom, or click to select parts and wires.</p>
               <ul className="mode-guide-list">
                 <li><kbd>Drag</kbd> empty canvas to pan · <kbd>Scroll</kbd> to zoom</li>
-                <li><kbd>Click</kbd> a part or wire to select · hollow square = free wire end</li>
+                <li>Palette: click a part, then left-click to stamp · right-click / Esc cancels</li>
+                <li><kbd>Click</kbd> a part or wire to select · <kbd>Ctrl</kbd>+click toggles multi-select</li>
+                <li><kbd>Right-click</kbd> a part to edit properties (OK / Cancel)</li>
+                <li><kbd>Click</kbd> empty canvas to deselect · hollow square = free wire end</li>
                 <li><kbd>Delete</kbd> / <kbd>Backspace</kbd> removes selection · switch to <strong>Move</strong> to drag parts</li>
               </ul>
             </>
@@ -2058,10 +2121,11 @@ export default function App() {
             <>
               <p className="mode-guide-lead">Move parts. Press <kbd>M</kbd> to toggle Move / Wire.</p>
               <ul className="mode-guide-list">
-                <li><kbd>Drag</kbd> empty canvas to box-select · <kbd>Shift</kbd>+drag empty = cut wires in the box</li>
+                <li><kbd>Drag</kbd> empty canvas to box-select · <kbd>Ctrl</kbd>+drag adds to selection</li>
+                <li><kbd>Shift</kbd>+drag empty = cut wires in the box · <kbd>Click</kbd> empty = deselect</li>
                 <li><kbd>Click</kbd> a wire to select it (turns amber) · <kbd>Delete</kbd> removes selection</li>
                 <li>Hollow square = free <strong>wire end</strong> — click it, then <kbd>Delete</kbd> (tiny stubs are hard to click as wires)</li>
-                <li><kbd>Click</kbd> / <kbd>Shift</kbd>+click parts · <kbd>Drag</kbd> a selected part to move the whole group</li>
+                <li><kbd>Click</kbd> / <kbd>Ctrl</kbd>+click parts · <kbd>Drag</kbd> a selected part to move the whole group</li>
                 <li>Drop near a wire end to reconnect · <kbd>Arrow</kbd> keys nudge (Shift = 1px)</li>
                 <li><kbd>Double-click</kbd> a wire to straighten it after a move</li>
                 <li><kbd>R</kbd> rotates selected parts · <kbd>Delete</kbd> / <kbd>Backspace</kbd> removes selection · <kbd>Ctrl</kbd>+C / V copy·paste</li>
@@ -2072,15 +2136,18 @@ export default function App() {
       </div>
 
       <div className="workspace" style={{ gridTemplateColumns: `280px 1fr ${rightWidth}px` }}>
-        <Palette onAdd={addComponent} />
+        <Palette activeKind={placeKind} onPick={pickPlaceKind} />
 
         <div className="canvas-col">
-          <ModeToolbar mode={canvasMode} onModeChange={setCanvasMode} />
+          <ModeToolbar mode={canvasMode} onModeChange={setCanvasModeAndClearPlace} />
           <Canvas
             nodes={nodes}
             edges={edges}
             mode={canvasMode}
-            onModeChange={setCanvasMode}
+            onModeChange={setCanvasModeAndClearPlace}
+            placeKind={placeKind}
+            onPlaceAt={addComponentAt}
+            onCancelPlace={cancelPlace}
             onNodesChange={handleNodesChange}
             onEdgesChange={handleEdgesChange}
             onWire={onWire}
@@ -2099,6 +2166,7 @@ export default function App() {
             onDeleteEdge={deleteEdgeWithTool}
             onStraightenEdge={straightenEdge}
             onSelectEdge={onSelectEdge}
+            onOpenComponentProps={openComponentProps}
           />
         </div>
 
@@ -2108,48 +2176,30 @@ export default function App() {
             title="Drag to resize sidebar"
             onPointerDown={beginColResize}
           />
-          <div className="right-slot" style={{ flex: `${slotFr.props} 1 80px` }}>
-            <PropertiesPanel
-              node={selectedNode}
-              selectionCount={selected.filter((n) => n.data.kind !== "TIP").length}
-              onChangeParam={changeParam}
-              onChangeRefdes={changeRefdes}
-              onChangeLabelPos={changeLabelPos}
-              onRotate={rotateSelected}
-              onDelete={(id) => deleteNodes([id])}
-            />
-          </div>
           {!netlistFloating && (
-            <>
-              <div
-                className="panel-split"
-                title="Drag to resize"
-                onPointerDown={(e) => beginRowSplit("props", "netlist", e)}
+            <div className="right-slot" style={{ flex: `${slotFr.netlist} 1 80px` }}>
+              <NetlistPanel
+                netlist={netlist}
+                editing={textEditMode}
+                draft={draftNetlist}
+                status={netlistStatus}
+                onStartEdit={startTextEdit}
+                onDraftChange={setDraftNetlist}
+                onApply={applyTextEdit}
+                onCancel={cancelTextEdit}
+                onPopOut={() => setNetlistFloating(true)}
               />
-              <div className="right-slot" style={{ flex: `${slotFr.netlist} 1 80px` }}>
-                <NetlistPanel
-                  netlist={netlist}
-                  editing={textEditMode}
-                  draft={draftNetlist}
-                  status={netlistStatus}
-                  onStartEdit={startTextEdit}
-                  onDraftChange={setDraftNetlist}
-                  onApply={applyTextEdit}
-                  onCancel={cancelTextEdit}
-                  onPopOut={() => setNetlistFloating(true)}
-                />
-              </div>
-            </>
+            </div>
           )}
           {showLibrary && (
             <>
-              <div
-                className="panel-split"
-                title="Drag to resize"
-                onPointerDown={(e) =>
-                  beginRowSplit(netlistFloating ? "props" : "netlist", "library", e)
-                }
-              />
+              {!netlistFloating && (
+                <div
+                  className="panel-split"
+                  title="Drag to resize"
+                  onPointerDown={(e) => beginRowSplit("netlist", "library", e)}
+                />
+              )}
               <div className="right-slot" style={{ flex: `${slotFr.library} 1 80px` }}>
                 <LibraryPanel library={library} onChange={onLibraryChange} />
               </div>
@@ -2157,17 +2207,15 @@ export default function App() {
           )}
           {!simFloating && (
             <>
-              <div
-                className="panel-split"
-                title="Drag to resize"
-                onPointerDown={(e) =>
-                  beginRowSplit(
-                    showLibrary ? "library" : netlistFloating ? "props" : "netlist",
-                    "sim",
-                    e,
-                  )
-                }
-              />
+              {(showLibrary || !netlistFloating) && (
+                <div
+                  className="panel-split"
+                  title="Drag to resize"
+                  onPointerDown={(e) =>
+                    beginRowSplit(showLibrary ? "library" : "netlist", "sim", e)
+                  }
+                />
+              )}
               <div className="right-slot" style={{ flex: `${slotFr.sim} 1 80px` }}>
                 <SimPanel netlist={netlist} onPopOut={() => setSimFloating(true)} />
               </div>
@@ -2178,13 +2226,7 @@ export default function App() {
             title="Drag to resize"
             onPointerDown={(e) =>
               beginRowSplit(
-                simFloating
-                  ? showLibrary
-                    ? "library"
-                    : netlistFloating
-                      ? "props"
-                      : "netlist"
-                  : "sim",
+                simFloating ? (showLibrary ? "library" : "netlist") : "sim",
                 "chat",
                 e,
               )
@@ -2195,6 +2237,20 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      {propsDialog && propsDialogNode && (
+        <ComponentPropertiesDialog
+          node={propsDialogNode}
+          anchor={{ x: propsDialog.x, y: propsDialog.y }}
+          onApply={applyComponentProps}
+          onCancel={() => setPropsDialog(null)}
+          onRotateLive={rotateNodeLive}
+          onDelete={(id) => {
+            setPropsDialog(null);
+            deleteNodes([id]);
+          }}
+        />
+      )}
 
       {netlistFloating && (
         <FloatingWindow

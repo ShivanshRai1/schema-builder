@@ -524,13 +524,13 @@ function StandardMosfetBody({
       <g {...STROKE_BUTT} opacity={o}>
         {depletion ? (
           <>
-            {/* Depletion: gate pin → bottom of gate plate (inverted L). */}
+            {/* Depletion: inverted-L gate — stub at bottom of gate plate. */}
             <path d={`M0 ${c.gateFootY} H${c.gateX}`} />
             <path d={`M${c.gateX} ${c.yTop} V${c.gateFootY}`} strokeWidth={MOS_GATE_SW} />
           </>
         ) : (
           <>
-            {/* Enhancement M1/M2: inverted-L gate (pin at bottom of gate plate). */}
+            {/* Enhancement: inverted-L gate — stub at bottom of gate plate. */}
             <path d={`M0 ${c.gateFootY} H${c.gateX}`} />
             <path d={`M${c.gateX} ${c.yTop} V${c.gateFootY}`} strokeWidth={MOS_GATE_SW} />
           </>
