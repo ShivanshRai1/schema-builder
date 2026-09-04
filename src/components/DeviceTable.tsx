@@ -17,7 +17,7 @@ export function DeviceTable({
   const rows = useMemo(
     () =>
       context.components.filter(
-        (c) => c.kind !== "TIP" && c.kind !== "GND" && c.kind !== "NODE",
+        (c) => c.kind !== "TIP" && c.kind !== "GND" && c.kind !== "NODE" && c.kind !== "WIRELABEL",
       ),
     [context.components],
   );

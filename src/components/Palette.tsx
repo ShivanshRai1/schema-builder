@@ -13,9 +13,11 @@ function flatLabel(label: string): string {
 // Drag-and-drop onto the canvas / a part still works for one-shot place/replace.
 export function Palette({
   activeKind,
+  pasting = false,
   onPick,
 }: {
   activeKind: ComponentKind | null;
+  pasting?: boolean;
   onPick: (kind: ComponentKind) => void;
 }) {
   return (
@@ -64,7 +66,11 @@ export function Palette({
       {activeKind ? (
         <p className="palette-tool-hint">
           Placing {flatLabel(COMPONENT_SPECS[activeKind].label)}: left-click to stamp ·
-          right-click / Esc to cancel
+          <kbd>R</kbd> rotate · right-click / Esc to cancel
+        </p>
+      ) : pasting ? (
+        <p className="palette-tool-hint">
+          Paste: left-click to stamp copies · <kbd>R</kbd> rotate · right-click / Esc to cancel
         </p>
       ) : null}
     </div>

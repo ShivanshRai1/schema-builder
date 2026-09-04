@@ -110,6 +110,83 @@ export function dist(a: Point, b: Point): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
+/**
+ * Shortest single-bend orthogonal path (or straight if aligned).
+ * NOTE: viaH and viaV always have the same Manhattan length, so the
+ * `<=` tie always picks viaH (horizontal-first). Prefer pinAwareOrthoPath
+ * when a pin side is known — otherwise a right-pin wire to a tip on the left
+ * runs left through the part body.
+ */
+export function shortestOrthoPath(start: Point, end: Point): Point[] {
+  if (Math.abs(start.x - end.x) < 0.5 || Math.abs(start.y - end.y) < 0.5) {
+    return [start, end];
+  }
+  const viaH: Point[] = [start, { x: end.x, y: start.y }, end];
+  const viaV: Point[] = [start, { x: start.x, y: end.y }, end];
+  const len = (path: Point[]) =>
+    Math.hypot(path[1]!.x - path[0]!.x, path[1]!.y - path[0]!.y) +
+    Math.hypot(path[2]!.x - path[1]!.x, path[2]!.y - path[1]!.y);
+  return len(viaH) <= len(viaV) ? viaH : viaV;
+}
+
+/** True if the first elbow leg does not run opposite the pin's outward side. */
+function firstLegRespectsSide(
+  start: Point,
+  mid: Point,
+  side: PinSide,
+): boolean {
+  switch (side) {
+    case "right":
+      return mid.x >= start.x - 0.5;
+    case "left":
+      return mid.x <= start.x + 0.5;
+    case "bottom":
+      return mid.y >= start.y - 0.5;
+    case "top":
+      return mid.y <= start.y + 0.5;
+  }
+}
+
+/**
+ * Single-bend ortho path that respects pin facing.
+ * Fixes Move rubber-band loops where horizontal-first ran through the symbol
+ * (e.g. C1 right pin → ground tip on the left).
+ */
+export function pinAwareOrthoPath(
+  start: Point,
+  end: Point,
+  startSide?: PinSide | null,
+  endSide?: PinSide | null,
+): Point[] {
+  if (Math.abs(start.x - end.x) < 0.5 || Math.abs(start.y - end.y) < 0.5) {
+    return [start, end];
+  }
+  const viaH: Point[] = [start, { x: end.x, y: start.y }, end];
+  const viaV: Point[] = [start, { x: start.x, y: end.y }, end];
+
+  if (startSide) {
+    const hOk = firstLegRespectsSide(start, viaH[1]!, startSide);
+    const vOk = firstLegRespectsSide(start, viaV[1]!, startSide);
+    if (hOk && !vOk) return viaH;
+    if (vOk && !hOk) return viaV;
+    if (startSide === "left" || startSide === "right") {
+      const outward =
+        startSide === "right" ? end.x >= start.x : end.x <= start.x;
+      return outward ? viaH : viaV;
+    }
+    const outward =
+      startSide === "bottom" ? end.y >= start.y : end.y <= start.y;
+    return outward ? viaV : viaH;
+  }
+
+  if (endSide) {
+    // Approach from the pin's outside: reverse, route from the end pin, flip.
+    return pinAwareOrthoPath(end, start, endSide, null).slice().reverse();
+  }
+
+  return viaH;
+}
+
 /** Point just outside a pin, so the final segment hits the pin dead-center. */
 export function outwardStub(pin: Point, side: PinSide, stub = 16): Point {
   switch (side) {

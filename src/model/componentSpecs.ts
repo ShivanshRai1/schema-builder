@@ -172,7 +172,8 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
   },
   PMOS: {
     kind: "PMOS", category: "Transistor", refdesPrefix: "M", label: "PMOS\n(Enhancement)", glyph: "⊐P", emits: true,
-    pins: [pin("d", "D", "top"), pin("g", "G", "left", 100 / 128), pin("s", "S", "bottom")],
+    // S pin at arrow-tip column (bodyX − 1.2 in 96×128 symbol) — body tie at tip.
+    pins: [pin("d", "D", "top"), pin("g", "G", "left", 100 / 128), pin("s", "S", "bottom", (58 - 1.2) / 96)],
     attributes: [modelAttr("PMOS_GEN")],
     toSpice: (r, n, p) => `${r} ${n("d")} ${n("g")} ${n("s")} ${n("s")} ${p.model ?? "PMOS_GEN"}`,
   },
@@ -249,7 +250,7 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
   IGBT: {
     kind: "IGBT", category: "Semiconductor", refdesPrefix: "XQ", label: "IGBT", glyph: "IGBT", emits: true,
     // C/E sit on the circle centerline (on-grid at 96×128).
-    pins: [pin("c", "C", "top"), pin("g", "G", "left"), pin("e", "E", "bottom")],
+    pins: [pin("c", "C", "top"), pin("g", "G", "left", 80 / 128), pin("e", "E", "bottom")],
     attributes: [modelAttr("IGBT_GEN")],
     toSpice: subckt(["c", "g", "e"]),
   },
@@ -339,7 +340,7 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
   },
   VPROBE: {
     kind: "VPROBE", category: "Sense / Probe", refdesPrefix: "", label: "Voltage probe", glyph: "V", emits: false,
-    pins: [pin("p", "•", "bottom")],
+    pins: [pin("p", "•", "top")],
     attributes: [],
     toSpice: () => null,
     toProbes: (_r, n) => [`V(${n("p")})`],
@@ -356,6 +357,16 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
     pins: [pin("g", "", "left")],
     attributes: [A("name", "Net name", "text", "net")],
     toSpice: () => null, // forces its net's NAME (see nets.ts)
+  },
+  /**
+   * LTspice Label Net: plain text that names a net. An invisible join point
+   * snaps to a wire or device pin under the text (no visible pin mark).
+   */
+  WIRELABEL: {
+    kind: "WIRELABEL", category: "Structural", refdesPrefix: "", label: "Label", glyph: "N", emits: false,
+    pins: [pin("g", "", "bottom", 0.5)],
+    attributes: [A("name", "Name", "text", "")],
+    toSpice: () => null,
   },
   /** Dangling wire end (Esc mid-route). Not in palette; emits nothing. */
   TIP: {
@@ -413,6 +424,6 @@ export const PALETTE: { category: Category; kinds: ComponentKind[] }[] = [
     kinds: paletteAlpha(["CSENSE", "IPROBE", "VPROBE", "VSENSE"]),
   },
   { category: "Source", kinds: paletteAlpha(["I"]) },
-  { category: "Structural", kinds: paletteAlpha(["NODE"]) },
+  { category: "Structural", kinds: paletteAlpha(["NODE", "WIRELABEL"]) },
   { category: "Transistor", kinds: paletteAlpha(["NPN", "PNP", "NJFET", "PJFET"]) },
 ];

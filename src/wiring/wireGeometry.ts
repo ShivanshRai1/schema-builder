@@ -3,6 +3,7 @@ import type { ComponentData } from "../model/types";
 import {
   orthogonalPolyline,
   outwardStub,
+  pinAwareOrthoPath,
   routeWirePoints,
   snapCoord,
   snapPoint,
@@ -31,10 +32,8 @@ export function routePinToTipPoints(
     Math.hypot(exit.x - tipPt.x, exit.y - tipPt.y) >
     Math.hypot(pinPt.x - tipPt.x, pinPt.y - tipPt.y) + 4;
   if (exitAway) {
-    if (pinSide === "left" || pinSide === "right") {
-      return orthogonalPolyline([pinPt, { x: tipPt.x, y: pinPt.y }, tipPt]);
-    }
-    return orthogonalPolyline([pinPt, { x: pinPt.x, y: tipPt.y }, tipPt]);
+    // Tip is behind the pin exit — do NOT horizontal-first through the body.
+    return orthogonalPolyline(pinAwareOrthoPath(pinPt, tipPt, pinSide, null));
   }
   return orthogonalPolyline([pinPt, exit, tipPt]);
 }
@@ -69,6 +68,42 @@ export function computeEdgePolyline(
     ((edge.data as { waypoints?: Point[] } | undefined)?.waypoints) ?? [];
   const srcIsTip = src.data.kind === "TIP";
   const tgtIsTip = tgt.data.kind === "TIP";
+  const directPath = Boolean(
+    (edge.data as { directPath?: boolean } | undefined)?.directPath,
+  );
+
+  // Baked geometry (e.g. Drag-detach freeze / Move rubber-band): draw exactly
+  // start→waypoints→end. Empty waypoints → pin-aware single L (not blind
+  // horizontal-first — that ran through parts after Move).
+  // Must run before tip routing — otherwise routePinToTipPoints re-adds stubs on
+  // top of an already-complete path and wires look doubled / distorted.
+  if (directPath) {
+    if (waypoints.length) {
+      return orthogonalPolyline([start, ...waypoints, end]);
+    }
+    const srcSide = srcIsTip
+      ? null
+      : pinWorldSide(src, edge.sourceHandle);
+    const tgtSide = tgtIsTip
+      ? null
+      : pinWorldSide(tgt, edge.targetHandle);
+    if (srcIsTip && tgtIsTip) {
+      return orthogonalPolyline(pinAwareOrthoPath(start, end));
+    }
+    if (srcIsTip !== tgtIsTip) {
+      return orthogonalPolyline(
+        pinAwareOrthoPath(
+          start,
+          end,
+          srcIsTip ? null : srcSide,
+          tgtIsTip ? null : tgtSide,
+        ),
+      );
+    }
+    return orthogonalPolyline(
+      pinAwareOrthoPath(start, end, srcSide, tgtSide),
+    );
+  }
 
   // Pin↔TIP: route toward the junction/free end (rotation-safe). TIP↔TIP keeps
   // authored bends. Pin↔pin uses stub-aware routing below.
@@ -86,17 +121,6 @@ export function computeEdgePolyline(
     const tipPt = pinIsSource ? end : start;
     const core = routePinToTipPoints(pinPt, tipPt, pinSide, waypoints);
     return pinIsSource ? core : core.slice().reverse();
-  }
-
-  // Scissors-trimmed pin↔pin paths: bake exact geometry so pin-exit stubs
-  // do not regenerate after a tip peel.
-  const directPath = Boolean(
-    (edge.data as { directPath?: boolean } | undefined)?.directPath,
-  );
-  if (directPath) {
-    return orthogonalPolyline(
-      waypoints.length ? [start, ...waypoints, end] : [start, end],
-    );
   }
 
   const sourceSide = pinWorldSide(src, edge.sourceHandle) ?? "left";
@@ -279,6 +303,29 @@ export function closestPointOnPolyline(pts: Point[], p: Point, grid: number): Po
       } else {
         best = { x: a.x, y: snapCoord(cy, grid) };
       }
+    }
+  }
+  return best;
+}
+
+/** Exact closest point on a polyline (no grid rounding — for pin↔wire snap). */
+export function closestPointOnPolylineRaw(pts: Point[], p: Point): Point {
+  let best: Point = pts[0]!;
+  let bestDist = Infinity;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i]!;
+    const b = pts[i + 1]!;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const lenSq = dx * dx + dy * dy;
+    let t = lenSq < 0.01 ? 0 : ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq;
+    t = Math.max(0, Math.min(1, t));
+    const cx = a.x + t * dx;
+    const cy = a.y + t * dy;
+    const d = Math.hypot(p.x - cx, p.y - cy);
+    if (d < bestDist) {
+      bestDist = d;
+      best = { x: cx, y: cy };
     }
   }
   return best;

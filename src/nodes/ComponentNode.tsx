@@ -14,6 +14,7 @@ import { normalizeRotation, rotatePinSpec } from "../model/rotation";
 import { getSymbolLayout, getLabelInkAnchorX, hasSymbol } from "./symbols/layout";
 import { SchematicSymbol } from "./symbols/SchematicSymbols";
 import { resolveLabelLayout } from "./labelPosition";
+import { pinWorldPoint } from "../wiring/pinGeometry";
 
 const sideToPosition: Record<PinSpec["side"], Position> = {
   left: Position.Left,
@@ -48,8 +49,8 @@ export function ComponentNode({
   const updateNodeInternals = useUpdateNodeInternals();
   const paramText = data.params.value ?? data.params.model ?? data.params.name ?? "";
   /** Values on canvas; model names live in Properties / tooltip only. */
-  const isNetLabel = data.kind === "NODE";
-  /** Net labels show the net name only — never the generic "Net label" title on the flag. */
+  const isNetLabel = data.kind === "NODE" || data.kind === "WIRELABEL";
+  /** Net / wire labels show the net name only — never the generic catalog title. */
   const displayRefdes = isNetLabel
     ? (data.params.name || "net")
     : data.refdes || spec.label;
@@ -59,9 +60,13 @@ export function ComponentNode({
   const symbolTooltip = [data.refdes || spec.label, paramText].filter(Boolean).join(" · ");
   const unplaced = Boolean(data.unplaced);
   const rotation = normalizeRotation(data.rotation);
+  // Net name: join stays on the bottom of the box; text spins around that point.
   const pins = useMemo(
-    () => spec.pins.map((p) => rotatePinSpec(p, rotation)),
-    [spec.pins, rotation],
+    () =>
+      data.kind === "WIRELABEL"
+        ? spec.pins
+        : spec.pins.map((p) => rotatePinSpec(p, rotation)),
+    [spec.pins, rotation, data.kind],
   );
   const isTip = data.kind === "TIP";
   const tipDegree = useStore((s) => {
@@ -74,10 +79,55 @@ export function ComponentNode({
   });
   const tipJunction = isTip && tipDegree >= 2;
   const tipFree = isTip && tipDegree <= 1;
+  /** Tip parked on a component pin — hide its square (looks like an open pin). */
+  const tipOnPin = useStore((s) => {
+    if (!isTip) return false;
+    const tip = s.nodes.find((n) => n.id === id);
+    if (!tip) return false;
+    const t = {
+      x: tip.position.x,
+      y: tip.position.y + ((tip.style?.height as number | undefined) ?? 8) / 2,
+    };
+    for (const part of s.nodes) {
+      const kind = (part.data as ComponentData).kind;
+      if (kind === "TIP") continue;
+      for (const pin of COMPONENT_SPECS[kind].pins) {
+        const pt = pinWorldPoint(part as Node<ComponentData>, pin.id);
+        if (pt && Math.hypot(pt.x - t.x, pt.y - t.y) <= 8) return true;
+      }
+    }
+    return false;
+  });
+  const connectedPinIds = useStore((s) => {
+    if (isTip) return "";
+    const ids = new Set<string>();
+    for (const e of s.edges) {
+      if (e.source === id && e.sourceHandle) ids.add(e.sourceHandle);
+      if (e.target === id && e.targetHandle) ids.add(e.targetHandle);
+    }
+    // A free TIP parked on a pin draws the same hollow square — treat as covered.
+    const self = s.nodes.find((n) => n.id === id);
+    const selfData = self?.data as ComponentData | undefined;
+    if (self && selfData && selfData.kind !== "TIP") {
+      for (const tip of s.nodes) {
+        if ((tip.data as ComponentData).kind !== "TIP") continue;
+        const t = {
+          x: tip.position.x,
+          y: tip.position.y + ((tip.style?.height as number | undefined) ?? 8) / 2,
+        };
+        for (const pin of COMPONENT_SPECS[selfData.kind].pins) {
+          const pt = pinWorldPoint(self as Node<ComponentData>, pin.id);
+          if (!pt) continue;
+          if (Math.hypot(pt.x - t.x, pt.y - t.y) <= 8) ids.add(pin.id);
+        }
+      }
+    }
+    return [...ids].sort().join(",");
+  });
   const isSymbol = hasSymbol(data.kind);
   const symLayout = isSymbol ? getSymbolLayout(data.kind, rotation) : null;
   const pinLayoutKey = pins.map((p) => `${p.id}:${p.side}:${p.offset}`).join("|");
-  const labelLayout = resolveLabelLayout(pins, data.labelPos);
+  const labelLayout = resolveLabelLayout(pins, data.labelPos, data.kind);
   const symLabelsClass =
     labelLayout.mode === "split"
       ? `symbol-labels-split labels-split-${labelLayout.side}`
@@ -102,7 +152,7 @@ export function ComponentNode({
 
   return (
     <div
-      className={`component-node${isSymbol ? " symbol-node" : ""}${isSymbol ? nodeLabelsClass : ""} kind-${data.kind}${selected ? " selected" : ""}${unplaced ? " unplaced" : ""}${isTip ? " tip-node" : ""}${tipJunction ? " tip-junction" : ""}${tipFree ? " tip-free" : ""}`}
+      className={`component-node${isSymbol ? " symbol-node" : ""}${isSymbol ? nodeLabelsClass : ""} kind-${data.kind}${selected ? " selected" : ""}${unplaced ? " unplaced" : ""}${isTip ? " tip-node" : ""}${tipJunction ? " tip-junction" : ""}${tipFree ? " tip-free" : ""}${tipOnPin ? " tip-on-pin" : ""}`}
       style={
         symLayout
           ? {
@@ -143,39 +193,50 @@ export function ComponentNode({
     >
       {!isTip && isSymbol && (
         <>
-          <div
-            className="symbol-body"
-            style={{
-              transform: `translate(-50%, -50%) rotate(${rotation}deg)`,
-            }}
-          >
-            <SchematicSymbol kind={data.kind} selected={selected} rotation={rotation} />
-          </div>
-          {labelLayout.mode === "split" ? (
-            <div className={symLabelsClass}>
+          {data.kind === "WIRELABEL" ? (
+            <div
+              className="wire-label-spin"
+              style={{ transform: `rotate(${rotation}deg)` }}
+            >
+              <div className="wire-label-text">{displayRefdes}</div>
+            </div>
+          ) : (
+            <>
               <div
-                className="label-refdes"
-                style={{ top: `${labelLayout.refdesY * 100}%` }}
+                className="symbol-body"
+                style={{
+                  transform: `translate(-50%, -50%) rotate(${rotation}deg)`,
+                }}
               >
-                {displayRefdes}
+                <SchematicSymbol kind={data.kind} selected={selected} rotation={rotation} />
               </div>
-              {symbolSecondary ? (
-                <div
-                  className="label-value"
-                  style={{ top: `${labelLayout.valueY * 100}%` }}
-                >
-                  {symbolSecondary}
+              {labelLayout.mode === "split" ? (
+                <div className={symLabelsClass}>
+                  <div
+                    className="label-refdes"
+                    style={{ top: `${labelLayout.refdesY * 100}%` }}
+                  >
+                    {displayRefdes}
+                  </div>
+                  {symbolSecondary ? (
+                    <div
+                      className="label-value"
+                      style={{ top: `${labelLayout.valueY * 100}%` }}
+                    >
+                      {symbolSecondary}
+                    </div>
+                  ) : null}
+                  {unplaced ? <div className="label-unplaced">unplaced</div> : null}
+                </div>
+              ) : labelLayout.mode === "block" ? (
+                <div className={symLabelsClass}>
+                  <div className="component-refdes">{displayRefdes}</div>
+                  {symbolSecondary ? <div className="component-params">{symbolSecondary}</div> : null}
+                  {unplaced && <div className="component-unplaced">unplaced</div>}
                 </div>
               ) : null}
-              {unplaced ? <div className="label-unplaced">unplaced</div> : null}
-            </div>
-          ) : labelLayout.mode === "block" ? (
-            <div className={symLabelsClass}>
-              <div className="component-refdes">{displayRefdes}</div>
-              {symbolSecondary ? <div className="component-params">{symbolSecondary}</div> : null}
-              {unplaced && <div className="component-unplaced">unplaced</div>}
-            </div>
-          ) : null}
+            </>
+          )}
         </>
       )}
       {!isTip && !isSymbol && (
@@ -199,7 +260,7 @@ export function ComponentNode({
           type="source"
           position={sideToPosition[pin.side]}
           style={handleStyle(pin)}
-          className={`component-pin pin-side-${pin.side}${isTip ? " tip-pin" : ""}`}
+          className={`component-pin pin-side-${pin.side}${isTip ? " tip-pin" : ""}${connectedPinIds.split(",").includes(pin.id) ? " pin-connected" : ""}`}
           onClick={(e) => {
             if (!onPinClick) return;
             e.stopPropagation();

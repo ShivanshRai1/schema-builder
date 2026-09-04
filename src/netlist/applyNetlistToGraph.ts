@@ -219,6 +219,9 @@ export function applyNetlistToGraph(
     if (n.data.kind === "NODE" && n.data.params.name) {
       addEndpoint(netToPins, n.data.params.name, n.id, "g");
     }
+    if (n.data.kind === "WIRELABEL" && n.data.params.name) {
+      addEndpoint(netToPins, n.data.params.name, n.id, "g");
+    }
   }
 
   const endpointKey = (p: Endpoint) => `${p.nodeId}:${p.pinId}`;

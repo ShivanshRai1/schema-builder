@@ -84,10 +84,10 @@ export function extractNets(
     order.push("0");
   }
 
-  // 4. Net-label (NODE) elements force their group's name.
+  // 4. Net-label / wire-label elements force their group's name.
   for (const node of nodes) {
-    if (node.data.kind !== "NODE") continue;
-    const pinId = COMPONENT_SPECS.NODE.pins[0]!.id;
+    if (node.data.kind !== "NODE" && node.data.kind !== "WIRELABEL") continue;
+    const pinId = COMPONENT_SPECS[node.data.kind].pins[0]!.id;
     const root = dsu.root(ep(node.id, pinId));
     if (nameByRoot.has(root)) continue;
     const raw = (node.data.params.name ?? "").trim();

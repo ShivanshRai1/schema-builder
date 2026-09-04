@@ -9,8 +9,12 @@ import type { Point } from "./orthogonal";
 const TOL = 3.5;
 const KEY_GRID = 2;
 
-function keyOf(p: Point): string {
+export function wireMarkKey(p: Point): string {
   return `${Math.round(p.x / KEY_GRID) * KEY_GRID},${Math.round(p.y / KEY_GRID) * KEY_GRID}`;
+}
+
+function keyOf(p: Point): string {
+  return wireMarkKey(p);
 }
 
 function near(a: Point, b: Point, tol = TOL): boolean {
@@ -77,12 +81,70 @@ function orthoCross(a1: Point, a2: Point, b1: Point, b2: Point): Point | null {
   return null;
 }
 
+export type JunctionMark = Point & {
+  /** Shared TIP at this join, when the square comes from a tip node. */
+  tipId?: string;
+};
+
+export type CrossingMark = Point & {
+  /** The two edges that cross here (not electrically joined). */
+  edgeIds?: [string, string];
+};
+
 export type WireMarks = {
   /** Filled square — wires are on the same net and truly join here. */
-  junctions: Point[];
+  junctions: JunctionMark[];
   /** Hollow ring — wires visually cross but are on different nets (not connected). */
-  crossings: Point[];
+  crossings: CrossingMark[];
 };
+
+function onPolyline(p: Point, pts: Point[], tol = TOL): boolean {
+  if (pts.length < 2) return false;
+  for (let i = 0; i < pts.length - 1; i++) {
+    if (onSegment(p, pts[i]!, pts[i + 1]!, tol)) return true;
+  }
+  return false;
+}
+
+/** Orient polyline so it starts at `pin` (or null if neither end is the pin). */
+function orientFromPin(pin: Point, pts: Point[]): Point[] | null {
+  if (pts.length < 2) return null;
+  if (near(pts[0]!, pin)) return pts;
+  if (near(pts[pts.length - 1]!, pin)) return pts.slice().reverse();
+  return null;
+}
+
+/**
+ * When several wires share a pin, they often run together for a stub then
+ * split (GND T on a rail). The visual join is that split — not the pin.
+ */
+function branchPointFromPin(pin: Point, polys: Point[][]): Point | null {
+  const oriented = polys
+    .map((pts) => orientFromPin(pin, pts))
+    .filter((pts): pts is Point[] => !!pts);
+  if (oriented.length < 2) return null;
+
+  const a = oriented[0]!;
+  const others = oriented.slice(1);
+  let lastShared: Point = pin;
+
+  for (let i = 0; i < a.length - 1; i++) {
+    const s = a[i]!;
+    const e = a[i + 1]!;
+    const len = Math.hypot(e.x - s.x, e.y - s.y);
+    const steps = Math.max(1, Math.ceil(len / 2));
+    for (let step = 1; step <= steps; step++) {
+      const t = step / steps;
+      const p = { x: s.x + (e.x - s.x) * t, y: s.y + (e.y - s.y) * t };
+      const shared = others.every((poly) => onPolyline(p, poly));
+      if (shared) lastShared = p;
+      else {
+        return near(lastShared, pin, TOL + 2) ? null : lastShared;
+      }
+    }
+  }
+  return near(lastShared, pin, TOL + 2) ? null : lastShared;
+}
 
 /**
  * Find every point where wires meet or cross:
@@ -119,34 +181,55 @@ export function findWireJunctions(
   }
 
   const nets = extractNets(nodes, edges);
-  const polys = edges.flatMap((e) => {
+  const edgePolys = edges.flatMap((e) => {
     if (!e.sourceHandle || !e.targetHandle) return [];
     const pts = computeEdgePolyline(nodes, e);
     if (pts.length < 2) return [];
-    return [{ net: nets.netOf(e.source, e.sourceHandle), pts }];
+    return [
+      {
+        edge: e,
+        net: nets.netOf(e.source, e.sourceHandle),
+        pts,
+      },
+    ];
   });
 
   const seenJ = new Set<string>();
   const seenC = new Set<string>();
-  const junctions: Point[] = [];
-  const crossings: Point[] = [];
+  const junctions: JunctionMark[] = [];
+  const crossings: CrossingMark[] = [];
 
-  const addJ = (p: Point) => {
+  const addJ = (p: Point, tipId?: string) => {
     const k = keyOf(p);
     if (seenJ.has(k)) return;
+    // Never put a filled junction on a component pin — that reads as a pin
+    // square. Multi-wire pins get their mark at the branch (below).
+    for (const pt of pinPoints.values()) {
+      if (near(p, pt)) return;
+    }
     seenJ.add(k);
     seenC.add(k);
-    junctions.push(p);
+    junctions.push(tipId ? { ...p, tipId } : { ...p });
   };
 
-  const addC = (p: Point) => {
+  const addC = (p: Point, edgeIds?: [string, string]) => {
     const k = keyOf(p);
     if (seenJ.has(k) || seenC.has(k)) return;
+    // Pin square (or hidden connected pin) — don't stack a hollow crossing ring.
+    for (const pt of pinPoints.values()) {
+      if (near(p, pt)) return;
+    }
+    // Any wired pin nearby — crossing is expected at a T, not an error mark.
+    for (const [key, count] of pinWireCount) {
+      if (count < 1) continue;
+      const pt = pinPoints.get(key);
+      if (pt && near(p, pt, TOL + 4)) return;
+    }
     seenC.add(k);
-    crossings.push(p);
+    crossings.push(edgeIds ? { ...p, edgeIds } : { ...p });
   };
 
-  // Shared TIP with 2+ edges → junction mark.
+  // Shared TIP with 2+ edges → junction mark (not on a component pin).
   const tipDegree = new Map<string, number>();
   for (const e of edges) {
     const bump = (id: string) => tipDegree.set(id, (tipDegree.get(id) ?? 0) + 1);
@@ -157,23 +240,34 @@ export function findWireJunctions(
     if (n.data.kind !== "TIP") continue;
     if ((tipDegree.get(n.id) ?? 0) < 2) continue;
     const pt = pinWorldPoint(n, "t");
-    if (pt) addJ(pt);
+    if (pt) addJ(pt, n.id);
   }
 
-  // Component pins with 2+ wires → junction mark (e.g. GND with two wires).
+  // Multi-wire pin: mark the visual T where the shared stub splits into the
+  // rail — not the pin itself (both edges end on the pin in the graph).
   for (const [key, count] of pinWireCount) {
-    if (count >= 2) {
-      const pt = pinPoints.get(key);
-      if (pt) addJ(pt);
-    }
+    if (count < 2) continue;
+    const pin = pinPoints.get(key);
+    if (!pin) continue;
+    const [nodeId, pinId] = key.split(":");
+    const related = edgePolys
+      .filter(
+        ({ edge: e }) =>
+          (e.source === nodeId && e.sourceHandle === pinId) ||
+          (e.target === nodeId && e.targetHandle === pinId),
+      )
+      .map((x) => x.pts);
+    const branch = branchPointFromPin(pin, related);
+    if (branch) addJ(branch);
   }
 
   // Wire-pair comparisons.
-  for (let i = 0; i < polys.length; i++) {
-    for (let j = i + 1; j < polys.length; j++) {
-      const A = polys[i]!;
-      const B = polys[j]!;
+  for (let i = 0; i < edgePolys.length; i++) {
+    for (let j = i + 1; j < edgePolys.length; j++) {
+      const A = edgePolys[i]!;
+      const B = edgePolys[j]!;
       const sameNet = A.net === B.net;
+      const pair: [string, string] = [A.edge.id, B.edge.id];
 
       const aEnds = [A.pts[0]!, A.pts[A.pts.length - 1]!];
       const bEnds = [B.pts[0]!, B.pts[B.pts.length - 1]!];
@@ -183,13 +277,13 @@ export function findWireJunctions(
       for (const end of aEnds) {
         if (onPolylineInterior(end, B.pts)) {
           if (sameNet) addJ(end);
-          else addC(end);
+          else addC(end, pair);
         }
       }
       for (const end of bEnds) {
         if (onPolylineInterior(end, A.pts)) {
           if (sameNet) addJ(end);
-          else addC(end);
+          else addC(end, pair);
         }
       }
 
@@ -207,17 +301,17 @@ export function findWireJunctions(
             onInterior(hit, B.pts[t]!, B.pts[t + 1]!)
           ) {
             if (sameNet) addJ(hit);
-            else addC(hit);
+            else addC(hit, pair);
             continue;
           }
           // Endpoint of one on interior of the other (caught above too, but
           // orthoCross can also hit exactly at the tip).
           if (onAEnd && onInterior(hit, B.pts[t]!, B.pts[t + 1]!)) {
             if (sameNet) addJ(hit);
-            else addC(hit);
+            else addC(hit, pair);
           } else if (onBEnd && onInterior(hit, A.pts[s]!, A.pts[s + 1]!)) {
             if (sameNet) addJ(hit);
-            else addC(hit);
+            else addC(hit, pair);
           }
         }
       }
@@ -225,4 +319,100 @@ export function findWireJunctions(
   }
 
   return { junctions, crossings };
+}
+
+const MARK_HIT = 11;
+
+/** Prefer junction/crossing marks under the cursor (Delete-mode scissors). */
+export function hitTestWireMark(
+  marks: WireMarks,
+  cursor: Point,
+  radius = MARK_HIT,
+):
+  | { kind: "junction"; mark: JunctionMark }
+  | { kind: "crossing"; mark: CrossingMark }
+  | null {
+  let bestJ: { mark: JunctionMark; d: number } | null = null;
+  for (const mark of marks.junctions) {
+    const d = Math.hypot(mark.x - cursor.x, mark.y - cursor.y);
+    if (d <= radius && (!bestJ || d < bestJ.d)) bestJ = { mark, d };
+  }
+  let bestC: { mark: CrossingMark; d: number } | null = null;
+  for (const mark of marks.crossings) {
+    const d = Math.hypot(mark.x - cursor.x, mark.y - cursor.y);
+    if (d <= radius && (!bestC || d < bestC.d)) bestC = { mark, d };
+  }
+  if (bestJ && bestC) {
+    return bestJ.d <= bestC.d
+      ? { kind: "junction", mark: bestJ.mark }
+      : { kind: "crossing", mark: bestC.mark };
+  }
+  if (bestJ) return { kind: "junction", mark: bestJ.mark };
+  if (bestC) return { kind: "crossing", mark: bestC.mark };
+  return null;
+}
+
+const TIP_SIZE = 8;
+
+function makeFreeTip(
+  tipId: string,
+  at: Point,
+): Node<ComponentData> {
+  return {
+    id: tipId,
+    type: "component",
+    position: { x: at.x, y: at.y - TIP_SIZE / 2 },
+    data: { kind: "TIP", refdes: "", params: {} },
+    style: { width: TIP_SIZE, height: TIP_SIZE },
+    selected: false,
+    draggable: false,
+  };
+}
+
+/**
+ * Break a filled junction square: shared TIP → each wire gets its own free tip
+ * at the same point (electrically open). Tip-less marks: no-op (caller may
+ * fall back to deleting a wire under the mark).
+ */
+export function dissolveJunctionTip(
+  nodes: Node<ComponentData>[],
+  edges: Edge[],
+  tipId: string,
+  newId: () => string,
+): { nodes: Node<ComponentData>[]; edges: Edge[] } | null {
+  const tip = nodes.find((n) => n.id === tipId);
+  if (!tip || tip.data.kind !== "TIP") return null;
+  const onTip = edges.filter((e) => e.source === tipId || e.target === tipId);
+  if (onTip.length < 2) return null;
+
+  const at = pinWorldPoint(tip, "t");
+  if (!at) return null;
+
+  const nextNodes = nodes.filter((n) => n.id !== tipId);
+  const kept = edges.filter((e) => e.source !== tipId && e.target !== tipId);
+  const nextEdges = [...kept];
+
+  for (const e of onTip) {
+    const freeId = newId();
+    nextNodes.push(makeFreeTip(freeId, at));
+    nextEdges.push(
+      e.source === tipId
+        ? {
+            ...e,
+            id: `${freeId}t-${e.target}${e.targetHandle}`,
+            source: freeId,
+            sourceHandle: "t",
+            selected: false,
+          }
+        : {
+            ...e,
+            id: `${e.source}${e.sourceHandle}-${freeId}t`,
+            target: freeId,
+            targetHandle: "t",
+            selected: false,
+          },
+    );
+  }
+
+  return { nodes: nextNodes, edges: nextEdges };
 }

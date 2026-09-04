@@ -342,7 +342,7 @@ function DiodeSymbol({ selected }: SymProps) {
     <SymbolSvg kind="D" w={48} h={24}>
       <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
         <path d="M0 12 H16" />
-        <path d="M16 4 L32 12 L16 20 Z" />
+        <path d="M16 4 L32 12 L16 20 Z" fill={STROKE} stroke="none" />
         <path d="M32 4 V20" />
         <path d="M32 12 H48" />
       </g>
@@ -356,7 +356,7 @@ function ZenerDiodeSymbol({ selected }: SymProps) {
     <SymbolSvg kind="DZ" w={48} h={24}>
       <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
         <path d="M0 12 H16" />
-        <path d="M16 4 L32 12 L16 20 Z" />
+        <path d="M16 4 L32 12 L16 20 Z" fill={STROKE} stroke="none" />
         <path d="M28 0 L32 4 V20 L36 24" />
         <path d="M32 12 H48" />
       </g>
@@ -466,19 +466,22 @@ function PolarityArrow({
   );
 }
 
-/** Schematic diode on a vertical branch (triangle + bar — not a channel arrow). */
+/** Schematic diode on a vertical branch (triangle + bar — not a channel arrow).
+ *  Optional `centerY` places the diode body on that level (e.g. mid-channel arrow). */
 function verticalBodyDiode(
   x: number,
   yHigh: number,
   yLow: number,
   pointToHigh: boolean,
+  centerY?: number,
 ) {
   const triHalf = 6.5;
   const barHalf = 8;
+  const triH = 13;
   if (pointToHigh) {
     // N-channel: anode at S, cathode at D — triangle tip + bar toward D (top)
-    const yBase = yLow - 14;
-    const yTip = yBase - 13;
+    const yBase = centerY != null ? centerY + triH / 2 : yLow - 14;
+    const yTip = centerY != null ? centerY - triH / 2 : yBase - triH;
     return (
       <>
         <path d={`M${x} ${yLow} V${yBase}`} />
@@ -493,8 +496,8 @@ function verticalBodyDiode(
     );
   }
   // P-channel: tip + bar toward S (bottom)
-  const yBase = yHigh + 14;
-  const yTip = yBase + 13;
+  const yBase = centerY != null ? centerY - triH / 2 : yHigh + 14;
+  const yTip = centerY != null ? centerY + triH / 2 : yBase + triH;
   return (
     <>
       <path d={`M${x} ${yHigh} V${yBase}`} />
@@ -562,6 +565,16 @@ function StandardMosfetBody({
               <path d={`M${c.arr.bx} ${c.yMid} H${TX.cx} V${TX.h}`} />
             </>
           )
+        ) : pChannel ? (
+          <>
+            {/* PMOS enh: full body column at arrow tip (top + bottom). */}
+            <path d={`M${TX.cx} 0 V${c.yTopMid} H${c.dioX}`} />
+            <path d={`M${c.ch} ${c.yTopMid} H${c.bodyX}`} />
+            <path d={`M${c.ch} ${c.yMid} H${c.arr.bx}`} />
+            <path d={`M${c.arr.tipX} ${c.yMid} V${TX.h}`} />
+            <path d={`M${c.ch} ${c.yBotMid} H${c.arr.tipX}`} />
+            <path d={`M${c.arr.tipX} ${c.yBotMid} H${c.dioX}`} />
+          </>
         ) : (
           <>
             {/* D rail; S pin + body tie share one vertical at TX.cx (no offset). */}
@@ -574,15 +587,15 @@ function StandardMosfetBody({
           </>
         )}
 
-        {/* Body diode — D/S rails above for enhancement */}
+        {/* Body diode — enhancement: center on mid-channel arrow; depletion: default span */}
         {depletion ? (
           <>
             <path d={`M${TX.cx} ${c.yTop} H${c.dioX}`} />
-            {verticalBodyDiode(c.dioX, c.yTop, c.yBot, !pChannel)}
+            {verticalBodyDiode(c.dioX, c.yTop, c.yBot, !pChannel, c.yMid)}
             <path d={`M${c.dioX} ${c.yBot} H${pChannel ? c.arr.tipX : TX.cx}`} />
           </>
         ) : (
-          verticalBodyDiode(c.dioX, c.yTopMid, c.yBotMid, !pChannel)
+          verticalBodyDiode(c.dioX, c.yTopMid, c.yBotMid, !pChannel, c.yMid)
         )}
       </g>
       <PolarityArrow d={c.arr.d} selected={selected} />
@@ -762,16 +775,21 @@ function IgbtSymbol({ selected }: SymProps) {
   const ch = 40;
   const yBot = 78;
   const kneeE = { x: TX.cx, y: 90 };
-  const mid = lerp(ch, yBot, kneeE.x, kneeE.y, 0.4);
+  // Tip low on the emitter diagonal (near circle exit).
+  const mid = lerp(ch, yBot, kneeE.x, kneeE.y, 0.82);
   const arr = filledArrow(mid.x, mid.y, ch, yBot);
+  // Thin insulated-gate L; pin at y=80 (componentSpecs).
+  const gateX = 32;
+  const gateBot = 80;
+  const gateTop = 50;
   return circledTransistor({
     kind: "IGBT",
     selected,
     arrow: arr.d,
     children: (
       <>
-        <path d={`M0 ${TX.cy} H22`} />
-        <path d={`M22 48 V${TX.cy}`} strokeWidth={TX.gateSw} />
+        <path d={`M0 ${gateBot} H${gateX}`} />
+        <path d={`M${gateX} ${gateBot} V${gateTop}`} />
         <path d={`M${ch} 46 V${yBot}`} />
         <path d={`M${ch} 52 L${TX.cx} 38 V0`} />
         <path
@@ -1102,6 +1120,19 @@ function NodeSymbol({ selected }: SymProps) {
   );
 }
 
+/**
+ * LTspice Label Net body: no lead stub — the React Flow pin square IS the
+ * join mark; the net name is drawn as text beside/above it.
+ */
+function WireLabelSymbol({ selected }: SymProps) {
+  void selected;
+  return (
+    <SymbolSvg kind="WIRELABEL" w={16} h={16}>
+      <g />
+    </SymbolSvg>
+  );
+}
+
 function OpAmpSymbol({ selected }: SymProps) {
   return (
     <SymbolSvg kind="EAMP" w={56} h={40}>
@@ -1232,6 +1263,7 @@ const MAP: Partial<Record<ComponentKind, (p: SymProps) => JSX.Element>> = {
   IPROBE: IprobeSymbol,
   VPROBE: VprobeSymbol,
   NODE: NodeSymbol,
+  WIRELABEL: WireLabelSymbol,
 };
 
 export function SchematicSymbol({

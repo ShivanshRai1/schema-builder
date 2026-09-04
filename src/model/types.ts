@@ -33,7 +33,7 @@ export type ComponentKind =
   // sense / probes
   | "CSENSE" | "VSENSE" | "IPROBE" | "VPROBE"
   // structural
-  | "GND" | "NODE" | "TIP";
+  | "GND" | "NODE" | "WIRELABEL" | "TIP";
 
 export type Category =
   | "Most used"

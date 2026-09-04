@@ -1030,6 +1030,8 @@ export function normalizeWires(
 
     // Don't touch pure pin→pin edges that have no stored waypoints.
     if (!srcIsTip && !tgtIsTip && waypoints.length === 0) continue;
+    // T-splice / freeze paths must stay literal (no stub rewrite).
+    if ((e.data as { directPath?: boolean } | undefined)?.directPath) continue;
 
     const cur = nextEdges.find((x) => x.id === e.id) ?? e;
     const { edge, nodes: ns, changed } = cleanEdgeTrailingNubs(nextNodes, nextEdges, cur);

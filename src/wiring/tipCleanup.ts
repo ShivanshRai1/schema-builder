@@ -1,5 +1,8 @@
 import type { Edge, Node } from "@xyflow/react";
+import { COMPONENT_SPECS } from "../model/componentSpecs";
 import type { ComponentData } from "../model/types";
+import { pinWorldPoint } from "./pinGeometry";
+import type { Point } from "./orthogonal";
 import { computeEdgePolyline, polylineToStoredWaypoints } from "./wireGeometry";
 import { collapseMicroBends } from "./wireMove";
 
@@ -68,6 +71,168 @@ export function clearTipStubsOnPins(
 
   const nodesOut = nodes.filter((n) => !tipsToDrop.has(n.id));
   return pruneOrphanTips(nodesOut, edgesOut);
+}
+
+/**
+ * Free tips parked on a pin draw a hollow square that looks like an open pin.
+ * - Pin free → absorb tip into the pin (real connection).
+ * - Pin already wired → drop the ghost tip.
+ */
+export function absorbTipsOntoPins(
+  nodes: Node<ComponentData>[],
+  edges: Edge[],
+  radius = 8,
+): { nodes: Node<ComponentData>[]; edges: Edge[]; changed: number } {
+  let nextNodes = nodes;
+  let nextEdges = edges;
+  let changed = 0;
+
+  const tipPt = (n: Node<ComponentData>): Point => ({
+    x: n.position.x,
+    y: n.position.y + ((n.style?.height as number | undefined) ?? 8) / 2,
+  });
+
+  let guard = 0;
+  while (guard++ < 64) {
+    const deg = tipDegree(nextEdges);
+    let absorbed = false;
+
+    for (const tip of nextNodes) {
+      if (tip.data.kind !== "TIP") continue;
+      if ((deg.get(tip.id) ?? 0) !== 1) continue;
+      const t = tipPt(tip);
+      const stub = nextEdges.find((e) => e.source === tip.id || e.target === tip.id);
+      if (!stub) continue;
+
+      let best: { partId: string; pinId: string; d: number } | null = null;
+      for (const part of nextNodes) {
+        if (part.data.kind === "TIP") continue;
+        for (const pin of COMPONENT_SPECS[part.data.kind].pins) {
+          const pt = pinWorldPoint(part, pin.id);
+          if (!pt) continue;
+          const d = Math.hypot(pt.x - t.x, pt.y - t.y);
+          if (d <= radius && (!best || d < best.d)) {
+            best = { partId: part.id, pinId: pin.id, d };
+          }
+        }
+      }
+      if (!best) continue;
+
+      const tipIsSource = stub.source === tip.id;
+      const otherId = tipIsSource ? stub.target : stub.source;
+      if (otherId === best.partId) {
+        // Degenerate tip looping onto its own part — just drop it.
+        nextEdges = nextEdges.filter((e) => e.id !== stub.id);
+        nextNodes = nextNodes.filter((n) => n.id !== tip.id);
+        changed++;
+        absorbed = true;
+        break;
+      }
+
+      const pinAlreadyWired = nextEdges.some((e) => {
+        if (e.id === stub.id) return false;
+        return (
+          (e.source === best!.partId && e.sourceHandle === best!.pinId) ||
+          (e.target === best!.partId && e.targetHandle === best!.pinId)
+        );
+      });
+
+      if (pinAlreadyWired) {
+        nextEdges = nextEdges.filter((e) => e.id !== stub.id);
+        nextNodes = nextNodes.filter((n) => n.id !== tip.id);
+        changed++;
+        absorbed = true;
+        break;
+      }
+
+      nextEdges = nextEdges.map((e) =>
+        e.id === stub.id
+          ? tipIsSource
+            ? {
+                ...e,
+                source: best!.partId,
+                sourceHandle: best!.pinId,
+                data: { ...(e.data as object), waypoints: [], directPath: false },
+              }
+            : {
+                ...e,
+                target: best!.partId,
+                targetHandle: best!.pinId,
+                data: { ...(e.data as object), waypoints: [], directPath: false },
+              }
+          : e,
+      );
+      nextNodes = nextNodes.filter((n) => n.id !== tip.id);
+      changed++;
+      absorbed = true;
+      break;
+    }
+
+    if (!absorbed) break;
+  }
+
+  if (!changed) return { nodes, edges, changed: 0 };
+  const pruned = pruneOrphanTips(nextNodes, nextEdges);
+  return { nodes: pruned.nodes, edges: pruned.edges, changed };
+}
+
+/**
+ * Remove free (deg-1) tips that sit on a real pin which already has a
+ * non-tip wire. Those draw as hollow squares on GND/pins after Drag reconnect.
+ */
+export function pruneGhostTipsOnPins(
+  nodes: Node<ComponentData>[],
+  edges: Edge[],
+): { nodes: Node<ComponentData>[]; edges: Edge[]; removed: number } {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const deg = tipDegree(edges);
+  const dropTips = new Set<string>();
+  const dropEdges = new Set<string>();
+
+  for (const tip of nodes) {
+    if (tip.data.kind !== "TIP") continue;
+    if ((deg.get(tip.id) ?? 0) !== 1) continue;
+    const tipPt = {
+      x: tip.position.x,
+      y: tip.position.y + ((tip.style?.height as number | undefined) ?? 8) / 2,
+    };
+    const stub = edges.find((e) => e.source === tip.id || e.target === tip.id);
+    if (!stub) continue;
+
+    let ghost = false;
+    for (const part of nodes) {
+      if (part.data.kind === "TIP") continue;
+      for (const pin of COMPONENT_SPECS[part.data.kind].pins) {
+        const pt = pinWorldPoint(part, pin.id);
+        if (!pt) continue;
+        if (Math.hypot(pt.x - tipPt.x, pt.y - tipPt.y) > 3) continue;
+        const pinHasReal = edges.some((e) => {
+          const onPin =
+            (e.source === part.id && e.sourceHandle === pin.id) ||
+            (e.target === part.id && e.targetHandle === pin.id);
+          if (!onPin) return false;
+          if (e.id === stub.id) return false;
+          const otherId = e.source === part.id ? e.target : e.source;
+          const other = byId.get(otherId);
+          return other != null && other.data.kind !== "TIP";
+        });
+        if (pinHasReal) {
+          ghost = true;
+          break;
+        }
+      }
+      if (ghost) break;
+    }
+    if (!ghost) continue;
+    dropTips.add(tip.id);
+    dropEdges.add(stub.id);
+  }
+
+  if (!dropTips.size) return { nodes, edges, removed: 0 };
+  const nextNodes = nodes.filter((n) => !dropTips.has(n.id));
+  const nextEdges = edges.filter((e) => !dropEdges.has(e.id));
+  const pruned = pruneOrphanTips(nextNodes, nextEdges);
+  return { nodes: pruned.nodes, edges: pruned.edges, removed: dropTips.size };
 }
 
 function tipDegree(edges: Edge[]): Map<string, number> {

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Node } from "@xyflow/react";
 import { COMPONENT_SPECS } from "../model/componentSpecs";
 import type { ComponentData, ComponentRotation, LabelPosition } from "../model/types";
-import { normalizeRotation, nextRotation } from "../model/rotation";
+import { normalizeRotation, nextLabelRotation, nextRotation } from "../model/rotation";
 import { hasSymbol } from "../nodes/symbols/layout";
 
 const LABEL_POSITION_OPTIONS: { value: LabelPosition; label: string }[] = [
@@ -232,7 +232,13 @@ export function ComponentPropertiesDialog({
                 title="Rotate 90° clockwise"
                 onClick={() => {
                   onRotateLive(node.id);
-                  setDraft((d) => ({ ...d, rotation: nextRotation(d.rotation) }));
+                  setDraft((d) => ({
+                    ...d,
+                    rotation:
+                      node.data.kind === "WIRELABEL"
+                        ? nextLabelRotation(d.rotation)
+                        : nextRotation(d.rotation),
+                  }));
                 }}
               >
                 Rotate {draft.rotation}°

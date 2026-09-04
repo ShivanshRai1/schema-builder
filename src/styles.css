@@ -74,6 +74,7 @@ body { background: var(--bg); color: var(--text); }
 .mode-guide-explore .mode-guide-badge { background: #9ad4ff; }
 .mode-guide-wire .mode-guide-badge { background: #7ec2ff; }
 .mode-guide-move .mode-guide-badge { background: #f0b429; color: #1a1408; }
+.mode-guide-drag .mode-guide-badge { background: #c9a227; color: #1a1408; }
 .mode-guide-delete .mode-guide-badge { background: #f07178; color: #1a0a0c; }
 .mode-guide-content {
   flex: 1;
@@ -183,6 +184,11 @@ body { background: var(--bg); color: var(--text); }
   background: rgba(240, 180, 41, 0.14);
   box-shadow: 0 0 0 1px var(--select);
 }
+.mode-toolbar-drag.is-active {
+  border-color: #e0a020;
+  background: rgba(224, 160, 32, 0.16);
+  box-shadow: 0 0 0 1px #e0a020;
+}
 .mode-toolbar-delete.is-active {
   border-color: #f07178;
   background: rgba(240, 113, 120, 0.14);
@@ -195,6 +201,18 @@ body { background: var(--bg); color: var(--text); }
   text-align: center;
 }
 .mode-toolbar-label { white-space: nowrap; }
+.mode-toolbar-key {
+  margin-left: 2px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.28);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  line-height: 1.4;
+}
 .canvas-col .canvas { flex: 1; min-height: 0; }
 .right-col {
   position: relative;
@@ -387,6 +405,92 @@ body { background: var(--bg); color: var(--text); }
   font-size: 11px;
   background: rgba(11, 18, 32, 0.55);
 }
+.place-ghost-wirelabel {
+  overflow: visible;
+}
+/* Spin around the join (bottom-center) — real text rotation, not 4 park spots. */
+.react-flow__node:has(.kind-WIRELABEL) {
+  overflow: visible !important;
+}
+.component-node.kind-WIRELABEL {
+  overflow: visible;
+  cursor: pointer;
+}
+.wire-label-spin {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+  pointer-events: auto;
+  z-index: 3;
+}
+.wire-label-text {
+  position: absolute;
+  left: 0;
+  bottom: 2px;
+  transform: translate(-50%, -100%);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #e8eef5;
+  white-space: nowrap;
+  line-height: 1;
+  text-shadow: 0 0 4px rgba(0, 0, 0, 0.85);
+  background: rgba(12, 16, 22, 0.82);
+  padding: 4px 6px;
+  border-radius: 2px;
+  pointer-events: auto;
+  cursor: inherit;
+}
+.component-node.kind-WIRELABEL .symbol-body {
+  display: none;
+}
+.component-node.kind-WIRELABEL .component-pin,
+.component-node.kind-WIRELABEL .react-flow__handle.component-pin {
+  width: 1px !important;
+  height: 1px !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  opacity: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  pointer-events: none !important;
+}
+.component-node.kind-WIRELABEL .component-pin::after,
+.component-node.kind-WIRELABEL .react-flow__handle.component-pin::after,
+.component-node.kind-WIRELABEL.selected .component-pin::after {
+  display: none !important;
+}
+.component-node.kind-WIRELABEL.selected .wire-label-text {
+  color: var(--select);
+  box-shadow: 0 0 0 1px var(--select);
+}
+.paste-ghost {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  z-index: 8;
+}
+.paste-ghost-part {
+  position: absolute;
+  pointer-events: none;
+}
+.paste-ghost-tip {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  box-sizing: border-box;
+  border: 1px solid #f0b429;
+  background: transparent;
+}
+.paste-ghost-wires path {
+  stroke: #e8eef5;
+  stroke-width: 1.6;
+}
 
 /* LTspice-style component properties dialog ------------------------------- */
 .comp-props-backdrop {
@@ -405,6 +509,19 @@ body { background: var(--bg); color: var(--text); }
   border-radius: 8px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(77, 163, 255, 0.12);
   overflow: hidden;
+}
+.net-name-dialog {
+  left: 50%;
+  top: 28%;
+  transform: translate(-50%, -50%);
+  width: min(340px, calc(100vw - 32px));
+}
+.net-name-dialog .comp-props-sub {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 400;
+  line-height: 1.35;
 }
 .comp-props-titlebar {
   display: flex;
@@ -505,9 +622,13 @@ body { background: var(--bg); color: var(--text); }
 }
 .canvas-move .react-flow__pane { cursor: crosshair; }
 .canvas-move .react-flow__node { cursor: move; }
-.canvas-move .react-flow__edge { cursor: grab; }
-.canvas-move .react-flow__edge:active { cursor: grabbing; }
+.canvas-move .react-flow__edge { cursor: pointer; }
 .canvas-move .react-flow__node.dragging { cursor: grabbing; }
+.canvas-drag .react-flow__pane { cursor: crosshair; }
+.canvas-drag .react-flow__node { cursor: grab; }
+.canvas-drag .react-flow__edge { cursor: grab; }
+.canvas-drag .react-flow__edge:active { cursor: grabbing; }
+.canvas-drag .react-flow__node.dragging { cursor: grabbing; }
 .canvas-delete,
 .canvas-delete * {
   /*
@@ -668,13 +789,32 @@ body { background: var(--bg); color: var(--text); }
   isolation: isolate;
 }
 .component-node.symbol-node.selected {
-  box-shadow: none;
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
   --symbol-stroke: var(--select);
+}
+/* React Flow wraps the node — its selection/focus ring reads as a wire box. */
+.react-flow__node.selected:has(.symbol-node),
+.react-flow__node:has(.symbol-node.selected),
+.react-flow__node:has(.symbol-node):focus,
+.react-flow__node:has(.symbol-node):focus-visible,
+.canvas .react-flow__node:focus,
+.canvas .react-flow__node:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+  border: none !important;
+}
+/* Multi-select group frame from RF — we use custom marquee/move, not this. */
+.canvas .react-flow__nodesselection,
+.canvas .react-flow__nodesselection-rect {
+  display: none !important;
+  pointer-events: none !important;
 }
 .component-node.symbol-node.selected .symbol-body {
   filter: drop-shadow(0 0 4px rgba(240, 180, 41, 0.75));
 }
-.component-node.symbol-node.selected .component-pin::after {
+.component-node.symbol-node.selected .component-pin:not(.pin-connected)::after {
   border-color: var(--select);
 }
 .component-node.symbol-node.unplaced .symbol-body {
@@ -793,6 +933,12 @@ body { background: var(--bg); color: var(--text); }
   background: var(--bg, #0f1419);
   box-sizing: border-box;
   pointer-events: none;
+}
+/* Hide pin square once a wire is attached. */
+.symbol-node .component-pin.pin-connected::after,
+.component-node.symbol-node.selected .component-pin.pin-connected::after,
+.component-node:not(.symbol-node) .component-pin.pin-connected::after {
+  display: none !important;
 }
 /* Pin names on symbols — smaller; horizontal parts tuck names under each terminal. */
 .symbol-node .pin-label {
@@ -926,6 +1072,11 @@ body { background: var(--bg); color: var(--text); }
   border: none !important;
   box-shadow: none !important;
   opacity: 1;
+}
+/* Tip sitting on a pin — no square (the pin owns the connection visually). */
+.tip-node.tip-on-pin .component-pin::after,
+.tip-node.tip-on-pin .react-flow__handle.component-pin::after {
+  display: none !important;
 }
 .tip-node .component-pin,
 .tip-node .react-flow__handle.component-pin {

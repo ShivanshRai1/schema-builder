@@ -14,6 +14,16 @@ export function nextRotation(current: unknown): ComponentRotation {
   return ((r + 90) % 360) as ComponentRotation;
 }
 
+/**
+ * Label rotate: upright, sideways, other sideways — skip upside-down (180°).
+ */
+export function nextLabelRotation(current: unknown): ComponentRotation {
+  const r = normalizeRotation(current);
+  if (r === 0) return 90;
+  if (r === 90) return 270;
+  return 0;
+}
+
 const SIDE_CW: Record<PinSpec["side"], PinSpec["side"]> = {
   left: "top",
   top: "right",

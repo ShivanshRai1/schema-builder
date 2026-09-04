@@ -54,6 +54,7 @@ const KIND_WORDS: Record<string, ComponentKind> = {
   vsense: "VSENSE", vprobe: "VPROBE", iprobe: "IPROBE", ammeter: "IPROBE",
   ground: "GND", gnd: "GND", earth: "GND",
   node: "NODE", label: "NODE", netlabel: "NODE",
+  wirelabel: "WIRELABEL", netname: "WIRELABEL", labelnet: "WIRELABEL",
 };
 
 const KEY_ALIASES: Record<string, string> = {

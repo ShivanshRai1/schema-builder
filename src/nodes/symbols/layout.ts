@@ -45,6 +45,7 @@ export const SYMBOL_KINDS = new Set<ComponentKind>([
   "IPROBE",
   "VPROBE",
   "NODE",
+  "WIRELABEL",
 ]);
 
 /**
@@ -93,6 +94,8 @@ export const NATIVE_SIZE: Partial<Record<ComponentKind, SymbolLayout>> = {
   IPROBE: { w: 40, h: 40 },
   VPROBE: { w: 28, h: 40 },
   NODE: { w: 36, h: 24 },
+  /** Tiny join box — name text is drawn as a label, not path ink. */
+  WIRELABEL: { w: 16, h: 16 },
 };
 
 /**
@@ -149,6 +152,8 @@ const LAYOUT: Partial<Record<ComponentKind, SymbolLayout>> = {
   IPROBE: { w: 48, h: 48 },
   VPROBE: { w: 32, h: 48 },
   NODE: { w: 48, h: 32 },
+  /** Compact hit box; text spins around the bottom-center join. */
+  WIRELABEL: { w: 64, h: 48 },
 };
 
 export type SymbolLayout = { w: number; h: number };
@@ -170,6 +175,8 @@ export function getSymbolLayout(
 ): SymbolLayout | null {
   const base = LAYOUT[kind];
   if (!base) return null;
+  // Net name: fixed box; text spins around the join — don't swap w/h.
+  if (kind === "WIRELABEL") return base;
   const r = normalizeRotation(rotation);
   if (r === 90 || r === 270) return { w: base.h, h: base.w };
   return base;
@@ -201,6 +208,7 @@ const INK_RIGHT: Partial<Record<ComponentKind, number>> = {
   OPAMP5: 0.88,
   /** Flag fills most of the box — push text past the glyph. */
   NODE: 1.02,
+  WIRELABEL: 0.5,
   IPROBE: 0.85,
   VPROBE: 0.85,
 };

@@ -24,14 +24,21 @@ function pinSides(pins: PinSpec[]): Set<PinSpec["side"]> {
  *   the top pin — also covers 4-pin blocks like gate drivers / 5-pin op-amps).
  * - Horizontal-only parts (left+right): one block above the body.
  * - Net labels (pin left only): block to the right, past the flag.
+ * - Net name text: sit on the opposite side of the invisible join point.
  */
 export function resolveLabelLayout(
   pins: PinSpec[],
   override: LabelPosition | undefined = "auto",
+  kind?: string,
 ): LabelLayout {
   if (override === "hidden") return { mode: "hidden" };
   if (override && override !== "auto") {
     return { mode: "block", side: override };
+  }
+
+  if (kind === "WIRELABEL") {
+    // Text is drawn inside the rotated body (real spin), not relocated around the pin.
+    return { mode: "hidden" };
   }
 
   const sides = pinSides(pins);
@@ -48,6 +55,10 @@ export function resolveLabelLayout(
   }
 
   if (sides.has("left") && sides.has("right")) {
+    return { mode: "block", side: "above" };
+  }
+
+  if (sides.has("bottom") && sides.size === 1) {
     return { mode: "block", side: "above" };
   }
 

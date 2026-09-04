@@ -180,7 +180,9 @@ export function detachPartForMove(
       sourceHandle,
       target,
       targetHandle,
-      data: { waypoints: frozenWaypoints },
+      // Freeze the exact pre-cut path. directPath stops tip-routing from
+      // stacking another stub on top (that was the parallel/distorted wires).
+      data: { waypoints: frozenWaypoints, directPath: true },
       selected: false,
     });
     serial++;
@@ -249,13 +251,12 @@ export function applyCutMove(
 }
 
 /**
- * After parts are dropped, snap any pin that landed on a dangling wire end (TIP)
- * back onto that wire — restoring the connection (and hence the netlist). This is
- * the inverse of detachPartForMove and powers "move a part away and back".
+ * After parts are dropped, attach nearby dangling wire ends (TIP) back onto
+ * pins — restoring the netlist. The part stays where the user dropped it;
+ * wires stretch to the pin instead of yanking the symbol onto the stub.
  *
  * Only degree-1 free tips are eligible. Junction tips (2+ edges) must never be
- * consumed here: picking the wrong edge on a T-junction rewires the rail and
- * orphans the real part↔junction connection (seen when nudging C along R).
+ * consumed here: picking the wrong edge on a T-junction rewires the rail.
  *
  * `nodes` must already carry the parts' final (dropped) positions.
  */
@@ -263,7 +264,8 @@ export function reconnectPartsOnTips(
   nodes: Node<ComponentData>[],
   edges: Edge[],
   movedIds: string[],
-  radius = 28,
+  /** Attach if a stub is this close; part position is not changed. */
+  radius = 16,
 ): { nodes: Node<ComponentData>[]; edges: Edge[]; reconnected: number } {
   let nextNodes = nodes;
   let nextEdges = edges;
@@ -287,68 +289,75 @@ export function reconnectPartsOnTips(
         (e.target === tipId && e.source === partId),
     );
 
+  const attachTip = (partId: string, pinId: string, tipId: string): boolean => {
+    const edge = nextEdges.find((e) => e.source === tipId || e.target === tipId);
+    if (!edge) return false;
+    const tipIsSource = edge.source === tipId;
+    const otherId = tipIsSource ? edge.target : edge.source;
+    if (otherId === partId) return false;
+    nextEdges = nextEdges.map((e) =>
+      e.id === edge.id
+        ? tipIsSource
+          ? {
+              ...e,
+              source: partId,
+              sourceHandle: pinId,
+              data: { ...(e.data as object), waypoints: [], directPath: false },
+            }
+          : {
+              ...e,
+              target: partId,
+              targetHandle: pinId,
+              data: { ...(e.data as object), waypoints: [], directPath: false },
+            }
+        : e,
+    );
+    nextNodes = nextNodes.filter((n) => n.id !== tipId);
+    return true;
+  };
+
   for (const id of movedIds) {
     const part0 = nextNodes.find((n) => n.id === id);
     if (!part0 || part0.data.kind === "TIP") continue;
     const spec = COMPONENT_SPECS[part0.data.kind];
     const consumed = new Set<string>();
+    const singlePin = spec.pins.length === 1;
 
-    // 1) Closest free dangling tip within radius (not a junction, not already
-    //    wired to this part). Junction tips stay put while connected wires follow.
-    let best: { off: Point; d: number } | null = null;
     for (const pin of spec.pins) {
       const pinPt = pinWorldPoint(part0, pin.id);
       if (!pinPt) continue;
+
+      const nearby: { tipId: string; d: number; t: Point }[] = [];
       for (const n of nextNodes) {
-        if (n.data.kind !== "TIP") continue;
-        if (consumed.has(n.id)) continue;
+        if (n.data.kind !== "TIP" || consumed.has(n.id)) continue;
         if (tipDegree(n.id, nextEdges) !== 1) continue;
         if (tipAlreadyOnPart(n.id, id, nextEdges)) continue;
         const t = tipConnect(n);
         const d = Math.hypot(t.x - pinPt.x, t.y - pinPt.y);
-        if (d <= radius && (!best || d < best.d)) {
-          best = { off: { x: t.x - pinPt.x, y: t.y - pinPt.y }, d };
+        if (d <= radius) nearby.push({ tipId: n.id, d, t });
+      }
+      if (!nearby.length) continue;
+      nearby.sort((a, b) => a.d - b.d);
+
+      const pick = singlePin
+        ? nearby
+        : nearby.filter((c) => {
+            const closest = nearby[0]!;
+            return (
+              c.tipId === closest.tipId ||
+              Math.hypot(c.t.x - closest.t.x, c.t.y - closest.t.y) <= 3
+            );
+          });
+
+      for (const c of pick) {
+        if (consumed.has(c.tipId)) continue;
+        if (attachTip(id, pin.id, c.tipId)) {
+          consumed.add(c.tipId);
+          reconnected++;
+        } else {
+          consumed.add(c.tipId);
         }
       }
-    }
-    if (!best) continue;
-
-    // 2) Nudge the part so the matched pin sits exactly on its tip.
-    const shifted: Node<ComponentData> = {
-      ...part0,
-      position: { x: part0.position.x + best.off.x, y: part0.position.y + best.off.y },
-    };
-    nextNodes = nextNodes.map((n) => (n.id === id ? shifted : n));
-
-    // 3) Reconnect every pin that now coincides with a free tip.
-    for (const pin of spec.pins) {
-      const pinPt = pinWorldPoint(shifted, pin.id);
-      if (!pinPt) continue;
-      const tip = nextNodes.find((n) => {
-        if (n.data.kind !== "TIP" || consumed.has(n.id)) return false;
-        if (tipDegree(n.id, nextEdges) !== 1) return false;
-        if (tipAlreadyOnPart(n.id, id, nextEdges)) return false;
-        const t = tipConnect(n);
-        return Math.hypot(t.x - pinPt.x, t.y - pinPt.y) <= 2.5;
-      });
-      if (!tip) continue;
-      const edge = nextEdges.find(
-        (e) => e.source === tip.id || e.target === tip.id,
-      );
-      if (!edge) continue;
-      const tipIsSource = edge.source === tip.id;
-      const otherId = tipIsSource ? edge.target : edge.source;
-      if (otherId === id) continue; // never fold a wire onto its own part
-      nextEdges = nextEdges.map((e) =>
-        e.id === edge.id
-          ? tipIsSource
-            ? { ...e, source: id, sourceHandle: pin.id }
-            : { ...e, target: id, targetHandle: pin.id }
-          : e,
-      );
-      consumed.add(tip.id);
-      nextNodes = nextNodes.filter((n) => n.id !== tip.id);
-      reconnected++;
     }
   }
 
@@ -402,8 +411,18 @@ export function reconnectTipsOnPins(
     nextEdges = nextEdges.map((e) =>
       e.id === edge.id
         ? tipIsSource
-          ? { ...e, source: best!.partId, sourceHandle: best!.pinId }
-          : { ...e, target: best!.partId, targetHandle: best!.pinId }
+          ? {
+              ...e,
+              source: best!.partId,
+              sourceHandle: best!.pinId,
+              data: { ...(e.data as object), waypoints: [], directPath: false },
+            }
+          : {
+              ...e,
+              target: best!.partId,
+              targetHandle: best!.pinId,
+              data: { ...(e.data as object), waypoints: [], directPath: false },
+            }
         : e,
     );
     nextNodes = nextNodes.filter((n) => n.id !== tip.id);

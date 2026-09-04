@@ -1,8 +1,11 @@
 import type { Edge, Node } from "@xyflow/react";
 import type { ComponentData } from "../model/types";
+import { nextLabelRotation, nextRotation, normalizeRotation } from "../model/rotation";
+import { getSymbolLayout } from "../nodes/symbols/layout";
 import {
   orthogonalPolyline,
   outwardStub,
+  pinAwareOrthoPath,
   pointsEqual,
   snapPoint,
   WIRE_GRID,
@@ -12,6 +15,7 @@ import {
 import { pinWorldPoint, pinWorldSide } from "./pinGeometry";
 import {
   closestPointOnPolyline,
+  closestPointOnPolylineRaw,
   computeEdgePolyline,
   distToPolyline,
   dragWireSegment,
@@ -133,6 +137,232 @@ export function detachWireForMove(
     // "Cut" if we peeled off pins OR split away from a shared junction tip.
     didCut: !wasFree || usage(oldSource) > 0 || usage(oldTarget) > 0,
   };
+}
+
+function pathInterior(pts: Point[]): Point[] {
+  if (pts.length <= 2) return [];
+  return pts.slice(1, -1).map((p) => snapPoint(p));
+}
+
+/**
+ * Drag-tool cut: peel one straight run (or a bend span) out of a wire as a
+ * free tip↔tip piece. Remnants stay behind with tips at the cut points.
+ *
+ * `fromIndex`/`toIndex` are inclusive polyline vertex indices of the free piece.
+ * A single segment uses toIndex = fromIndex + 1.
+ */
+export function detachWireSegmentForDrag(
+  nodes: Node<ComponentData>[],
+  edges: Edge[],
+  edgeId: string,
+  fromIndex: number,
+  toIndex: number,
+  newId: () => string,
+): WireCutMoveResult | null {
+  const edge = edges.find((e) => e.id === edgeId);
+  if (!edge || !edge.sourceHandle || !edge.targetHandle) return null;
+
+  const src = nodes.find((n) => n.id === edge.source);
+  const tgt = nodes.find((n) => n.id === edge.target);
+  if (!src || !tgt) return null;
+
+  const polyline = computeEdgePolyline(nodes, edge);
+  if (polyline.length < 2) return null;
+
+  const lo = Math.max(0, Math.min(fromIndex, toIndex));
+  const hi = Math.min(polyline.length - 1, Math.max(fromIndex, toIndex));
+  if (hi - lo < 1) return null;
+
+  // Whole path → peel the entire wire.
+  if (lo === 0 && hi === polyline.length - 1) {
+    return detachWireForMove(nodes, edges, edgeId, newId);
+  }
+
+  const freePts = polyline.slice(lo, hi + 1);
+  const beforePts = lo > 0 ? polyline.slice(0, lo + 1) : null;
+  const afterPts = hi < polyline.length - 1 ? polyline.slice(hi) : null;
+  const a = freePts[0]!;
+  const b = freePts[freePts.length - 1]!;
+
+  const otherEdges = edges.filter((e) => e.id !== edgeId);
+  const usage = (nodeId: string) =>
+    otherEdges.reduce(
+      (n, e) => n + (e.source === nodeId || e.target === nodeId ? 1 : 0),
+      0,
+    );
+
+  const srcIsTip = src.data.kind === "TIP";
+  const tgtIsTip = tgt.data.kind === "TIP";
+  // Never drop an endpoint tip that a remnant still needs.
+  const dropIds = new Set<string>();
+  if (srcIsTip && !beforePts && usage(edge.source) === 0) dropIds.add(edge.source);
+  if (tgtIsTip && !afterPts && usage(edge.target) === 0) dropIds.add(edge.target);
+
+  const nextNodes: Node<ComponentData>[] = nodes
+    .filter((n) => !dropIds.has(n.id))
+    .map((n) => ({ ...n, selected: false as boolean }));
+
+  const tipFreeA = newId();
+  const tipFreeB = newId();
+  nextNodes.push(makeTip(tipFreeA, a, { selected: true }));
+  nextNodes.push(makeTip(tipFreeB, b, { selected: true }));
+
+  const nextEdges: Edge[] = otherEdges.map((e) => ({
+    ...e,
+    selected: false as boolean,
+  }));
+
+  if (beforePts && beforePts.length >= 2) {
+    const tipLeft = newId();
+    nextNodes.push(makeTip(tipLeft, a, { selected: false }));
+    nextEdges.push({
+      id: `${edge.source}${edge.sourceHandle}-${tipLeft}t`,
+      type: "schematic",
+      source: edge.source,
+      sourceHandle: edge.sourceHandle,
+      target: tipLeft,
+      targetHandle: "t",
+      data: { waypoints: pathInterior(beforePts), directPath: true },
+      selected: false,
+    });
+  }
+
+  if (afterPts && afterPts.length >= 2) {
+    const tipRight = newId();
+    nextNodes.push(makeTip(tipRight, b, { selected: false }));
+    nextEdges.push({
+      id: `${tipRight}t-${edge.target}${edge.targetHandle}`,
+      type: "schematic",
+      source: tipRight,
+      sourceHandle: "t",
+      target: edge.target,
+      targetHandle: edge.targetHandle,
+      data: { waypoints: pathInterior(afterPts), directPath: true },
+      selected: false,
+    });
+  }
+
+  const freeEdgeId = `free-${tipFreeA}-${tipFreeB}`;
+  nextEdges.push({
+    id: freeEdgeId,
+    type: "schematic",
+    source: tipFreeA,
+    sourceHandle: "t",
+    target: tipFreeB,
+    targetHandle: "t",
+    data: { waypoints: pathInterior(freePts), directPath: true },
+    selected: true,
+  });
+
+  return {
+    nodes: nextNodes,
+    edges: nextEdges,
+    moveIds: [tipFreeA, tipFreeB],
+    edgeId: freeEdgeId,
+    baseWaypoints: pathInterior(freePts),
+    didCut: true,
+  };
+}
+
+function splitPolylineAt(poly: Point[], at: Point): { before: Point[]; after: Point[] } | null {
+  if (poly.length < 2) return null;
+  const start = poly[0]!;
+  const end = poly[poly.length - 1]!;
+  if (Math.hypot(at.x - start.x, at.y - start.y) < 6) return null;
+  if (Math.hypot(at.x - end.x, at.y - end.y) < 6) return null;
+
+  const lenOf = (pts: Point[]) => {
+    let n = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      n += Math.hypot(pts[i + 1]!.x - pts[i]!.x, pts[i + 1]!.y - pts[i]!.y);
+    }
+    return n;
+  };
+
+  let bestI = 0;
+  let bestD = Infinity;
+  for (let i = 0; i < poly.length - 1; i++) {
+    const a = poly[i]!;
+    const b = poly[i + 1]!;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const lenSq = dx * dx + dy * dy;
+    let t = lenSq < 0.01 ? 0 : ((at.x - a.x) * dx + (at.y - a.y) * dy) / lenSq;
+    t = Math.max(0, Math.min(1, t));
+    const cx = a.x + t * dx;
+    const cy = a.y + t * dy;
+    const d = Math.hypot(at.x - cx, at.y - cy);
+    if (d < bestD) {
+      bestD = d;
+      bestI = i;
+    }
+  }
+  const before = [...poly.slice(0, bestI + 1), at];
+  const after = [at, ...poly.slice(bestI + 1)];
+  if (lenOf(before) < 8 || lenOf(after) < 8) return null;
+  return { before, after };
+}
+
+/**
+ * Cut a wire at `point` and keep both sides (free tips at the cut).
+ * Used when deleting a crossing ring — never drops the stub above/below.
+ */
+export function splitWireAtPoint(
+  nodes: Node<ComponentData>[],
+  edges: Edge[],
+  edgeId: string,
+  point: Point,
+  newId: () => string,
+): { nodes: Node<ComponentData>[]; edges: Edge[] } | null {
+  const edge = edges.find((e) => e.id === edgeId);
+  if (!edge || !edge.sourceHandle || !edge.targetHandle) return null;
+  const src = nodes.find((n) => n.id === edge.source);
+  const tgt = nodes.find((n) => n.id === edge.target);
+  if (!src || !tgt) return null;
+
+  const poly = computeEdgePolyline(nodes, edge);
+  if (poly.length < 2) return null;
+  const at = closestPointOnPolylineRaw(poly, point);
+  const split = splitPolylineAt(poly, at);
+  if (!split) return null;
+
+  const otherEdges = edges.filter((e) => e.id !== edgeId);
+  const nextNodes: Node<ComponentData>[] = nodes.map((n) => ({
+    ...n,
+    selected: false as boolean,
+  }));
+  const nextEdges: Edge[] = otherEdges.map((e) => ({
+    ...e,
+    selected: false as boolean,
+  }));
+
+  const tipA = newId();
+  const tipB = newId();
+  nextNodes.push(makeTip(tipA, at, { selected: false }));
+  nextNodes.push(makeTip(tipB, at, { selected: false }));
+
+  nextEdges.push({
+    id: `${edge.source}${edge.sourceHandle}-${tipA}t`,
+    type: "schematic",
+    source: edge.source,
+    sourceHandle: edge.sourceHandle,
+    target: tipA,
+    targetHandle: "t",
+    data: { waypoints: pathInterior(split.before), directPath: true },
+    selected: false,
+  });
+  nextEdges.push({
+    id: `${tipB}t-${edge.target}${edge.targetHandle}`,
+    type: "schematic",
+    source: tipB,
+    sourceHandle: "t",
+    target: edge.target,
+    targetHandle: edge.targetHandle,
+    data: { waypoints: pathInterior(split.after), directPath: true },
+    selected: false,
+  });
+
+  return pruneOrphanTips(nextNodes, nextEdges);
 }
 
 export function translatePoints(points: Point[], dx: number, dy: number): Point[] {
@@ -835,6 +1065,146 @@ export type ConnectedPartMovePlan = {
   dropStubEdgeIds: string[];
 };
 
+/**
+ * T-splice leaves both rail halves on the same pin. Move then rubber-bands them
+ * into a U (parallel H runs meeting at the part). Lift the tee onto a junction
+ * tip on the preferred rail and keep a single branch to the pin.
+ */
+export function promoteInlinePinTees(
+  nodes: Node<ComponentData>[],
+  edges: Edge[],
+  partIds: readonly string[],
+  newId: () => string,
+): { nodes: Node<ComponentData>[]; edges: Edge[]; promoted: number } {
+  let nextNodes = nodes;
+  let nextEdges = edges;
+  let promoted = 0;
+
+  const degOf = (es: Edge[]) => {
+    const d = new Map<string, number>();
+    for (const e of es) {
+      d.set(e.source, (d.get(e.source) ?? 0) + 1);
+      d.set(e.target, (d.get(e.target) ?? 0) + 1);
+    }
+    return d;
+  };
+
+  for (const partId of partIds) {
+    const part = nextNodes.find((n) => n.id === partId);
+    if (!part || part.data.kind === "TIP") continue;
+
+    const pinsOnPart = new Map<string, Edge[]>();
+    for (const e of nextEdges) {
+      if (e.source === partId && e.sourceHandle) {
+        const list = pinsOnPart.get(e.sourceHandle) ?? [];
+        list.push(e);
+        pinsOnPart.set(e.sourceHandle, list);
+      }
+      if (e.target === partId && e.targetHandle) {
+        const list = pinsOnPart.get(e.targetHandle) ?? [];
+        list.push(e);
+        pinsOnPart.set(e.targetHandle, list);
+      }
+    }
+
+    for (const [pinId, pinEdges] of pinsOnPart) {
+      if (pinEdges.length !== 2) continue;
+      const e0 = pinEdges[0]!;
+      const e1 = pinEdges[1]!;
+      const other0 = e0.source === partId ? e0.target : e0.source;
+      const other1 = e1.source === partId ? e1.target : e1.source;
+      const handle0 = e0.source === partId ? e0.targetHandle : e0.sourceHandle;
+      const handle1 = e1.source === partId ? e1.targetHandle : e1.sourceHandle;
+      if (!other0 || !other1 || other0 === partId || other1 === partId) continue;
+      if (other0 === other1) continue;
+
+      const pinPt = pinWorldPoint(part, pinId);
+      if (!pinPt) continue;
+      const n0 = nextNodes.find((n) => n.id === other0);
+      const n1 = nextNodes.find((n) => n.id === other1);
+      if (!n0 || !n1) continue;
+      const p0 =
+        (handle0 ? pinWorldPoint(n0, handle0) : null) ??
+        (n0.data.kind === "TIP"
+          ? { x: n0.position.x, y: n0.position.y + TIP_SIZE / 2 }
+          : null);
+      const p1 =
+        (handle1 ? pinWorldPoint(n1, handle1) : null) ??
+        (n1.data.kind === "TIP"
+          ? { x: n1.position.x, y: n1.position.y + TIP_SIZE / 2 }
+          : null);
+      if (!p0 || !p1) continue;
+
+      const deg = degOf(nextEdges);
+      // Seat the junction on a real bus when possible (TIP with ≥2 edges), else
+      // on a shared H/V through the two far ends, else at the pin.
+      let tipAt: Point = pinPt;
+      const tipCand =
+        n0.data.kind === "TIP" && (deg.get(other0) ?? 0) >= 2
+          ? { node: n0, pt: p0 }
+          : n1.data.kind === "TIP" && (deg.get(other1) ?? 0) >= 2
+            ? { node: n1, pt: p1 }
+            : n0.data.kind === "TIP"
+              ? { node: n0, pt: p0 }
+              : n1.data.kind === "TIP"
+                ? { node: n1, pt: p1 }
+                : null;
+      if (tipCand && Math.abs(p0.x - p1.x) >= Math.abs(p0.y - p1.y)) {
+        tipAt = { x: pinPt.x, y: tipCand.pt.y };
+      } else if (tipCand) {
+        tipAt = { x: tipCand.pt.x, y: pinPt.y };
+      } else if (Math.abs(p0.y - p1.y) <= WIRE_GRID * 2) {
+        tipAt = { x: pinPt.x, y: (p0.y + p1.y) / 2 };
+      } else if (Math.abs(p0.x - p1.x) <= WIRE_GRID * 2) {
+        tipAt = { x: (p0.x + p1.x) / 2, y: pinPt.y };
+      }
+
+      tipAt = snapPoint(tipAt, WIRE_GRID);
+      const tipId = newId();
+      nextNodes = [...nextNodes, makeTip(tipId, tipAt, { selected: false })];
+
+      const drop = new Set([e0.id, e1.id]);
+      nextEdges = nextEdges.filter((e) => !drop.has(e.id));
+
+      const rewire = (edge: Edge): Edge => {
+        const fromPart = edge.source === partId;
+        return {
+          ...edge,
+          id: `${edge.id}-tee-${tipId}`,
+          source: fromPart ? tipId : edge.source,
+          sourceHandle: fromPart ? "t" : edge.sourceHandle,
+          target: fromPart ? edge.target : tipId,
+          targetHandle: fromPart ? edge.targetHandle : "t",
+          // Far end stayed put; tip is the new near end — clear bends so the
+          // rail redraws tip↔other without the old U corner at the part.
+          data: {
+            ...(edge.data as object),
+            waypoints: [],
+            directPath: true,
+          },
+          selected: false,
+        };
+      };
+
+      nextEdges.push(rewire(e0));
+      nextEdges.push(rewire(e1));
+      nextEdges.push({
+        id: `${tipId}-t-${partId}${pinId}`,
+        type: "schematic",
+        source: tipId,
+        sourceHandle: "t",
+        target: partId,
+        targetHandle: pinId,
+        data: { waypoints: [], directPath: true },
+        selected: false,
+      });
+      promoted++;
+    }
+  }
+
+  return { nodes: nextNodes, edges: nextEdges, promoted };
+}
+
 export type TipWireAttachResult = {
   nodes: Node<ComponentData>[];
   edges: Edge[];
@@ -845,6 +1215,109 @@ export type ConnectedPartMoveResult = {
   nodes: Node<ComponentData>[];
   edges: Edge[];
 };
+
+function nodeBoxForRotation(
+  node: Node<ComponentData>,
+  rotation: unknown,
+): { w: number; h: number } {
+  return getSymbolLayout(node.data.kind, rotation) ?? { w: 92, h: 54 };
+}
+
+/** Keep the symbol center fixed when the layout box swaps on 90°/270°. */
+function rotateNodeAboutCenter(node: Node<ComponentData>): Node<ComponentData> {
+  const oldR = normalizeRotation(node.data.rotation);
+  // Label: join stays put; text spins (skip upside-down).
+  if (node.data.kind === "WIRELABEL") {
+    const newR = nextLabelRotation(oldR);
+    const { internals, ...rest } = {
+      ...node,
+      data: { ...node.data, rotation: newR },
+    } as Node<ComponentData> & { internals?: unknown };
+    void internals;
+    return rest as Node<ComponentData>;
+  }
+  const newR = nextRotation(oldR);
+  const oldBox = nodeBoxForRotation(node, oldR);
+  const newBox = nodeBoxForRotation(node, newR);
+  const cx = node.position.x + oldBox.w / 2;
+  const cy = node.position.y + oldBox.h / 2;
+  const { internals, ...rest } = {
+    ...node,
+    position: { x: cx - newBox.w / 2, y: cy - newBox.h / 2 },
+    data: { ...node.data, rotation: newR },
+  } as Node<ComponentData> & { internals?: unknown };
+  void internals;
+  return rest as Node<ComponentData>;
+}
+
+/**
+ * One orthogonal bend from a pin to the far end. Pin-aware L so rotate/move
+ * does not run through the symbol (blind horizontal-first did that).
+ */
+function rotateRubberBand(
+  pin: Point,
+  other: Point,
+  pinSide: PinSide,
+): Point[] {
+  return pinAwareOrthoPath(pin, other, pinSide, null);
+}
+
+function interiorOf(path: Point[]): Point[] {
+  if (path.length <= 2) return [];
+  return path.slice(1, -1);
+}
+
+/**
+ * Rotate selected parts in place and rubber-band attached wires with a single
+ * L. Does not run move cleanup (pin stubs / tip slides) — that wrecked rotate.
+ */
+export function finalizePartRotate(
+  nodes: Node<ComponentData>[],
+  edges: Edge[],
+  rotatedIds: ReadonlySet<string>,
+): ConnectedPartMoveResult {
+  if (!rotatedIds.size) return { nodes, edges };
+
+  const nextNodes = nodes.map((n) =>
+    rotatedIds.has(n.id) && n.data.kind !== "TIP" ? rotateNodeAboutCenter(n) : n,
+  );
+
+  const nextEdges = edges.map((edge) => {
+    const srcMoved = rotatedIds.has(edge.source);
+    const tgtMoved = rotatedIds.has(edge.target);
+    if (!srcMoved && !tgtMoved) return edge;
+    if (!edge.sourceHandle || !edge.targetHandle) return edge;
+
+    const src = nextNodes.find((n) => n.id === edge.source);
+    const tgt = nextNodes.find((n) => n.id === edge.target);
+    if (!src || !tgt) return edge;
+
+    const start = pinWorldPoint(src, edge.sourceHandle);
+    const end = pinWorldPoint(tgt, edge.targetHandle);
+    if (!start || !end) return edge;
+
+    const pinIsSource = srcMoved && src.data.kind !== "TIP";
+    const pinNode = pinIsSource ? src : tgt;
+    const pinHandle = pinIsSource ? edge.sourceHandle : edge.targetHandle;
+    const pinPt = pinIsSource ? start : end;
+    const otherPt = pinIsSource ? end : start;
+    const side = pinWorldSide(pinNode, pinHandle) ?? "left";
+    const core = rotateRubberBand(pinPt, otherPt, side);
+    const path = pinIsSource ? core : [...core].reverse();
+    const ortho = orthogonalPolyline(path);
+
+    return {
+      ...edge,
+      data: {
+        ...(edge.data as object),
+        waypoints: interiorOf(ortho),
+        directPath: true,
+      },
+    };
+  });
+
+  return { nodes: nextNodes, edges: nextEdges };
+}
 
 const SHORT_FREE_STUB_MAX = 48;
 
@@ -1266,6 +1739,15 @@ export function autorouteWiresForMovedParts(
   return finalizeConnectedPartMove(nodes, edges, movedPartIds).edges;
 }
 
+export type FinalizeConnectedPartMoveOpts = {
+  /**
+   * When true (default), absorb 1–2 grid pin↔pin stairs by nudging a part.
+   * Turn off for intentional keyboard nudges — otherwise Up/Down (or Left/Right
+   * on vertical pins) within NEAR_ALIGN_MAX is undone every step.
+   */
+  nearAlign?: boolean;
+};
+
 /**
  * Full post-move cleanup for any circuit: autoroute + tip slides + attach + prune.
  */
@@ -1273,8 +1755,10 @@ export function finalizeConnectedPartMove(
   nodes: Node<ComponentData>[],
   edges: Edge[],
   movedPartIds: ReadonlySet<string>,
+  opts?: FinalizeConnectedPartMoveOpts,
 ): ConnectedPartMoveResult {
   if (!movedPartIds.size) return { nodes, edges };
+  const nearAlign = opts?.nearAlign !== false;
 
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const deg = new Map<string, number>();
@@ -1308,7 +1792,14 @@ export function finalizeConnectedPartMove(
       ? edges
       : edges.map((e) =>
           clearWaypointIds.has(e.id)
-            ? { ...e, data: { ...(e.data as object), waypoints: [] } }
+            ? {
+                ...e,
+                data: {
+                  ...(e.data as object),
+                  waypoints: [],
+                  directPath: true,
+                },
+              }
             : e,
         );
 
@@ -1364,22 +1855,23 @@ export function finalizeConnectedPartMove(
       };
     }
 
-    // Pin↔pin: empty waypoints — routeWirePoints re-approaches from pin stubs.
-    // straightenWire elbows go stale/backtrack after rotate and caused the
-    // doubled paths / wires-through-parts seen in V-R-C circuits.
-    // If the moved part landed one grid off a facing peer, nudge it into line.
-    const preferId = srcMoved && !tgtMoved
-      ? edge.source
-      : tgtMoved && !srcMoved
-        ? edge.target
-        : undefined;
-    const align = planNearAlignPartNudge(nodes, workEdges, edge, {
-      preferMoveId: preferId,
-    });
-    if (align) tipMoves.push(align);
+    // Pin↔pin: Move rubber-band (directPath → shortest L, no pin stubs).
+    // Default empty edges keep stub-aware autoroute — do not clear directPath
+    // on the starter circuit.
+    if (nearAlign) {
+      const preferId = srcMoved && !tgtMoved
+        ? edge.source
+        : tgtMoved && !srcMoved
+          ? edge.target
+          : undefined;
+      const align = planNearAlignPartNudge(nodes, workEdges, edge, {
+        preferMoveId: preferId,
+      });
+      if (align) tipMoves.push(align);
+    }
     return {
       ...edge,
-      data: { ...(edge.data as object), waypoints: [], directPath: false },
+      data: { ...(edge.data as object), waypoints: [], directPath: true },
     };
   });
 

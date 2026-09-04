@@ -7,6 +7,8 @@ import { dist, type PinSide, type Point } from "./orthogonal";
 
 /** Flow-space radius for magnetic connect (≈1.75 grid). */
 export const PIN_SNAP_RADIUS = 28;
+/** Peer pin row/column align — keep tight so it doesn't fight wire snap. */
+export const PEER_PIN_SNAP = 6;
 
 export type PinHit = {
   nodeId: string;
@@ -91,6 +93,8 @@ export function pinSpecForNode(node: Node<ComponentData>, pinId: string): PinSpe
   const spec = COMPONENT_SPECS[node.data.kind];
   const base = spec.pins.find((p) => p.id === pinId);
   if (!base) return null;
+  // Net name: join stays fixed; only the rendered text spins.
+  if (node.data.kind === "WIRELABEL") return base;
   return rotatePinSpec(base, normalizeRotation(node.data.rotation));
 }
 
@@ -170,10 +174,21 @@ function snapGhostToPeerPins(
 }
 
 /** Cursor → node top-left: symbol center under the mouse (LTspice-like grab). */
-export function paletteDropTopLeft(kind: ComponentKind, cursor: Point): Point {
-  const layout = getSymbolLayout(kind, 0);
+export function paletteDropTopLeft(
+  kind: ComponentKind,
+  cursor: Point,
+  rotation: unknown = 0,
+): Point {
+  // Net name: join (bottom-center) under the cursor; text spins around that point.
+  if (kind === "WIRELABEL") {
+    const box = getSymbolLayout(kind, 0) ?? { w: 64, h: 48 };
+    return {
+      x: cursor.x - box.w / 2,
+      y: cursor.y - box.h,
+    };
+  }
+  const layout = getSymbolLayout(kind, rotation);
   if (!layout) {
-    // HTML-card fallback (no SVG layout) — still center the default box.
     return { x: cursor.x - 46, y: cursor.y - 27 };
   }
   return {
@@ -191,12 +206,13 @@ export function stampPositionFromCursor(
   kind: ComponentKind,
   cursor: Point,
   grid: number,
+  rotation: unknown = 0,
 ): Point {
   const snappedCursor = {
     x: Math.round(cursor.x / grid) * grid,
     y: Math.round(cursor.y / grid) * grid,
   };
-  const topLeft = paletteDropTopLeft(kind, snappedCursor);
+  const topLeft = paletteDropTopLeft(kind, snappedCursor, rotation);
   return {
     x: Math.round(topLeft.x / grid) * grid,
     y: Math.round(topLeft.y / grid) * grid,
@@ -208,7 +224,7 @@ export function snapDropPositionToPeerPins(
   kind: ComponentKind,
   position: Point,
   nodes: Node<ComponentData>[],
-  threshold = 16,
+  threshold = PEER_PIN_SNAP,
 ): Point {
   if (kind === "TIP") return position;
   const ghost: Node<ComponentData> = {
@@ -224,7 +240,7 @@ export function snapPositionToPeerPins(
   nodes: Node<ComponentData>[],
   movingId: string,
   position: Point,
-  threshold = 10,
+  threshold = PEER_PIN_SNAP,
 ): Point {
   const moving = nodes.find((n) => n.id === movingId);
   if (!moving || moving.data.kind === "TIP") return position;
