@@ -41,6 +41,8 @@ const KIND_WORDS: Record<string, ComponentKind> = {
   isource: "I", current: "I", currentsource: "I", idc: "I", i: "I",
   diode: "D", diodes: "D", d: "D",
   zener: "DZ", zenerdiode: "DZ", zenerdiodes: "DZ", dz: "DZ",
+  schottky: "DS", schottkydiode: "DS", ds: "DS",
+  led: "LED", leds: "LED",
   mosfet: "NMOS", nmos: "NMOS", pmos: "PMOS", transistor: "NMOS", fet: "NMOS",
   jfet: "NJFET", njfet: "NJFET", pjfet: "PJFET",
   sic: "SICMOS", sicmosfet: "SICMOS", gan: "GANHEMT", ganhemt: "GANHEMT", igbt: "IGBT",

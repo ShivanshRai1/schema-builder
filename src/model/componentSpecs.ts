@@ -77,40 +77,40 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
   // ---- Resistors ---------------------------------------------------------
   R: {
     kind: "R", category: "Resistor", refdesPrefix: "R", label: "Fixed resistor", glyph: "∿", emits: true,
-    pins: LR, attributes: [A("value", "Resistance", "text", "10k", { unit: "Ω" })],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "10k"}`,
+    pins: LR, attributes: [A("value", "Resistance", "text", "R", { unit: "Ω" })],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "R"}`,
   },
   RBOX: {
     kind: "RBOX", category: "Resistor", refdesPrefix: "R", label: "Fixed resistor (box)", glyph: "▭", emits: true,
-    pins: LR, attributes: [A("value", "Resistance", "text", "10k", { unit: "Ω" })],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "10k"}`,
+    pins: LR, attributes: [A("value", "Resistance", "text", "R", { unit: "Ω" })],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "R"}`,
   },
   RVAR: {
     kind: "RVAR", category: "Resistor", refdesPrefix: "R", label: "Variable / rheostat", glyph: "∿↗", emits: true,
-    pins: LR, attributes: [A("value", "Resistance", "text", "10k", { unit: "Ω" })],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "10k"}`,
+    pins: LR, attributes: [A("value", "Resistance", "text", "R", { unit: "Ω" })],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "R"}`,
   },
   RVARBOX: {
     kind: "RVARBOX", category: "Resistor", refdesPrefix: "R", label: "Variable (box)", glyph: "▭↗", emits: true,
-    pins: LR, attributes: [A("value", "Resistance", "text", "10k", { unit: "Ω" })],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "10k"}`,
+    pins: LR, attributes: [A("value", "Resistance", "text", "R", { unit: "Ω" })],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "R"}`,
   },
   POT: {
     kind: "POT", category: "Resistor", refdesPrefix: "R", label: "Potentiometer", glyph: "∿⊥", emits: true,
     pins: [pin("a", "a", "left"), pin("w", "w", "top"), pin("b", "b", "right")],
-    attributes: [A("value", "Total resistance", "text", "10k", { unit: "Ω" })],
+    attributes: [A("value", "Total resistance", "text", "R", { unit: "Ω" })],
     // Two series halves sharing the wiper (standard schematic→SPICE mapping).
     toSpice: (r, n, p) => {
-      const v = p.value ?? "10k";
+      const v = p.value ?? "R";
       return `${r}A ${n("a")} ${n("w")} {${v}/2}\n${r}B ${n("w")} ${n("b")} {${v}/2}`;
     },
   },
   POTBOX: {
     kind: "POTBOX", category: "Resistor", refdesPrefix: "R", label: "Potentiometer (box)", glyph: "▭⊥", emits: true,
     pins: [pin("a", "a", "left"), pin("w", "w", "top"), pin("b", "b", "right")],
-    attributes: [A("value", "Total resistance", "text", "10k", { unit: "Ω" })],
+    attributes: [A("value", "Total resistance", "text", "R", { unit: "Ω" })],
     toSpice: (r, n, p) => {
-      const v = p.value ?? "10k";
+      const v = p.value ?? "R";
       return `${r}A ${n("a")} ${n("w")} {${v}/2}\n${r}B ${n("w")} ${n("b")} {${v}/2}`;
     },
   },
@@ -118,49 +118,49 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
   // ---- Inductors ---------------------------------------------------------
   L: {
     kind: "L", category: "Inductor", refdesPrefix: "L", label: "Air core inductor", glyph: "◠◠", emits: true,
-    pins: LR, attributes: [A("value", "Inductance", "text", "1u", { unit: "H" }), A("ic", "Initial current", "text", "", { unit: "A" })],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "1u"}${p.ic ? ` ic=${p.ic}` : ""}`,
+    pins: LR, attributes: [A("value", "Inductance", "text", "L", { unit: "H" }), A("ic", "Initial current", "text", "", { unit: "A" })],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "L"}${p.ic ? ` ic=${p.ic}` : ""}`,
   },
   LVAR: {
     kind: "LVAR", category: "Inductor", refdesPrefix: "L", label: "Variable inductor", glyph: "◠↗", emits: true,
-    pins: LR, attributes: [A("value", "Inductance", "text", "1u", { unit: "H" }), A("ic", "Initial current", "text", "", { unit: "A" })],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "1u"}${p.ic ? ` ic=${p.ic}` : ""}`,
+    pins: LR, attributes: [A("value", "Inductance", "text", "L", { unit: "H" }), A("ic", "Initial current", "text", "", { unit: "A" })],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "L"}${p.ic ? ` ic=${p.ic}` : ""}`,
   },
 
   // ---- Capacitors --------------------------------------------------------
   C: {
     kind: "C", category: "Capacitor", refdesPrefix: "C", label: "Non-polarized", glyph: "||", emits: true,
-    pins: LR, attributes: [A("value", "Capacitance", "text", "1n", { unit: "F" }), A("ic", "Initial voltage", "text", "", { unit: "V" })],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "1n"}${p.ic ? ` ic=${p.ic}` : ""}`,
+    pins: LR, attributes: [A("value", "Capacitance", "text", "C", { unit: "F" }), A("ic", "Initial voltage", "text", "", { unit: "V" })],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "C"}${p.ic ? ` ic=${p.ic}` : ""}`,
   },
   CPOL: {
     kind: "CPOL", category: "Capacitor", refdesPrefix: "C", label: "Polarized", glyph: "|)", emits: true,
     pins: [pin("a", "+", "left"), pin("b", "−", "right")],
-    attributes: [A("value", "Capacitance", "text", "10u", { unit: "F" }), A("ic", "Initial voltage", "text", "", { unit: "V" })],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "10u"}${p.ic ? ` ic=${p.ic}` : ""}`,
+    attributes: [A("value", "Capacitance", "text", "C", { unit: "F" }), A("ic", "Initial voltage", "text", "", { unit: "V" })],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "C"}${p.ic ? ` ic=${p.ic}` : ""}`,
   },
   CFIXED: {
     kind: "CFIXED", category: "Capacitor", refdesPrefix: "C", label: "Fixed capacitor", glyph: "|)", emits: true,
-    pins: LR, attributes: [A("value", "Capacitance", "text", "1n", { unit: "F" }), A("ic", "Initial voltage", "text", "", { unit: "V" })],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "1n"}${p.ic ? ` ic=${p.ic}` : ""}`,
+    pins: LR, attributes: [A("value", "Capacitance", "text", "C", { unit: "F" }), A("ic", "Initial voltage", "text", "", { unit: "V" })],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "C"}${p.ic ? ` ic=${p.ic}` : ""}`,
   },
   CVAR: {
     kind: "CVAR", category: "Capacitor", refdesPrefix: "C", label: "Variable capacitor", glyph: "|)↗", emits: true,
-    pins: LR, attributes: [A("value", "Capacitance", "text", "100p", { unit: "F" }), A("ic", "Initial voltage", "text", "", { unit: "V" })],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "100p"}${p.ic ? ` ic=${p.ic}` : ""}`,
+    pins: LR, attributes: [A("value", "Capacitance", "text", "C", { unit: "F" }), A("ic", "Initial voltage", "text", "", { unit: "V" })],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "C"}${p.ic ? ` ic=${p.ic}` : ""}`,
   },
 
   // ---- Sources -----------------------------------------------------------
   V: {
     kind: "V", category: "Source", refdesPrefix: "V", label: "Voltage source", glyph: "(~)", emits: true,
     pins: PN,
-    attributes: [A("value", "Value / stimulus", "text", "DC 12", { hint: "e.g. DC 12, AC 1, PULSE(0 5 0 1n 1n 5u 10u)" })],
-    toSpice: (r, n, p) => `${r} ${n("p")} ${n("n")} ${p.value ?? "DC 0"}`,
+    attributes: [A("value", "Value", "text", "V", { hint: "DC / AC magnitude, or a full SPICE stimulus" })],
+    toSpice: (r, n, p) => `${r} ${n("p")} ${n("n")} ${p.value ?? "V"}`,
   },
   I: {
     kind: "I", category: "Source", refdesPrefix: "I", label: "Current source", glyph: "(→)", emits: true,
-    pins: PN, attributes: [A("value", "Value / stimulus", "text", "DC 1", { hint: "e.g. DC 1, PWL(...)" })],
-    toSpice: (r, n, p) => `${r} ${n("p")} ${n("n")} ${p.value ?? "DC 0"}`,
+    pins: PN, attributes: [A("value", "Value / stimulus", "text", "I", { hint: "e.g. DC 1, PWL(...), or I" })],
+    toSpice: (r, n, p) => `${r} ${n("p")} ${n("n")} ${p.value ?? "I"}`,
   },
 
   // ---- Transistors -------------------------------------------------------
@@ -228,6 +228,18 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
     attributes: [modelAttr("DZEN")],
     toSpice: (r, n, p) => `${r} ${n("a")} ${n("k")} ${p.model ?? "DZEN"}`,
   },
+  DS: {
+    kind: "DS", category: "Semiconductor", refdesPrefix: "D", label: "Schottky diode", glyph: "▷|S", emits: true,
+    pins: [pin("a", "A", "left"), pin("k", "K", "right")],
+    attributes: [modelAttr("DSCH")],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("k")} ${p.model ?? "DSCH"}`,
+  },
+  LED: {
+    kind: "LED", category: "Semiconductor", refdesPrefix: "D", label: "LED", glyph: "▷|*", emits: true,
+    pins: [pin("a", "A", "left"), pin("k", "K", "right")],
+    attributes: [modelAttr("DLED")],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("k")} ${p.model ?? "DLED"}`,
+  },
   SICMOS: {
     kind: "SICMOS", category: "Semiconductor", refdesPrefix: "XM", label: "SiC MOSFET", glyph: "SiC", emits: true,
     pins: [pin("d", "D", "top"), pin("g", "G", "left", 100 / 128), pin("s", "S", "bottom")],
@@ -266,9 +278,9 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
     toSpice: subckt(["c", "g", "e", "ek"]),
   },
   SCR: {
-    kind: "SCR", category: "Semiconductor", refdesPrefix: "XT", label: "Thyristor / SCR", glyph: "▷|⊥", emits: true,
-    // Chart orientation: anode–cathode horizontal, gate from cathode junction down.
-    pins: [pin("a", "A", "left"), pin("k", "K", "right"), pin("g", "G", "bottom", 2 / 3)],
+    kind: "SCR", category: "Semiconductor", refdesPrefix: "XT", label: "Thyristor / SCR", glyph: "▽|⊥", emits: true,
+    // LTspice orientation: anode top, cathode bottom, gate from lower left.
+    pins: [pin("a", "A", "top"), pin("k", "K", "bottom"), pin("g", "G", "left", 2 / 3)],
     attributes: [modelAttr("SCR_GEN")],
     toSpice: subckt(["a", "k", "g"]),
   },
@@ -320,8 +332,8 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
   // ---- Sense / Probe -----------------------------------------------------
   CSENSE: {
     kind: "CSENSE", category: "Sense / Probe", refdesPrefix: "Rs", label: "Current sense (shunt)", glyph: "Ω→", emits: true,
-    pins: LR, attributes: [A("value", "Shunt", "text", "10m", { unit: "Ω" })],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "10m"}`,
+    pins: LR, attributes: [A("value", "Shunt", "text", "R", { unit: "Ω" })],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "R"}`,
     toProbes: (r) => [`I(${r})`],
   },
   VSENSE: {
@@ -417,7 +429,7 @@ export const PALETTE: { category: Category; kinds: ComponentKind[] }[] = [
   { category: "Resistor", kinds: paletteAlpha(["RVAR"]) },
   {
     category: "Semiconductor",
-    kinds: paletteAlpha(["DZ", "IGBT_K", "NMOS_D", "PMOS_D", "SCR", "SICMOS_K"]),
+    kinds: paletteAlpha(["DS", "DZ", "IGBT_K", "LED", "NMOS_D", "PMOS_D", "SCR", "SICMOS_K"]),
   },
   {
     category: "Sense / Probe",

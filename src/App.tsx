@@ -7,7 +7,7 @@ import {
   type Node,
   type Edge,
 } from "@xyflow/react";
-import { Canvas, type CanvasMode, type WireCompletePayload, type WirePartialPayload } from "./components/Canvas";
+import { Canvas, type CanvasMode, type CanvasViewApi, type WireCompletePayload, type WirePartialPayload } from "./components/Canvas";
 import { Palette } from "./components/Palette";
 import { NetNameDialog } from "./components/NetNameDialog";
 import { ModeToolbar } from "./components/ModeToolbar";
@@ -38,7 +38,7 @@ import {
   endpointLabel,
   findNodeByRefdes,
 } from "./llm/wireOps";
-import { applyCutMove, detachPartForMove, nodesInRect, reconnectPartsOnTips, reconnectTipsOnPins, type FlowRect } from "./wiring/cutMove";
+import { applyCutMove, detachPartForMove, edgesCoveredByRect, nodesCoveredByRect, nodesInRect, reconnectPartsOnTips, reconnectTipsOnPins, type FlowRect } from "./wiring/cutMove";
 import { attachPartsToWires, attachNetNameToNearestPin } from "./wiring/insertOnWire";
 import {
   collapseMicroBends,
@@ -119,7 +119,7 @@ const mk = (
 });
 
 const INITIAL_NODES: Node<ComponentData>[] = [
-  mk("n1", "V", "V1", 40, 180),
+  mk("n1", "V", "V1", 40, 180, 0, { value: "V" }),
   mk("n2", "R", "R1", 280, 90),
   mk("n3", "C", "C1", 540, 180),
   mk("n4", "GND", "", 280, 360),
@@ -175,6 +175,45 @@ export default function App() {
   const connectedMoveRef = useRef(false);
   const moveSeverGuard = useRef<{ nodeId: string; at: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const migratedValueDefaults = useRef(false);
+
+  // One-time: replace old numeric factory defaults with letter placeholders (R/C/L/V/I).
+  useEffect(() => {
+    if (migratedValueDefaults.current) return;
+    migratedValueDefaults.current = true;
+    const migrateValue = (kind: string, value: string): string | null => {
+      const v = value.trim();
+      if (kind === "V" && /^DC\s*12$/i.test(v)) return "V";
+      if (kind === "I" && /^DC\s*1$/i.test(v)) return "I";
+      if (
+        (kind === "R" || kind === "RBOX" || kind === "RVAR" || kind === "RVARBOX" ||
+          kind === "POT" || kind === "POTBOX") &&
+        /^10k$/i.test(v)
+      ) {
+        return "R";
+      }
+      if (kind === "CSENSE" && /^10m$/i.test(v)) return "R";
+      if ((kind === "L" || kind === "LVAR") && /^1u$/i.test(v)) return "L";
+      if ((kind === "C" || kind === "CFIXED") && /^1n$/i.test(v)) return "C";
+      if (kind === "CPOL" && /^10u$/i.test(v)) return "C";
+      if (kind === "CVAR" && /^100p$/i.test(v)) return "C";
+      return null;
+    };
+    setNodes((ns) => {
+      let changed = false;
+      const next = ns.map((n) => {
+        const cur = n.data.params.value ?? "";
+        const to = migrateValue(n.data.kind, cur);
+        if (!to) return n;
+        changed = true;
+        return {
+          ...n,
+          data: { ...n.data, params: { ...n.data.params, value: to } },
+        };
+      });
+      return changed ? next : ns;
+    });
+  }, [setNodes]);
 
   const [textEditMode, setTextEditMode] = useState(false);
   const [draftNetlist, setDraftNetlist] = useState("");
@@ -193,11 +232,14 @@ export default function App() {
   });
   const rightColRef = useRef<HTMLDivElement>(null);
   const [canvasMode, setCanvasMode] = useState<CanvasMode>("explore");
+  const canvasViewApiRef = useRef<CanvasViewApi | null>(null);
   const [placeKind, setPlaceKind] = useState<ComponentKind | null>(null);
   const [placeParams, setPlaceParams] = useState<Record<string, string> | null>(null);
   const [netNameDialog, setNetNameDialog] = useState(false);
   const lastWireLabelName = useRef("");
   const [pasteClip, setPasteClip] = useState<CircuitClipboard | null>(null);
+  /** Ctrl+C copy-marquee tool (dotted box); finishes into pasteClip. */
+  const [copyMarquee, setCopyMarquee] = useState(false);
   const [hiddenCrossingKeys, setHiddenCrossingKeys] = useState<string[]>([]);
   const [propsDialog, setPropsDialog] = useState<{
     nodeId: string;
@@ -350,12 +392,11 @@ export default function App() {
       // Junction TIP (2+ edges) — just add the new edge, keep the junction node.
       if (srcTipEdges.length >= 2) {
         const added = addEdge(
-          { ...c, type: "schematic", data: { waypoints } },
+          { ...c, type: "schematic", data: { waypoints, directPath: true } },
           eds,
         );
-        const normalized = normalizeWires(ns, added);
-        setNodes(normalized.nodes);
-        setEdges(normalized.edges);
+        setNodes(ns);
+        setEdges(added);
         return;
       }
       const intoTip = srcTipEdges[0] ?? null;
@@ -364,7 +405,7 @@ export default function App() {
         if (freeStart) setNodes(ns);
         setEdges((prev) =>
           addEdge(
-            { ...c, type: "schematic", data: { waypoints } },
+            { ...c, type: "schematic", data: { waypoints, directPath: true } },
             freeStart ? eds : prev,
           ),
         );
@@ -418,15 +459,14 @@ export default function App() {
             sourceHandle: otherHandle,
             target: c.target,
             targetHandle: c.targetHandle,
-            data: { waypoints: cleanedMerged },
+            data: { waypoints: cleanedMerged, directPath: true },
           },
           nextEdges,
         );
       }
       const pruned = pruneOrphanTips(nextNodes, nextEdges);
-      const normalized = normalizeWires(pruned.nodes, pruned.edges);
-      setNodes(normalized.nodes);
-      setEdges(normalized.edges);
+      setNodes(pruned.nodes);
+      setEdges(pruned.edges);
       return;
     }
 
@@ -441,17 +481,21 @@ export default function App() {
       );
       if (tipEdges.length >= 2) {
         const added = addEdge(
-          { ...c, type: "schematic", data: { waypoints } },
+          { ...c, type: "schematic", data: { waypoints, directPath: true } },
           eds,
         );
-        const normalized = normalizeWires(ns, added);
-        setNodes(normalized.nodes);
-        setEdges(normalized.edges);
+        setNodes(ns);
+        setEdges(added);
         return;
       }
       const intoTip = tipEdges[0] ?? null;
       if (!intoTip) {
-        setEdges((prev) => addEdge({ ...c, type: "schematic", data: { waypoints } }, prev));
+        setEdges((prev) =>
+          addEdge(
+            { ...c, type: "schematic", data: { waypoints, directPath: true } },
+            prev,
+          ),
+        );
         return;
       }
       const tipIsTarget = intoTip.target === c.target;
@@ -499,15 +543,14 @@ export default function App() {
             sourceHandle: c.sourceHandle,
             target: otherId,
             targetHandle: otherHandle,
-            data: { waypoints: cleanedMerged },
+            data: { waypoints: cleanedMerged, directPath: true },
           },
           nextEdges,
         );
       }
       const pruned = pruneOrphanTips(nextNodes, nextEdges);
-      const normalized = normalizeWires(pruned.nodes, pruned.edges);
-      setNodes(normalized.nodes);
-      setEdges(normalized.edges);
+      setNodes(pruned.nodes);
+      setEdges(pruned.edges);
       return;
     }
 
@@ -517,13 +560,15 @@ export default function App() {
       { nodeId: c.target, handle: c.targetHandle },
     ]);
     const pruned = pruneOrphanTips(cleared.nodes, cleared.edges);
-    const normalized = normalizeWires(pruned.nodes, pruned.edges);
-    setNodes(normalized.nodes);
-    setEdges((prev) => {
-      // prev may be stale vs pruned — use pruned.edges as base.
-      void prev;
-      return addEdge({ ...c, type: "schematic", data: { waypoints } }, normalized.edges);
-    });
+    // Do NOT normalizeWires here — that rewrote unrelated edges (e.g. V1–R1
+    // when finishing R1–C1). User bends stay literal via directPath.
+    setNodes(pruned.nodes);
+    setEdges(
+      addEdge(
+        { ...c, type: "schematic", data: { waypoints, directPath: true } },
+        pruned.edges,
+      ),
+    );
   }, [setNodes, setEdges, pushHistory]);
 
   const onWirePartial = useCallback((payload: WirePartialPayload) => {
@@ -546,7 +591,7 @@ export default function App() {
           sourceHandle: "t",
           target: b,
           targetHandle: "t",
-          data: { waypoints },
+          data: { waypoints, directPath: true },
         },
         edgesRef.current,
       );
@@ -573,7 +618,7 @@ export default function App() {
         sourceHandle,
         target: tipId,
         targetHandle: "t",
-        data: { waypoints },
+        data: { waypoints, directPath: true },
       },
       currentEdges,
     );
@@ -792,8 +837,8 @@ export default function App() {
 
   /**
    * Pickup for Move / Drag tools.
-   * - Move (default): keep electrical edges attached; long free TIP wires ride along.
-   * - Drag (`detach: true`): sever wires first, then translate the part alone.
+   * - Drag (default connected): keep electrical edges attached; long free TIP wires ride along.
+   * - Move (`detach: true`): sever wires first, then translate the part alone.
    */
   const onMoveDisconnect = useCallback(
     (
@@ -820,7 +865,7 @@ export default function App() {
         );
       }
 
-      // --- Drag tool: always disconnect, then move part(s) alone --------------
+      // --- Move tool: always disconnect, then move part(s) alone --------------
       if (detach) {
         connectedMoveRef.current = false;
         const ids =
@@ -862,7 +907,7 @@ export default function App() {
         };
       }
 
-      // --- Move tool: keep wires connected -----------------------------------
+      // --- Drag tool: keep wires connected -----------------------------------
       // T-spliced pins (both rail halves on one pin) rubber-band into a U —
       // lift those tees onto a junction tip before the drag.
       const moveGroupIds =
@@ -967,7 +1012,7 @@ export default function App() {
         };
       }
 
-      // Disconnected / fresh part — Move still translates without severing.
+      // Disconnected / fresh part — Drag still translates without severing.
       connectedMoveRef.current = true;
       const partOrigin = nodesNow.find((n) => n.id === nodeId);
       if (!partOrigin) return null;
@@ -1021,6 +1066,7 @@ export default function App() {
   /** Palette click: enter stamp tool (toggle off if same kind). Wire label asks for a name first. */
   const pickPlaceKind = useCallback((kind: ComponentKind) => {
     setPasteClip(null);
+    setCopyMarquee(false);
     if (kind === "WIRELABEL") {
       setPlaceKind(null);
       setPlaceParams(null);
@@ -1035,11 +1081,27 @@ export default function App() {
     setPlaceKind(null);
     setPlaceParams(null);
     setPasteClip(null);
+    setCopyMarquee(false);
+  }, []);
+
+  const beginCopyMarquee = useCallback(() => {
+    setPlaceKind(null);
+    setPlaceParams(null);
+    setPasteClip(null);
+    // Fresh copy-tool selection (highlight builds while in this mode).
+    setNodes((ns) => ns.map((n) => (n.selected ? { ...n, selected: false } : n)));
+    setEdges((es) => es.map((e) => (e.selected ? { ...e, selected: false } : e)));
+    setCopyMarquee(true);
+  }, [setNodes, setEdges]);
+
+  const cancelCopyMarquee = useCallback(() => {
+    setCopyMarquee(false);
   }, []);
 
   const beginWireLabelStamp = useCallback((name: string) => {
     lastWireLabelName.current = name;
     setPasteClip(null);
+    setCopyMarquee(false);
     setPlaceParams({ name });
     setPlaceKind("WIRELABEL");
     setNetNameDialog(false);
@@ -1085,6 +1147,7 @@ export default function App() {
     setPlaceKind(null);
     setPlaceParams(null);
     setPasteClip(null);
+    setCopyMarquee(false);
     setCanvasMode(mode);
   }, []);
 
@@ -1207,6 +1270,7 @@ export default function App() {
       setPlaceKind(null);
       setPlaceParams(null);
       setPasteClip(null);
+      setCopyMarquee(false);
       setCanvasMode("delete");
       return;
     }
@@ -1326,6 +1390,79 @@ export default function App() {
       const pruned = pruneOrphanTips(nextNodes, nextEdges);
       setNodes(pruned.nodes);
       setEdges(pruned.edges);
+      return;
+    }
+
+    if (plan.action === "cutOpen") {
+      const clicked = edgesNow.find((edge) => edge.id === plan.edgeId);
+      if (!clicked) return;
+      pushHistory();
+      const TIP_SIZE = 8;
+      const tipAt = (pt: Point) => ({
+        x: pt.x,
+        y: pt.y - TIP_SIZE / 2,
+      });
+      const interior = (poly: Point[]) =>
+        poly.length <= 2 ? [] : poly.slice(1, -1);
+
+      let nextNodes = [...nodesNow];
+      const nextEdges = edgesNow.filter((edge) => edge.id !== plan.edgeId);
+      const added: Edge[] = [];
+
+      if (plan.beforePoly) {
+        const end = plan.beforePoly[plan.beforePoly.length - 1]!;
+        const tipId = newId();
+        nextNodes.push({
+          id: tipId,
+          type: "component" as const,
+          position: tipAt(end),
+          data: { kind: "TIP" as const, refdes: "", params: {} },
+          style: { width: TIP_SIZE, height: TIP_SIZE },
+          selected: false,
+          draggable: false,
+        });
+        added.push({
+          ...clicked,
+          id: `${clicked.source}${clicked.sourceHandle ?? ""}-${tipId}t`,
+          target: tipId,
+          targetHandle: "t",
+          data: {
+            waypoints: interior(plan.beforePoly),
+            directPath: true,
+          },
+          selected: false,
+        });
+      }
+
+      if (plan.afterPoly) {
+        const start = plan.afterPoly[0]!;
+        const tipId = newId();
+        nextNodes.push({
+          id: tipId,
+          type: "component" as const,
+          position: tipAt(start),
+          data: { kind: "TIP" as const, refdes: "", params: {} },
+          style: { width: TIP_SIZE, height: TIP_SIZE },
+          selected: false,
+          draggable: false,
+        });
+        added.push({
+          ...clicked,
+          id: `${tipId}t-${clicked.target}${clicked.targetHandle ?? ""}`,
+          source: tipId,
+          sourceHandle: "t",
+          data: {
+            waypoints: interior(plan.afterPoly),
+            directPath: true,
+          },
+          selected: false,
+        });
+      }
+
+      const pruned = pruneOrphanTips(nextNodes, [...nextEdges, ...added]);
+      const collapsed = collapsePassThroughTips(pruned.nodes, pruned.edges);
+      setNodes(collapsed.nodes);
+      setEdges(collapsed.edges);
       return;
     }
 
@@ -1528,7 +1665,7 @@ export default function App() {
   }, [setNodes, setEdges, pushHistory]);
 
   /**
-   * After Drag drop: tip↔pin reconnect (incl. multi-tip GND T restore), then
+   * After Move drop: tip↔pin reconnect (incl. multi-tip GND T restore), then
    * 1-pin mid-rail splice for GND placed onto a continuous wire.
    */
   const reconnectDroppedParts = useCallback(
@@ -2001,30 +2138,160 @@ export default function App() {
     [setNodes, setEdges, snapshot],
   );
 
+  const armPasteFromIds = useCallback(
+    (nodeIdList: Iterable<string>, edgeIdList: Iterable<string>) => {
+      const ns = nodesRef.current;
+      const es = edgesRef.current;
+      const selectedNodeIds = new Set(nodeIdList);
+      const selectedEdgeIds = new Set(edgeIdList);
+      for (const e of es) {
+        if (selectedNodeIds.has(e.source) && selectedNodeIds.has(e.target)) {
+          selectedEdgeIds.add(e.id);
+        }
+      }
+      for (const e of es) {
+        if (!selectedEdgeIds.has(e.id)) continue;
+        selectedNodeIds.add(e.source);
+        selectedNodeIds.add(e.target);
+      }
+      const hasPart = [...selectedNodeIds].some((id) => {
+        const n = ns.find((x) => x.id === id);
+        return Boolean(n && n.data.kind !== "TIP");
+      });
+      if (!hasPart && !selectedEdgeIds.size) return false;
+      if (!selectedNodeIds.size) return false;
+
+      const clip: CircuitClipboard = {
+        nodes: ns
+          .filter((n) => selectedNodeIds.has(n.id))
+          .map((n) => ({
+            ...n,
+            selected: false,
+            data: { ...n.data, params: { ...n.data.params } },
+          })),
+        edges: es
+          .filter((e) => selectedEdgeIds.has(e.id))
+          .map((e) => {
+            const data = e.data as { waypoints?: Point[] } | undefined;
+            return {
+              ...e,
+              selected: false,
+              data: data
+                ? { ...data, waypoints: (data.waypoints ?? []).map((p) => ({ ...p })) }
+                : e.data,
+            };
+          }),
+      };
+      clipboard.current = clip;
+      setPlaceKind(null);
+      setPlaceParams(null);
+      setCopyMarquee(false);
+      setPasteClip(clip);
+      return true;
+    },
+    [],
+  );
+
   const copySelection = useCallback(() => {
     const ns = nodesRef.current;
     const es = edgesRef.current;
-    const sel = ns.filter((n) => n.selected);
-    if (!sel.length) return;
-    const idSet = new Set(sel.map((n) => n.id));
-    const internal = es.filter((e) => idSet.has(e.source) && idSet.has(e.target));
-    const clip: CircuitClipboard = {
-      nodes: sel.map((n) => ({ ...n, data: { ...n.data, params: { ...n.data.params } } })),
-      edges: internal.map((e) => {
-        const data = e.data as { waypoints?: Point[] } | undefined;
-        return {
-          ...e,
-          data: data
-            ? { ...data, waypoints: (data.waypoints ?? []).map((p) => ({ ...p })) }
-            : e.data,
-        };
+    armPasteFromIds(
+      ns.filter((n) => n.selected).map((n) => n.id),
+      es.filter((e) => e.selected).map((e) => e.id),
+    );
+  }, [armPasteFromIds]);
+
+  /** Copy-mode: left-click one part → copy immediately (paste ghost). */
+  const copyPartImmediate = useCallback(
+    (nodeId: string) => {
+      armPasteFromIds([nodeId], []);
+    },
+    [armPasteFromIds],
+  );
+
+  /** Copy-mode: left-click one wire → copy immediately (paste ghost). */
+  const copyEdgeImmediate = useCallback(
+    (edgeId: string) => {
+      const e = edgesRef.current.find((x) => x.id === edgeId);
+      if (!e) return;
+      armPasteFromIds([e.source, e.target], [edgeId]);
+    },
+    [armPasteFromIds],
+  );
+
+  /**
+   * Copy-mode marquee: ≥70% coverage.
+   * Plain drag → copy immediately. Ctrl+drag → add to highlight only (Enter to commit).
+   */
+  const selectCopyRegion = useCallback((rect: FlowRect, additive: boolean) => {
+    const ns = nodesRef.current;
+    const es = edgesRef.current;
+    const coveredNodes = new Set(
+      nodesCoveredByRect(ns, rect, 0.7).filter((id) => {
+        const n = ns.find((x) => x.id === id);
+        return Boolean(n && n.data.kind !== "TIP");
       }),
-    };
-    clipboard.current = clip;
-    setPlaceKind(null);
-    setPlaceParams(null);
-    setPasteClip(clip);
-  }, []);
+    );
+    const coveredTips = nodesCoveredByRect(ns, rect, 0.7).filter((id) => {
+      const n = ns.find((x) => x.id === id);
+      return n?.data.kind === "TIP";
+    });
+    const coveredEdges = new Set(edgesCoveredByRect(ns, es, rect, 0.7));
+    const endpointOk = new Set([...coveredNodes, ...coveredTips]);
+    for (const e of es) {
+      if (endpointOk.has(e.source) && endpointOk.has(e.target)) coveredEdges.add(e.id);
+    }
+
+    if (!coveredNodes.size && !coveredEdges.size && !additive) {
+      setNodes((cur) => cur.map((n) => (n.selected ? { ...n, selected: false } : n)));
+      setEdges((cur) => cur.map((e) => (e.selected ? { ...e, selected: false } : e)));
+      return;
+    }
+    if (!coveredNodes.size && !coveredEdges.size) return;
+
+    if (!additive) {
+      armPasteFromIds([...coveredNodes, ...coveredTips], coveredEdges);
+      return;
+    }
+
+    setNodes((cur) =>
+      cur.map((n) => {
+        if (n.data.kind === "TIP") {
+          const next = coveredTips.includes(n.id) || n.selected;
+          return n.selected === next ? n : { ...n, selected: next };
+        }
+        const next = coveredNodes.has(n.id) || n.selected;
+        return n.selected === next ? n : { ...n, selected: next };
+      }),
+    );
+    setEdges((cur) =>
+      cur.map((e) => {
+        const next = coveredEdges.has(e.id) || e.selected;
+        return e.selected === next ? e : { ...e, selected: next };
+      }),
+    );
+  }, [armPasteFromIds, setNodes, setEdges]);
+
+  /** Ctrl+click wire while in copy mode — toggle without clearing parts. */
+  const toggleSelectEdge = useCallback(
+    (edgeId: string, multi: boolean) => {
+      if (!edgeId) {
+        setEdges((eds) => eds.map((e) => (e.selected ? { ...e, selected: false } : e)));
+        setNodes((ns) => ns.map((n) => (n.selected ? { ...n, selected: false } : n)));
+        return;
+      }
+      if (multi) {
+        setEdges((eds) =>
+          eds.map((e) => (e.id === edgeId ? { ...e, selected: !e.selected } : e)),
+        );
+        return;
+      }
+      // Plain click is handled by copyEdgeImmediate; keep exclusive select as fallback.
+      setEdges((eds) => eds.map((e) => ({ ...e, selected: e.id === edgeId })));
+      setNodes((ns) => ns.map((n) => (n.selected ? { ...n, selected: false } : n)));
+    },
+    [setEdges, setNodes],
+  );
 
   const pasteAt = useCallback((origin: Point) => {
     const clip = clipboard.current;
@@ -2064,6 +2331,7 @@ export default function App() {
     if (!clip?.nodes.length) return;
     setPlaceKind(null);
     setPlaceParams(null);
+    setCopyMarquee(false);
     setPasteClip(clip);
     if (origin) pasteAt(origin);
   }, [pasteAt]);
@@ -2091,8 +2359,26 @@ export default function App() {
         e.preventDefault();
         redo();
       }
-      else if (mod && e.key.toLowerCase() === "c") { e.preventDefault(); copySelection(); }
+      else if (mod && e.key.toLowerCase() === "c") {
+        e.preventDefault();
+        if (copyMarquee) {
+          const hasSel =
+            nodesRef.current.some((n) => n.selected && n.data.kind !== "TIP") ||
+            edgesRef.current.some((ed) => ed.selected);
+          if (hasSel) copySelection();
+          return;
+        }
+        beginCopyMarquee();
+      }
       else if (mod && e.key.toLowerCase() === "x") { e.preventDefault(); cutSelection(); }
+      else if (e.key === "Escape" && copyMarquee) {
+        e.preventDefault();
+        cancelCopyMarquee();
+      }
+      else if (e.key === "Enter" && copyMarquee) {
+        e.preventDefault();
+        copySelection();
+      }
       else if (mod && e.key.toLowerCase() === "s") {
         e.preventDefault();
         downloadCircuit(snapshot());
@@ -2145,7 +2431,24 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-    }, [copySelection, cutSelection, nodes, placeKind, pasteClip, undo, redo, snapshot, rotateSelected, setNodes, setEdges, pushHistory, deleteSelectionOrToggleScissors]);
+    }, [
+      beginCopyMarquee,
+      cancelCopyMarquee,
+      copyMarquee,
+      copySelection,
+      cutSelection,
+      nodes,
+      placeKind,
+      pasteClip,
+      undo,
+      redo,
+      snapshot,
+      rotateSelected,
+      setNodes,
+      setEdges,
+      pushHistory,
+      deleteSelectionOrToggleScissors,
+    ]);
 
   const startTextEdit = useCallback(() => {
     setDraftNetlist(netlist);
@@ -2406,9 +2709,9 @@ export default function App() {
               ? "Wire"
               : canvasMode === "delete"
                 ? "Delete"
-                : canvasMode === "drag"
-                  ? "Drag"
-                  : "Move"}
+                : canvasMode === "move"
+                  ? "Move"
+                  : "Drag"}
         </span>
         <div className="mode-guide-content">
           {canvasMode === "explore" ? (
@@ -2418,7 +2721,7 @@ export default function App() {
                 <li><kbd>Drag</kbd> empty canvas to pan · <kbd>Scroll</kbd> to zoom · <kbd>Space</kbd> fit view</li>
                 <li>Palette: click a part, then left-click to stamp · <kbd>R</kbd> rotates the ghost · right-click / Esc cancels</li>
                 <li><kbd>N</kbd> or palette <strong>Label</strong>: type a name, stamp text on the schematic · <kbd>R</kbd> rotates (3 ways) · same name joins nets</li>
-                <li><kbd>Ctrl</kbd>+C copies a selection as a ghost · left-click or <kbd>Ctrl</kbd>+V stamps a copy · <kbd>R</kbd> rotates the ghost · <kbd>Esc</kbd> / right-click exits</li>
+                <li><kbd>Ctrl</kbd>+C copy mode · click a part/wire or drag a box (≥70%) to copy · paste ghost follows · <kbd>Esc</kbd> exits</li>
                 <li>Palette <strong>Net label</strong> is the older flag symbol (still names nets when connected)</li>
                 <li><kbd>Click</kbd> a part or wire to select · <kbd>Ctrl</kbd>+click toggles multi-select</li>
                 <li><kbd>Right-click</kbd> a part to edit properties (OK / Cancel)</li>
@@ -2463,7 +2766,7 @@ export default function App() {
                 <li><kbd>Esc</kbd> Explore · toolbar Delete toggles scissors off · <kbd>E</kbd> <kbd>W</kbd> <kbd>M</kbd> <kbd>D</kbd> switch tools · <kbd>Delete</kbd> / <kbd>Backspace</kbd> removes a selection</li>
               </ul>
             </>
-          ) : canvasMode === "drag" ? (
+          ) : canvasMode === "move" ? (
             <>
               <p className="mode-guide-lead">Disconnect a part and move it alone (wires stay behind).</p>
               <ul className="mode-guide-list">
@@ -2477,7 +2780,7 @@ export default function App() {
             </>
           ) : (
             <>
-              <p className="mode-guide-lead">Move parts with wires still connected.</p>
+              <p className="mode-guide-lead">Drag parts with wires still connected.</p>
               <ul className="mode-guide-list">
                 <li><kbd>Drag</kbd> a part — wires stay attached and follow</li>
                 <li><kbd>Drag</kbd> empty canvas to box-select · <kbd>Ctrl</kbd>+drag adds to selection</li>
@@ -2486,7 +2789,7 @@ export default function App() {
                 <li>Hollow square = free <strong>wire end</strong> — click it, then <kbd>Delete</kbd></li>
                 <li><kbd>Click</kbd> / <kbd>Ctrl</kbd>+click parts · drag a selected part to move the whole group</li>
                 <li><kbd>Double-click</kbd> a wire to straighten it after a move</li>
-                <li><kbd>R</kbd> rotates selected parts · <kbd>Esc</kbd> Explore · <kbd>Delete</kbd> / <kbd>Backspace</kbd> removes selection · <kbd>Ctrl</kbd>+C stamp-copy</li>
+                <li><kbd>R</kbd> rotates selected parts · <kbd>Esc</kbd> Explore · <kbd>Delete</kbd> / <kbd>Backspace</kbd> removes selection · <kbd>Ctrl</kbd>+C copy mode</li>
               </ul>
             </>
           )}
@@ -2494,11 +2797,21 @@ export default function App() {
       </div>
 
       <div className="workspace" style={{ gridTemplateColumns: `280px 1fr ${rightWidth}px` }}>
-        <Palette activeKind={placeKind} pasting={Boolean(pasteClip)} onPick={pickPlaceKind} />
+        <Palette
+          activeKind={placeKind}
+          pasting={Boolean(pasteClip)}
+          copying={copyMarquee}
+          onPick={pickPlaceKind}
+        />
 
         <div className="canvas-col">
-          <ModeToolbar mode={canvasMode} onModeChange={setCanvasModeAndClearPlace} />
+          <ModeToolbar
+            mode={canvasMode}
+            onModeChange={setCanvasModeAndClearPlace}
+            viewApiRef={canvasViewApiRef}
+          />
           <Canvas
+            viewApiRef={canvasViewApiRef}
             nodes={nodes}
             edges={edges}
             mode={canvasMode}
@@ -2508,6 +2821,12 @@ export default function App() {
               placeKind === "WIRELABEL" ? (placeParams?.name ?? "") : undefined
             }
             pasteClip={pasteClip}
+            copyMarquee={copyMarquee}
+            onCopyRegion={selectCopyRegion}
+            onCancelCopyMarquee={cancelCopyMarquee}
+            onToggleSelectEdge={toggleSelectEdge}
+            onCopyPartImmediate={copyPartImmediate}
+            onCopyEdgeImmediate={copyEdgeImmediate}
             onPlaceAt={addComponentAt}
             onPasteAt={pasteAt}
             onPasteShortcut={pasteShortcut}

@@ -52,6 +52,73 @@ export function nodesInRect(nodes: Node<ComponentData>[], r: FlowRect): string[]
   return nodes.filter((n) => nodeIntersectsRect(n, r)).map((n) => n.id);
 }
 
+/**
+ * Fraction of the node's axis-aligned box that lies inside `r` (0..1).
+ * Used for copy-marquee: only include parts covered ≥ ~70%.
+ */
+export function nodeCoverageInRect(node: Node<ComponentData>, r: FlowRect): number {
+  const { w, h } = nodeSize(node);
+  if (w <= 0 || h <= 0) return 0;
+  const nx = node.position.x;
+  const ny = node.position.y;
+  const ix0 = Math.max(nx, r.x);
+  const iy0 = Math.max(ny, r.y);
+  const ix1 = Math.min(nx + w, r.x + r.w);
+  const iy1 = Math.min(ny + h, r.y + r.h);
+  const iw = ix1 - ix0;
+  const ih = iy1 - iy0;
+  if (iw <= 0 || ih <= 0) return 0;
+  return (iw * ih) / (w * h);
+}
+
+/** Node ids whose box is covered by at least `minCoverage` of `r`. */
+export function nodesCoveredByRect(
+  nodes: Node<ComponentData>[],
+  r: FlowRect,
+  minCoverage = 0.7,
+): string[] {
+  return nodes
+    .filter((n) => nodeCoverageInRect(n, r) + 1e-9 >= minCoverage)
+    .map((n) => n.id);
+}
+
+/** Length-weighted fraction of an edge polyline that lies inside `r` (0..1). */
+export function edgeCoverageInRect(
+  nodes: Node<ComponentData>[],
+  edge: Edge,
+  r: FlowRect,
+): number {
+  const poly = computeEdgePolyline(nodes, edge);
+  if (poly.length < 2) return 0;
+  let total = 0;
+  let inside = 0;
+  const pointIn = (p: Point) =>
+    p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+  for (let i = 0; i < poly.length - 1; i++) {
+    const a = poly[i]!;
+    const b = poly[i + 1]!;
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (len < 1e-6) continue;
+    total += len;
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    const hits = [a, mid, b].filter(pointIn).length;
+    inside += len * (hits / 3);
+  }
+  return total <= 0 ? 0 : inside / total;
+}
+
+/** Edge ids whose polyline is covered by at least `minCoverage` of `r`. */
+export function edgesCoveredByRect(
+  nodes: Node<ComponentData>[],
+  edges: Edge[],
+  r: FlowRect,
+  minCoverage = 0.7,
+): string[] {
+  return edges
+    .filter((e) => edgeCoverageInRect(nodes, e, r) + 1e-9 >= minCoverage)
+    .map((e) => e.id);
+}
+
 export function grabSideFromPoint(node: Node<ComponentData>, p: Point): PinSide {
   const { w, h } = nodeSize(node);
   const left = node.position.x;

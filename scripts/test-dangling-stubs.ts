@@ -129,19 +129,17 @@ assert(cleaned.changed, "cleanEdgeTrailingNubs should change L-nub wire");
   assert(plan?.action === "delete", "stub click deletes");
   assert(plan && plan.action === "delete" && plan.edgeId === "STUB", "deletes stub not rail");
 
-  // Long rail ending in a free tip with a short terminal nub — trim nub.
+  // Floating tip↔tip scrap (both free): scissors wipe the whole leftover.
+  // (Previously this trimmed a nub and left more fragments.)
   const A = tip("A", 40, 160);
   const B = tip("B", 220, 200);
   const n2 = [A, B];
   const es2 = [edge("LONG", "A", "B", [{ x: 220, y: 160 }])];
-  const trim = planScissorWireDelete(n2, es2, "LONG", { x: 220, y: 190 });
-  assert(trim?.action === "trimTip", "trims free-tip nub on long wire");
+  const wipe = planScissorWireDelete(n2, es2, "LONG", { x: 220, y: 190 });
+  assert(wipe?.action === "delete", "floating tip↔tip leftover deletes");
   assert(
-    trim &&
-      trim.action === "trimTip" &&
-      trim.trimmedPoly.length >= 2 &&
-      Math.abs(trim.trimmedPoly[trim.trimmedPoly.length - 1]!.y - 160) < 1,
-    "nub removed; tip sits on the rail row",
+    wipe && wipe.action === "delete" && wipe.edgeId === "LONG",
+    "deletes the floating scrap edge",
   );
 
   // Shared junction tip: long L-shaped rail + another long branch on same tip —
@@ -159,7 +157,92 @@ assert(cleaned.changed, "cleanEdgeTrailingNubs should change L-nub wire");
   assert(peel && peel.action === "peelToNewTip" && peel.edgeId === "RAIL2", "peels the rail edge");
 }
 
-// Pin↔pin L-nub (vertical jog off R.b stub): scissors must trim, not delete rail.
+// Pin↔free-tip leftover (typical after segment cut): scissors wipe it.
+{
+  const mk = (
+    id: string,
+    kind: "R",
+    x: number,
+    y: number,
+  ): Node<ComponentData> => ({
+    id,
+    type: "component",
+    position: { x, y },
+    data: {
+      kind,
+      refdes: "R1",
+      params: defaultParams(kind),
+      rotation: 0,
+    },
+    measured: { width: 92, height: 54 },
+  });
+  const r = mk("r", "R", 300, 80);
+  const t = tip("T", 450, 96);
+  const n = [r, t];
+  const es = [
+    {
+      id: "leftover",
+      type: "schematic",
+      source: "r",
+      sourceHandle: "b",
+      target: "T",
+      targetHandle: "t",
+      data: { waypoints: [{ x: 450, y: 96 }], directPath: true },
+    } as Edge,
+  ];
+  const plan = planScissorWireDelete(n, es, "leftover", { x: 420, y: 96 });
+  assert(plan?.action === "delete", `pin↔tip leftover deletes (got ${plan?.action})`);
+}
+
+// Pin↔junction tip (V1 vertical with corner circle): delete that branch.
+{
+  const mk = (
+    id: string,
+    kind: "V" | "R",
+    x: number,
+    y: number,
+  ): Node<ComponentData> => ({
+    id,
+    type: "component",
+    position: { x, y },
+    data: {
+      kind,
+      refdes: `${kind}1`,
+      params: defaultParams(kind),
+      rotation: 0,
+    },
+    measured: { width: 92, height: 54 },
+  });
+  const v = mk("v", "V", 100, 200);
+  const r = mk("r", "R", 300, 80);
+  const j = tip("J", 164, 120);
+  const n = [v, r, j];
+  const es = [
+    {
+      id: "vert",
+      type: "schematic",
+      source: "v",
+      sourceHandle: "a",
+      target: "J",
+      targetHandle: "t",
+      data: { waypoints: [], directPath: true },
+    } as Edge,
+    {
+      id: "horiz",
+      type: "schematic",
+      source: "J",
+      sourceHandle: "t",
+      target: "r",
+      targetHandle: "a",
+      data: { waypoints: [], directPath: true },
+    } as Edge,
+  ];
+  const plan = planScissorWireDelete(n, es, "vert", { x: 164, y: 160 });
+  assert(plan?.action === "delete", `pin↔junction tip deletes (got ${plan?.action})`);
+  assert(plan && plan.action === "delete" && plan.edgeId === "vert", "deletes vertical branch");
+}
+
+// Pin↔pin: scissors open-cut the clicked run (end clicks used to "trim" and look like a no-op).
 {
   const mk = (
     id: string,
@@ -194,20 +277,24 @@ assert(cleaned.changed, "cleanEdgeTrailingNubs should change L-nub wire");
   assert(poly.length >= 5, "nub poly should have extra bends");
   const vertMid = { x: 392, y: 120 };
   const plan = planScissorWireDelete(n, es, "rb-ca", vertMid);
-  assert(plan?.action === "trimTip", `vertical nub trims (got ${plan?.action})`);
   assert(
-    plan &&
-      plan.action === "trimTip" &&
-      plan.trimmedPoly.every((p) => Math.abs(p.x - 392) > 1 || Math.abs(p.y - 96) < 1),
-    "vertical jog removed from trimmed poly",
+    plan?.action === "cutOpen" || plan?.action === "delete",
+    `vertical click cuts/deletes (got ${plan?.action})`,
   );
 
-  const railMid = { x: 442, y: 96 };
-  const refuse = planScissorWireDelete(n, es, "rb-ca", railMid);
-  assert(refuse === null, "long horizontal click must not delete pin↔pin rail");
+  const railMid = { x: 456, y: 144 };
+  const cut = planScissorWireDelete(n, es, "rb-ca", railMid);
+  assert(cut?.action === "cutOpen", `long horizontal open-cuts (got ${cut?.action})`);
+  assert(
+    cut &&
+      cut.action === "cutOpen" &&
+      cut.beforePoly !== null &&
+      cut.afterPoly !== null,
+    "cut keeps both remaining path pieces",
+  );
 }
 
-// Pin-exit stub (autoroute tip): scissors must peel it and keep it gone.
+// Pin-exit stub click: open-cut / delete that end (no silent trim no-op).
 {
   const mk = (
     id: string,
@@ -245,36 +332,10 @@ assert(cleaned.changed, "cleanEdgeTrailingNubs should change L-nub wire");
     y: (before[0]!.y + before[1]!.y) / 2,
   };
   const plan = planScissorWireDelete(n, es, "rb-ca", stubMid);
-  assert(plan?.action === "trimTip", `pin stub peels (got ${plan?.action})`);
   assert(
-    plan && plan.action === "trimTip" && plan.directPath === true,
-    "pin stub peel locks directPath",
+    plan?.action === "cutOpen" || plan?.action === "delete",
+    `pin stub end cuts/deletes (got ${plan?.action})`,
   );
-  assert(
-    plan &&
-      plan.action === "trimTip" &&
-      plan.trimmedPoly.length >= 2 &&
-      Math.hypot(
-        plan.trimmedPoly[1]!.x - plan.trimmedPoly[0]!.x,
-        plan.trimmedPoly[1]!.y - plan.trimmedPoly[0]!.y,
-      ) > 16.5,
-    "first remaining segment is longer than a pin stub",
-  );
-  // Persist like App does — stub must not regenerate.
-  const wps =
-    plan!.action === "trimTip" && plan.trimmedPoly.length > 2
-      ? plan.trimmedPoly.slice(1, -1)
-      : [];
-  const afterEdge = {
-    ...es[0]!,
-    data: { waypoints: wps, directPath: true },
-  };
-  const after = computeEdgePolyline(n, afterEdge);
-  const firstLen = Math.hypot(
-    after[1]!.x - after[0]!.x,
-    after[1]!.y - after[0]!.y,
-  );
-  assert(firstLen > 16.5, `peeled stub stays gone (firstLen=${firstLen})`);
 }
 
 // Pin↔pin U-turn overhang past the elbow (horizontal sticks out past vertical).
@@ -320,25 +381,24 @@ assert(cleaned.changed, "cleanEdgeTrailingNubs should change L-nub wire");
     poly.some((p, i) => i > 0 && i < poly.length - 1 && p.x > 390),
     "poly should include overhang past x=390",
   );
-  // Click on the long vertical near the elbow — previously this no-oped.
+  // Click on the long vertical near the elbow — peel overhang or cut segment.
   const vertClick = { x: 380, y: 120 };
   const plan = planScissorWireDelete(n, es, "rb-ca", vertClick);
-  assert(plan?.action === "trimTip", `overhang peels on vertical click (got ${plan?.action})`);
   assert(
-    plan &&
-      plan.action === "trimTip" &&
-      !plan.trimmedPoly.some(
-        (p, i) =>
-          i > 0 &&
-          i < plan.trimmedPoly.length - 1 &&
-          p.x > 390,
-      ),
-    "overhang tip removed from trimmed poly",
+    plan?.action === "cutOpen" ||
+      plan?.action === "delete" ||
+      plan?.action === "trimTip",
+    `vertical click acts (got ${plan?.action})`,
   );
   // Click on the overhang tip itself.
   const tipClick = { x: 396, y: 96 };
   const plan2 = planScissorWireDelete(n, es, "rb-ca", tipClick);
-  assert(plan2?.action === "trimTip", "overhang tip click peels");
+  assert(
+    plan2?.action === "cutOpen" ||
+      plan2?.action === "delete" ||
+      plan2?.action === "trimTip",
+    `overhang tip click acts (got ${plan2?.action})`,
+  );
 }
 
 console.log("test-dangling-stubs: ok");

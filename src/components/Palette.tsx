@@ -14,10 +14,13 @@ function flatLabel(label: string): string {
 export function Palette({
   activeKind,
   pasting = false,
+  copying = false,
   onPick,
 }: {
   activeKind: ComponentKind | null;
   pasting?: boolean;
+  /** Ctrl+C copy-marquee active — drag a box (≥70% coverage). */
+  copying?: boolean;
   onPick: (kind: ComponentKind) => void;
 }) {
   return (
@@ -71,6 +74,10 @@ export function Palette({
       ) : pasting ? (
         <p className="palette-tool-hint">
           Paste: left-click to stamp copies · <kbd>R</kbd> rotate · right-click / Esc to cancel
+        </p>
+      ) : copying ? (
+        <p className="palette-tool-hint">
+          Copy: click a part/wire or drag a box (≥70%) · paste ghost appears · Esc to cancel
         </p>
       ) : null}
     </div>

@@ -47,6 +47,8 @@ export function spicePinOrder(kind: ComponentKind): string[] {
       return ["p", "n"];
     case "D":
     case "DZ":
+    case "DS":
+    case "LED":
       return ["a", "k"];
     case "NMOS":
     case "PMOS":

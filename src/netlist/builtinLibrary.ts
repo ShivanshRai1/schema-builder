@@ -49,6 +49,8 @@ const BUILTIN: Record<string, string> = {
   PNP_GEN: ".model PNP_GEN PNP (Is=1e-14 Bf=100)",
   DGEN: ".model DGEN D (Is=1e-12)",
   DZEN: ".model DZEN D (Is=1e-12 Bv=5 Ibv=1e-3)",
+  DSCH: ".model DSCH D (Is=1e-9 N=1.05)",
+  DLED: ".model DLED D (Is=1e-20 N=2)",
   SW_GEN: ".model SW_GEN SW(Ron=0.1 Roff=1Meg Vt=0.5 Vh=0.1)",
 
   SIC_MOS: [
@@ -136,6 +138,8 @@ const EMIT_ORDER = [
   "PNP_GEN",
   "DGEN",
   "DZEN",
+  "DSCH",
+  "DLED",
   "SW_GEN",
   "SIC_MOS",
   "SIC_MOS_KELVIN",

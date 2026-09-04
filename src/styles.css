@@ -151,6 +151,46 @@ body { background: var(--bg); color: var(--text); }
   border-bottom: 1px solid var(--border);
   z-index: 4;
 }
+.mode-toolbar-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 4px 4px 4px 8px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+.mode-toolbar-view {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.mode-toolbar-view-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  cursor: pointer;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1;
+  transition: border-color 0.14s ease, background 0.14s ease, box-shadow 0.14s ease;
+}
+.mode-toolbar-view-btn:hover {
+  border-color: var(--accent);
+  background: rgba(77, 163, 255, 0.14);
+  box-shadow: 0 0 0 1px var(--accent-dim);
+}
+.mode-toolbar-view-btn.is-active {
+  border-color: var(--accent);
+  background: rgba(77, 163, 255, 0.22);
+  box-shadow: 0 0 0 1px var(--accent);
+}
 .mode-toolbar-btn {
   display: inline-flex;
   align-items: center;
@@ -587,6 +627,19 @@ body { background: var(--bg); color: var(--text); }
   border-top: 1px solid var(--border);
 }
 .prop-field { display: flex; flex-direction: column; gap: 3px; }
+.prop-voltage-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.prop-voltage-type {
+  flex: 0 0 118px;
+  width: 118px;
+}
+.prop-voltage-mag {
+  flex: 1 1 auto;
+  min-width: 0;
+}
 .prop-label { font-size: 11.5px; color: var(--muted); }
 .prop-unit { color: var(--muted); opacity: .8; }
 .prop-input {
@@ -621,13 +674,13 @@ body { background: var(--bg); color: var(--text); }
   cursor: crosshair !important;
 }
 .canvas-move .react-flow__pane { cursor: crosshair; }
-.canvas-move .react-flow__node { cursor: move; }
-.canvas-move .react-flow__edge { cursor: pointer; }
+.canvas-move .react-flow__node { cursor: grab; }
+.canvas-move .react-flow__edge { cursor: grab; }
+.canvas-move .react-flow__edge:active { cursor: grabbing; }
 .canvas-move .react-flow__node.dragging { cursor: grabbing; }
 .canvas-drag .react-flow__pane { cursor: crosshair; }
-.canvas-drag .react-flow__node { cursor: grab; }
-.canvas-drag .react-flow__edge { cursor: grab; }
-.canvas-drag .react-flow__edge:active { cursor: grabbing; }
+.canvas-drag .react-flow__node { cursor: move; }
+.canvas-drag .react-flow__edge { cursor: pointer; }
 .canvas-drag .react-flow__node.dragging { cursor: grabbing; }
 .canvas-delete,
 .canvas-delete * {
@@ -707,6 +760,13 @@ body { background: var(--bg); color: var(--text); }
   stroke-width: 1.5;
   stroke-dasharray: 6 4;
   pointer-events: none;
+}
+/* Ctrl+C copy mode — LTspice-like arrow + dashed box cursor */
+.canvas-copy-marquee,
+.canvas-copy-marquee .react-flow__pane,
+.canvas-copy-marquee .react-flow__node,
+.canvas-copy-marquee .react-flow__edge {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cpath fill='%23fff' stroke='%23000' stroke-width='1.2' d='M4 2 L4 22 L9.5 17.5 L12.5 25 L15.5 24 L12.5 16.5 L19 16.5 Z'/%3E%3Crect x='14' y='14' width='14' height='12' fill='none' stroke='%23000' stroke-width='1.4' stroke-dasharray='2.5 1.8'/%3E%3Crect x='14.5' y='14.5' width='13' height='11' fill='none' stroke='%23fff' stroke-width='0.7' stroke-dasharray='2.5 1.8'/%3E%3C/svg%3E") 4 2, copy !important;
 }
 .canvas-mode-hint { border-color: rgba(77, 163, 255, 0.45); }
 .react-flow { background: var(--bg); }

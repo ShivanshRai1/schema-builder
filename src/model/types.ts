@@ -25,7 +25,7 @@ export type ComponentKind =
   // sources
   | "V" | "I"
   // semiconductors
-  | "D" | "DZ" | "NMOS" | "PMOS" | "NMOS_D" | "PMOS_D" | "NJFET" | "PJFET"
+  | "D" | "DZ" | "DS" | "LED" | "NMOS" | "PMOS" | "NMOS_D" | "PMOS_D" | "NJFET" | "PJFET"
   | "SICMOS" | "SICMOS_K" | "GANHEMT"
   | "IGBT" | "IGBT_K" | "NPN" | "PNP" | "SCR"
   // drivers / control / opamps

@@ -364,6 +364,42 @@ function ZenerDiodeSymbol({ selected }: SymProps) {
   );
 }
 
+/** Schottky: filled triangle + S/Z cathode bar (top hook right, bottom hook left). */
+function SchottkyDiodeSymbol({ selected }: SymProps) {
+  return (
+    <SymbolSvg kind="DS" w={48} h={24}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 12 H16" />
+        <path d="M16 4 L32 12 L16 20 Z" fill={STROKE} stroke="none" />
+        {/* Cathode bar with opposite hooks (classic Schottky). */}
+        <path d="M36 6 V4 H32 V20 H28 V18" />
+        <path d="M32 12 H48" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** LED: standard diode + two emission arrows (↗↗). */
+function LedSymbol({ selected }: SymProps) {
+  const op = selected ? 1 : 0.92;
+  return (
+    <SymbolSvg kind="LED" w={48} h={28}>
+      <g {...STROKE_BUTT} opacity={op}>
+        <path d="M0 14 H16" />
+        <path d="M16 6 L32 14 L16 22 Z" fill={STROKE} stroke="none" />
+        <path d="M32 6 V22" />
+        <path d="M32 14 H48" />
+        <path d="M26 5 L35 0" />
+        <path d="M29 8 L38 3" />
+      </g>
+      <g fill={STROKE} stroke="none" opacity={op}>
+        <path d="M35 0 L31.5 0.6 L33.6 3.4 Z" />
+        <path d="M38 3 L34.5 3.6 L36.6 6.4 Z" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
 function CurrentSymbol({ selected }: SymProps) {
   const cx = 20;
   const cy = 32;
@@ -827,18 +863,30 @@ function IgbtKelvinSymbol({ selected }: SymProps) {
   });
 }
 
+/** LTspice SCR: anode top, cathode bottom, gate from lower-left into cathode. */
 function ScrSymbol({ selected }: SymProps) {
-  const cy = 32;
-  const bx = 28;
-  const ax = 54;
+  const cx = 40;
+  const yBase = 22;
+  const yTip = 50;
+  const yGate = 64;
+  const half = 16;
   return (
-    <SymbolSvg kind="SCR" w={96} h={64}>
+    <SymbolSvg kind="SCR" w={64} h={96}>
       <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
-        <path d={`M0 ${cy} H${bx}`} />
-        <path d={`M${bx} ${cy - 14} L${ax} ${cy} L${bx} ${cy + 14} Z`} />
-        <path d={`M${ax} ${cy - 14} V${cy + 14}`} />
-        <path d={`M${ax} ${cy} H96`} />
-        <path d={`M${ax} ${cy + 5} L64 ${cy + 22} V64`} />
+        {/* Anode lead */}
+        <path d={`M${cx} 0 V${yBase}`} />
+        {/* Triangle pointing down (anode → cathode) */}
+        <path
+          d={`M${cx - half} ${yBase} L${cx + half} ${yBase} L${cx} ${yTip} Z`}
+          fill={STROKE}
+          stroke="none"
+        />
+        {/* Cathode bar */}
+        <path d={`M${cx - half - 2} ${yTip} H${cx + half + 2}`} />
+        {/* Cathode lead */}
+        <path d={`M${cx} ${yTip} V96`} />
+        {/* Gate: left → then up-right into cathode just below the bar */}
+        <path d={`M0 ${yGate} H${cx - 12} L${cx} ${yTip + 5}`} />
       </g>
     </SymbolSvg>
   );
@@ -1238,6 +1286,8 @@ const MAP: Partial<Record<ComponentKind, (p: SymProps) => JSX.Element>> = {
   GND: GroundSymbol,
   D: DiodeSymbol,
   DZ: ZenerDiodeSymbol,
+  DS: SchottkyDiodeSymbol,
+  LED: LedSymbol,
   I: CurrentSymbol,
   NMOS: NmosSymbol,
   PMOS: PmosSymbol,

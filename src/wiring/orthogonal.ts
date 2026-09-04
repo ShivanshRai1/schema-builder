@@ -8,6 +8,12 @@ export interface Point {
 export type PinSide = "left" | "right" | "top" | "bottom";
 
 export const WIRE_GRID = 16;
+/** Finer snap while drawing wires (background dots stay on WIRE_GRID). */
+export const WIRE_DRAW_GRID = 4;
+/** Minimum locked segment length (flow units) — allows very short runs. */
+export const WIRE_MIN_SEGMENT = 2;
+/** Pull free end onto a nearby pin/wire row or column. */
+export const WIRE_ALIGN_RADIUS = 8;
 
 export function snapCoord(n: number, grid = WIRE_GRID): number {
   return Math.round(n / grid) * grid;
@@ -15,6 +21,47 @@ export function snapCoord(n: number, grid = WIRE_GRID): number {
 
 export function snapPoint(p: Point, grid = WIRE_GRID): Point {
   return { x: snapCoord(p.x, grid), y: snapCoord(p.y, grid) };
+}
+
+/**
+ * Orthogonal rubber/lock point: fine grid + optional snap to peer pin/wire axes
+ * so you can align with any part or rail without jumping to a full auto-L.
+ */
+export function projectOrthogonalDraw(
+  from: Point,
+  cursor: Point,
+  preferAxis: "h" | "v" | null = null,
+  alignAxes?: { xs: number[]; ys: number[] },
+  grid = WIRE_DRAW_GRID,
+  alignRadius = WIRE_ALIGN_RADIUS,
+): Point {
+  let p = projectOrthogonal(from, cursor, grid, preferAxis);
+  if (!alignAxes) return p;
+
+  const vertical = Math.abs(p.x - from.x) < 0.5;
+  if (vertical) {
+    let best = p.y;
+    let bestD = alignRadius;
+    for (const y of alignAxes.ys) {
+      const d = Math.abs(p.y - y);
+      if (d < bestD) {
+        bestD = d;
+        best = y;
+      }
+    }
+    return { x: from.x, y: best };
+  }
+
+  let best = p.x;
+  let bestD = alignRadius;
+  for (const x of alignAxes.xs) {
+    const d = Math.abs(p.x - x);
+    if (d < bestD) {
+      bestD = d;
+      best = x;
+    }
+  }
+  return { x: best, y: from.y };
 }
 
 /** Project cursor onto a single H or V ray from `from` (larger delta wins). */
@@ -45,6 +92,11 @@ export function projectOrthogonal(
   return { x: from.x, y: snapped.y };
 }
 
+/** True when `a` and `b` share a row or column (single H/V segment). */
+export function isAxisAligned(a: Point, b: Point, eps = 0.5): boolean {
+  return Math.abs(a.x - b.x) < eps || Math.abs(a.y - b.y) < eps;
+}
+
 /** Live preview / click corner when snapping onto a pin. */
 export function previewCornerToPin(
   from: Point,
@@ -55,6 +107,23 @@ export function previewCornerToPin(
     return { x: from.x, y: pin.y };
   }
   return { x: pin.x, y: from.y };
+}
+
+/**
+ * Keep the user's locked bends. If the last lock is off-axis from `end`,
+ * append at most one elbow — never replace existing waypoints with an auto L.
+ */
+export function waypointsClosingTo(
+  from: Point,
+  end: Point,
+  waypoints: Point[],
+  incomingAxis: "h" | "v" | null,
+): Point[] {
+  if (pointsEqual(from, end)) return waypoints;
+  if (isAxisAligned(from, end)) return waypoints;
+  const corner = previewCornerToPin(from, end, incomingAxis);
+  if (pointsEqual(corner, from) || pointsEqual(corner, end)) return waypoints;
+  return [...waypoints, corner];
 }
 
 /** One user bend at wire complete — turn on target column/row, no stub detour. */
