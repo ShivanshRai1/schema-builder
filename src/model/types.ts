@@ -17,34 +17,48 @@
  */
 export type ComponentKind =
   // passives / resistors
-  | "R" | "RBOX" | "RVAR" | "RVARBOX" | "POT" | "POTBOX"
-  // inductors
-  | "L" | "LVAR"
+  | "R" | "RBOX" | "RVAR" | "RVARBOX" | "POT" | "POTBOX" | "THERM" | "LDR"
+  // inductors / magnetics / RF
+  | "L" | "LVAR" | "CMMC" | "FBEAD" | "ANT" | "XTAL" | "XFMR"
   // capacitors
   | "C" | "CPOL" | "CFIXED" | "CVAR"
   // sources
-  | "V" | "I"
+  | "V" | "I" | "BATTERY" | "VAC" | "IAC" | "VPULSE"
   // semiconductors
-  | "D" | "DZ" | "DS" | "LED" | "NMOS" | "PMOS" | "NMOS_D" | "PMOS_D" | "NJFET" | "PJFET"
+  | "D" | "DZ" | "DS" | "LED" | "DTVS" | "DTVSBI"
+  | "NMOS" | "PMOS" | "NMOS_D" | "PMOS_D" | "NJFET" | "PJFET"
   | "SICMOS" | "SICMOS_K" | "GANHEMT"
-  | "IGBT" | "IGBT_K" | "NPN" | "PNP" | "SCR"
-  // drivers / control / opamps
-  | "GATEDRV" | "COMP" | "EAMP" | "OPAMP" | "OPAMP5"
+  | "IGBT" | "IGBT_K" | "NPN" | "PNP" | "SCR" | "UJT"
+  | "TRIAC" | "DIAC" | "SCS" | "GTO" | "SCR_PH" | "SIDAC"
+  // drivers / control / opamps / logic / flip-flops
+  | "GATEDRV" | "COMP" | "EAMP" | "OPAMP" | "OPAMP5" | "DIFFAMP"
+  | "AND" | "OR" | "NAND" | "NOR" | "XOR" | "XNOR" | "NOT"
+  | "SRFF" | "JKFF" | "TFF" | "DFF"
+  // math / Simulink-like
+  | "MATH_CONST" | "MATH_SUM" | "MATH_PROD" | "MATH_GAIN" | "MATH_REL" | "MATH_LOGIC"
+  // switches
+  | "SPST" | "SPDT" | "PB"
   // sense / probes
   | "CSENSE" | "VSENSE" | "IPROBE" | "VPROBE"
   // structural
-  | "GND" | "NODE" | "WIRELABEL" | "TIP";
+  | "GND" | "GND_SIG" | "GND_CH" | "NODE" | "WIRELABEL" | "TIP";
 
 export type Category =
-  | "Most used"
+  | "Commonly used"
   | "Resistor"
   | "Capacitor"
   | "Inductor"
-  | "Source"
+  | "Sources"
   | "Transistor"
   | "Semiconductor"
+  | "Thyristor"
   | "Opamp"
   | "Control"
+  | "Logic"
+  | "Flipflop"
+  | "Math"
+  | "Switch"
+  | "Passive"
   | "Sense / Probe"
   | "Structural";
 
@@ -61,7 +75,7 @@ export interface PinSpec {
 }
 
 /** Input kind the attribute editor renders for a parameter. */
-export type AttrType = "text" | "number" | "select";
+export type AttrType = "text" | "number" | "select" | "checkbox";
 
 /** Declarative schema for one editable attribute of a component. */
 export interface AttributeSpec {

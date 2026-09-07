@@ -1,6 +1,6 @@
 import type { Edge, Node } from "@xyflow/react";
 import type { ComponentData } from "../model/types";
-import { COMPONENT_SPECS } from "../model/componentSpecs";
+import { COMPONENT_SPECS, getComponentPins, isGroundKind } from "../model/componentSpecs";
 
 // ---------------------------------------------------------------------------
 // Net extraction via union-find (disjoint-set).
@@ -57,11 +57,10 @@ export function extractNets(
 
   // 1. Register pins. TIP pins are included so wires through tips still union.
   for (const node of nodes) {
-    const spec = COMPONENT_SPECS[node.data.kind];
-    for (const pin of spec.pins) {
+    for (const pin of getComponentPins(node.data.kind, node.data.params)) {
       const e = ep(node.id, pin.id);
       dsu.add(e);
-      if (node.data.kind === "GND") groundEndpoints.push(e);
+      if (isGroundKind(node.data.kind)) groundEndpoints.push(e);
     }
   }
 
@@ -113,8 +112,9 @@ export function extractNets(
   //    orphans. Emitting devices + GND + NODE + probes define the netlist.
   for (const node of nodes) {
     if (node.data.kind === "TIP") continue;
-    const spec = COMPONENT_SPECS[node.data.kind];
-    for (const pin of spec.pins) nameFor(dsu.root(ep(node.id, pin.id)));
+    for (const pin of getComponentPins(node.data.kind, node.data.params)) {
+      nameFor(dsu.root(ep(node.id, pin.id)));
+    }
   }
 
   return {

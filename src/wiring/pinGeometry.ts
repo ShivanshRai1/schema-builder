@@ -1,6 +1,6 @@
 import type { Node } from "@xyflow/react";
 import type { ComponentData, ComponentKind, PinSpec } from "../model/types";
-import { COMPONENT_SPECS } from "../model/componentSpecs";
+import { getComponentPins } from "../model/componentSpecs";
 import { getSymbolLayout } from "../nodes/symbols/layout";
 import { normalizeRotation, rotatePinSpec } from "../model/rotation";
 import { dist, type PinSide, type Point } from "./orthogonal";
@@ -32,8 +32,7 @@ export function findNearestPin(
   let best: PinHit | null = null;
   let bestD = maxDist;
   for (const node of nodes) {
-    const spec = COMPONENT_SPECS[node.data.kind];
-    for (const pin of spec.pins) {
+    for (const pin of getComponentPins(node.data.kind, node.data.params)) {
       if (
         opts?.exclude &&
         opts.exclude.nodeId === node.id &&
@@ -90,8 +89,7 @@ function nodeSize(node: Node<ComponentData>): { w: number; h: number } {
 }
 
 export function pinSpecForNode(node: Node<ComponentData>, pinId: string): PinSpec | null {
-  const spec = COMPONENT_SPECS[node.data.kind];
-  const base = spec.pins.find((p) => p.id === pinId);
+  const base = getComponentPins(node.data.kind, node.data.params).find((p) => p.id === pinId);
   if (!base) return null;
   // Net name: join stays fixed; only the rendered text spins.
   if (node.data.kind === "WIRELABEL") return base;
@@ -139,7 +137,7 @@ function snapGhostToPeerPins(
   excludeId: string | null,
   threshold: number,
 ): Point {
-  const pins = COMPONENT_SPECS[ghost.data.kind].pins;
+  const pins = getComponentPins(ghost.data.kind, ghost.data.params);
   let bestX: number | null = null;
   let bestY: number | null = null;
   let bestXd = threshold;
@@ -151,7 +149,7 @@ function snapGhostToPeerPins(
     for (const other of nodes) {
       if (excludeId && other.id === excludeId) continue;
       if (other.data.kind === "TIP") continue;
-      for (const op of COMPONENT_SPECS[other.data.kind].pins) {
+      for (const op of getComponentPins(other.data.kind, other.data.params)) {
         const ot = pinWorldPoint(other, op.id);
         if (!ot) continue;
         const dx = Math.abs(ot.x - pt.x);
@@ -181,7 +179,7 @@ export function paletteDropTopLeft(
 ): Point {
   // Net name: join (bottom-center) under the cursor; text spins around that point.
   if (kind === "WIRELABEL") {
-    const box = getSymbolLayout(kind, 0) ?? { w: 64, h: 48 };
+    const box = getSymbolLayout(kind, 0) ?? { w: 16, h: 16 };
     return {
       x: cursor.x - box.w / 2,
       y: cursor.y - box.h,

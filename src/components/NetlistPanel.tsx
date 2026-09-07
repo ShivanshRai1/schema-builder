@@ -13,21 +13,26 @@ export function NetlistPanel({
   editing,
   draft,
   status,
+  statusError = false,
   onStartEdit,
   onDraftChange,
   onApply,
   onCancel,
   onPopOut,
+  editorTheme = "vs-dark",
 }: {
   netlist: string;
   editing: boolean;
   draft: string;
   status?: string | null;
+  /** When true, status uses the error style (syntax / unknown symbols). */
+  statusError?: boolean;
   onStartEdit: () => void;
   onDraftChange: (text: string) => void;
   onApply: () => void;
   onCancel: () => void;
   onPopOut?: () => void;
+  editorTheme?: "vs-dark" | "light";
 }) {
   const onMount: OnMount = (editor, monaco) => {
     monaco.editor.setModelLanguage(editor.getModel()!, spiceLanguageId);
@@ -69,7 +74,11 @@ export function NetlistPanel({
           )}
         </div>
       </div>
-      {status && <div className="netlist-status">{status}</div>}
+      {status && (
+        <div className={`netlist-status${statusError ? " netlist-status-error" : ""}`}>
+          {status}
+        </div>
+      )}
       <div className="editor-wrap">
         <Editor
           height="100%"
@@ -79,7 +88,7 @@ export function NetlistPanel({
           onChange={(value) => {
             if (editing) onDraftChange(value ?? "");
           }}
-          theme="vs-dark"
+          theme={editorTheme}
           options={{
             readOnly: !editing,
             minimap: { enabled: false },

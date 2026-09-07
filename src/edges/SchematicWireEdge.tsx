@@ -86,7 +86,7 @@ export function SchematicWireEdge({
       interactionWidth={32}
       style={{
         ...style,
-        stroke: selected ? "#f0b429" : "#c8d1dc",
+        stroke: selected ? "var(--wire-selected)" : "var(--wire)",
         strokeWidth: selected ? 2.6 : 1.75,
       }}
     />

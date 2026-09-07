@@ -26,6 +26,20 @@ export function netTokenCount(kind: ComponentKind): number {
  */
 export function spicePinOrder(kind: ComponentKind): string[] {
   switch (kind) {
+    case "D":
+    case "DZ":
+    case "DS":
+    case "LED":
+    case "DTVS":
+    case "DTVSBI":
+      return ["a", "k"];
+    case "V":
+    case "I":
+    case "BATTERY":
+    case "VAC":
+    case "IAC":
+    case "VPULSE":
+      return ["p", "n"];
     case "R":
     case "RBOX":
     case "RVAR":
@@ -38,18 +52,13 @@ export function spicePinOrder(kind: ComponentKind): string[] {
     case "CVAR":
     case "CSENSE":
     case "IPROBE":
+    case "THERM":
+    case "LDR":
+    case "FBEAD":
+    case "XTAL":
+    case "SPST":
+    case "PB":
       return ["a", "b"];
-    case "POT":
-    case "POTBOX":
-      return ["a", "w", "b"];
-    case "V":
-    case "I":
-      return ["p", "n"];
-    case "D":
-    case "DZ":
-    case "DS":
-    case "LED":
-      return ["a", "k"];
     case "NMOS":
     case "PMOS":
     case "NMOS_D":
@@ -58,6 +67,8 @@ export function spicePinOrder(kind: ComponentKind): string[] {
     case "NJFET":
     case "PJFET":
       return ["d", "g", "s"];
+    case "UJT":
+      return ["b2", "e", "b1"];
     case "SICMOS":
     case "GANHEMT":
       return ["d", "g", "s"];

@@ -26,7 +26,9 @@ export function defaultPin(node: Node<ComponentData>, role: "from" | "to"): stri
   const pins = COMPONENT_SPECS[node.data.kind].pins.map((p) =>
     rotatePinSpec(p, node.data.rotation),
   );
-  if (node.data.kind === "GND") return pins[0]?.id ?? "g";
+  if (node.data.kind === "GND" || node.data.kind === "GND_SIG" || node.data.kind === "GND_CH") {
+    return pins[0]?.id ?? "g";
+  }
   if (role === "from") {
     return (
       pins.find((p) => p.side === "right")?.id ??

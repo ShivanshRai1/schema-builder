@@ -2,8 +2,10 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { setupMonaco } from "./monaco/setupMonaco";
+import { applyTheme, readStoredTheme } from "./theme";
 import "./styles.css";
 
+applyTheme(readStoredTheme());
 setupMonaco();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 /**
- * Prompt before stamp-placing Labels (LTspice Label Net style).
+ * Prompt before stamp-placing net names (LTspice Label Net style).
  * OK enters placement; Cancel leaves the canvas alone.
  */
 export function NetNameDialog({
@@ -49,11 +49,11 @@ export function NetNameDialog({
         className="comp-props-dialog net-name-dialog"
         role="dialog"
         aria-modal="true"
-        aria-label="Label"
+        aria-label="Net name"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="comp-props-titlebar">
-          <span className="comp-props-title">Label</span>
+          <span className="comp-props-title">Net name</span>
           <div className="comp-props-actions">
             <button
               type="button"

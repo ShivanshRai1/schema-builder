@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Node } from "@xyflow/react";
 import { COMPONENT_SPECS } from "../model/componentSpecs";
 import type { ComponentData, ComponentRotation, LabelPosition } from "../model/types";
@@ -143,7 +143,7 @@ function VoltageValueFields({
       <span className="prop-hint">
         {kind === "CUSTOM"
           ? "Full SPICE stimulus, e.g. PULSE(0 5 0 1n 1n 5u 10u) or SIN(0 1 1k)"
-          : `${kind} voltage — enter the magnitude (unit V)`}
+          : `${kind} voltage — enter the magnitude (unit V). For dedicated AC / Pulse parts with full LTspice fields, use Sources in the left palette.`}
       </span>
     </div>
   );
@@ -203,9 +203,27 @@ export function ComponentPropertiesDialog({
   draftRef.current = draft;
   const firstFieldRef = useRef<HTMLInputElement | HTMLSelectElement | null>(null);
 
+  const dialogW = 340;
+  const [offset, setOffset] = useState(() => {
+    const pad = 12;
+    const vw = typeof window !== "undefined" ? window.innerWidth : 1200;
+    const vh = typeof window !== "undefined" ? window.innerHeight : 800;
+    return {
+      left: Math.max(pad, Math.min(anchor.x + 8, vw - dialogW - pad)),
+      top: Math.max(pad, Math.min(anchor.y + 8, vh - 360 - pad)),
+    };
+  });
+
   useEffect(() => {
     setDraft(draftFromNode(node));
-  }, [node.id, node.data.kind]);
+    const pad = 12;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    setOffset({
+      left: Math.max(pad, Math.min(anchor.x + 8, vw - dialogW - pad)),
+      top: Math.max(pad, Math.min(anchor.y + 8, vh - 360 - pad)),
+    });
+  }, [node.id, node.data.kind, anchor.x, anchor.y]);
 
   useEffect(() => {
     const el = firstFieldRef.current;
@@ -233,18 +251,26 @@ export function ComponentPropertiesDialog({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [node.id, onApply, onCancel]);
 
-  const position = useMemo(() => {
-    const w = 340;
-    const h = 360;
-    const pad = 12;
-    const vw = typeof window !== "undefined" ? window.innerWidth : 1200;
-    const vh = typeof window !== "undefined" ? window.innerHeight : 800;
-    return {
-      left: Math.max(pad, Math.min(anchor.x + 8, vw - w - pad)),
-      top: Math.max(pad, Math.min(anchor.y + 8, vh - h - pad)),
-      width: w,
+  const startDrag = (e: React.PointerEvent) => {
+    if ((e.target as HTMLElement).closest(".comp-props-actions")) return;
+    e.preventDefault();
+    const start = { px: e.clientX, py: e.clientY, left: offset.left, top: offset.top };
+    const onMove = (ev: PointerEvent) => {
+      const pad = 8;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      setOffset({
+        left: Math.max(pad, Math.min(start.left + (ev.clientX - start.px), vw - dialogW - pad)),
+        top: Math.max(pad, Math.min(start.top + (ev.clientY - start.py), vh - 48 - pad)),
+      });
     };
-  }, [anchor.x, anchor.y]);
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
 
   const title =
     spec.refdesPrefix !== ""
@@ -261,10 +287,13 @@ export function ComponentPropertiesDialog({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        style={{ left: position.left, top: position.top, width: position.width }}
+        style={{ left: offset.left, top: offset.top, width: dialogW }}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="comp-props-titlebar">
+        <div
+          className="comp-props-titlebar is-draggable"
+          onPointerDown={startDrag}
+        >
           <span className="comp-props-title">{title}</span>
           <div className="comp-props-actions">
             <button
@@ -314,45 +343,84 @@ export function ComponentPropertiesDialog({
               );
             }
 
+            // Logical NOT always has 1 input — hide port-count field.
+            if (
+              node.data.kind === "MATH_LOGIC" &&
+              attr.key === "inputs" &&
+              (draft.params.op ?? "AND").toUpperCase() === "NOT"
+            ) {
+              return null;
+            }
+
             return (
-              <label className="prop-field" key={attr.key}>
-                <span className="prop-label">
-                  {attr.label}
-                  {attr.unit ? <span className="prop-unit"> ({attr.unit})</span> : null}
-                </span>
-                {attr.type === "select" ? (
-                  <select
-                    ref={isFirst ? (firstFieldRef as React.RefObject<HTMLSelectElement>) : undefined}
-                    className="prop-input"
-                    value={value}
-                    onChange={(e) =>
-                      setDraft((d) => ({
-                        ...d,
-                        params: { ...d.params, [attr.key]: e.target.value },
-                      }))
-                    }
-                  >
-                    {(attr.options ?? []).map((o) => (
-                      <option key={o} value={o}>
-                        {o}
-                      </option>
-                    ))}
-                  </select>
+              <label
+                className={`prop-field${attr.type === "checkbox" ? " prop-field-check" : ""}`}
+                key={attr.key}
+              >
+                {attr.type === "checkbox" ? (
+                  <>
+                    <span className="prop-check-row">
+                      <input
+                        ref={isFirst ? (firstFieldRef as React.RefObject<HTMLInputElement>) : undefined}
+                        className="prop-checkbox"
+                        type="checkbox"
+                        checked={value === "1" || value.toLowerCase() === "true"}
+                        onChange={(e) =>
+                          setDraft((d) => ({
+                            ...d,
+                            params: { ...d.params, [attr.key]: e.target.checked ? "1" : "0" },
+                          }))
+                        }
+                      />
+                      <span className="prop-label">
+                        {attr.label}
+                        {attr.unit ? <span className="prop-unit"> [{attr.unit}]</span> : null}
+                      </span>
+                    </span>
+                    {attr.hint ? <span className="prop-hint">{attr.hint}</span> : null}
+                  </>
                 ) : (
-                  <input
-                    ref={isFirst ? (firstFieldRef as React.RefObject<HTMLInputElement>) : undefined}
-                    className="prop-input"
-                    type={attr.type === "number" ? "number" : "text"}
-                    value={value}
-                    onChange={(e) =>
-                      setDraft((d) => ({
-                        ...d,
-                        params: { ...d.params, [attr.key]: e.target.value },
-                      }))
-                    }
-                  />
+                  <>
+                    <span className="prop-label">
+                      {attr.label}
+                      {attr.unit ? <span className="prop-unit"> [{attr.unit}]</span> : null}
+                    </span>
+                    {attr.type === "select" ? (
+                      <select
+                        ref={isFirst ? (firstFieldRef as React.RefObject<HTMLSelectElement>) : undefined}
+                        className="prop-input"
+                        value={value}
+                        onChange={(e) =>
+                          setDraft((d) => ({
+                            ...d,
+                            params: { ...d.params, [attr.key]: e.target.value },
+                          }))
+                        }
+                      >
+                        {(attr.options ?? []).map((o) => (
+                          <option key={o} value={o}>
+                            {o}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        ref={isFirst ? (firstFieldRef as React.RefObject<HTMLInputElement>) : undefined}
+                        className="prop-input"
+                        type={attr.type === "number" ? "number" : "text"}
+                        min={attr.type === "number" ? 1 : undefined}
+                        value={value}
+                        onChange={(e) =>
+                          setDraft((d) => ({
+                            ...d,
+                            params: { ...d.params, [attr.key]: e.target.value },
+                          }))
+                        }
+                      />
+                    )}
+                    {attr.hint ? <span className="prop-hint">{attr.hint}</span> : null}
+                  </>
                 )}
-                {attr.hint ? <span className="prop-hint">{attr.hint}</span> : null}
               </label>
             );
           })}

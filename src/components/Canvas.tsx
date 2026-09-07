@@ -18,7 +18,14 @@ import "@xyflow/react/dist/style.css";
 import { ComponentNode } from "../nodes/ComponentNode";
 import type { ComponentData, ComponentKind, ComponentRotation } from "../model/types";
 import { isPaletteDrag, PALETTE_DND_MIME } from "../dnd";
-import { COMPONENT_SPECS } from "../model/componentSpecs";
+import { COMPONENT_SPECS, getComponentPins } from "../model/componentSpecs";
+import { extractNets } from "../netlist/nets";
+import {
+  currentThrough,
+  formatProbeValue,
+  voltageAtNet,
+} from "../sim/probeHover";
+import { useSimResult } from "../sim/SimResultContext";
 import {
   SchematicWireEdge,
   type SchematicWireData,
@@ -144,9 +151,7 @@ function collectWireAlignAxes(
       }
       continue;
     }
-    const spec = COMPONENT_SPECS[n.data.kind];
-    if (!spec) continue;
-    for (const pin of spec.pins) {
+    for (const pin of getComponentPins(n.data.kind, n.data.params)) {
       const p = pinWorldPoint(n, pin.id);
       if (!p) continue;
       xs.push(p.x);
@@ -575,11 +580,12 @@ function JunctionOverlay({
   interactive,
 }: {
   junctions: { x: number; y: number }[];
-  crossings: { x: number; y: number }[];
-  /** Delete mode: marks receive hits (scissors on square/circle). */
+  crossings: { x: number; y: number; hop?: "h" | "v" }[];
+  /** Delete mode: marks receive hits (junction / hop). */
   interactive?: boolean;
 }) {
   if (!junctions.length && !crossings.length) return null;
+  const hopR = 5.5;
   return (
     <ViewportPortal>
       <svg
@@ -608,66 +614,62 @@ function JunctionOverlay({
             style={interactive ? { pointerEvents: "all", cursor: "inherit" } : undefined}
           />
         ))}
-        {crossings.map((p) => (
-          <circle
-            key={`c-${p.x},${p.y}`}
-            className="wire-crossing"
-            data-wire-mark="crossing"
-            cx={p.x}
-            cy={p.y}
-            r={6}
-            style={interactive ? { pointerEvents: "all", cursor: "inherit" } : undefined}
-          />
-        ))}
+        {crossings.map((p) => {
+          const hop = p.hop ?? "h";
+          const r = hopR;
+          // Closed semicircle (fill masks the +); open arc is the hop stroke.
+          const bump =
+            hop === "h"
+              ? `M ${p.x - r} ${p.y} A ${r} ${r} 0 0 1 ${p.x + r} ${p.y}`
+              : `M ${p.x} ${p.y - r} A ${r} ${r} 0 0 1 ${p.x} ${p.y + r}`;
+          const erase =
+            hop === "h"
+              ? `M ${p.x - r} ${p.y} A ${r} ${r} 0 0 1 ${p.x + r} ${p.y} Z`
+              : `M ${p.x} ${p.y - r} A ${r} ${r} 0 0 1 ${p.x} ${p.y + r} Z`;
+          const gap =
+            hop === "h"
+              ? {
+                  x: p.x - r,
+                  y: p.y - 2.2,
+                  width: r * 2,
+                  height: 4.4,
+                }
+              : {
+                  x: p.x - 2.2,
+                  y: p.y - r,
+                  width: 4.4,
+                  height: r * 2,
+                };
+          return (
+            <g key={`c-${p.x},${p.y}`} data-wire-mark="crossing">
+              {/* Hide straight wire through the hop region */}
+              <rect className="wire-crossing-gap" {...gap} />
+              <path className="wire-crossing-gap" d={erase} />
+              <path
+                className="wire-crossing"
+                d={bump}
+                fill="none"
+                style={interactive ? { pointerEvents: "stroke", cursor: "inherit" } : undefined}
+              />
+              {interactive && (
+                <circle
+                  cx={p.x}
+                  cy={p.y}
+                  r={r + 3}
+                  fill="transparent"
+                  style={{ pointerEvents: "all", cursor: "inherit" }}
+                />
+              )}
+            </g>
+          );
+        })}
       </svg>
     </ViewportPortal>
   );
 }
 
-// The schematic canvas. Custom click wiring (LTspice-style), not drag-auto-route.
-export function Canvas({
-  nodes,
-  edges,
-  mode,
-  onModeChange,
-  placeKind,
-  placeGhostName,
-  pasteClip,
-  copyMarquee = false,
-  onCopyRegion,
-  onCancelCopyMarquee,
-  onToggleSelectEdge,
-  onCopyPartImmediate,
-  onCopyEdgeImmediate,
-  onPlaceAt,
-  onPasteAt,
-  onPasteShortcut,
-  onRotatePasteClip,
-  onCancelPlace,
-  onNodesChange,
-  onEdgesChange,
-  onWire,
-  onWirePartial,
-  onTrimWire,
-  onWirePathUpdate,
-  onMoveWireDisconnect,
-  onPushHistory,
-  onReplace,
-  onAddAt,
-  onCutMoveRegion,
-  onSelectRegion,
-  onMoveDisconnect,
-  onWireBranch,
-  onCancelWireBranch,
-  onDeleteNode,
-  onDeleteEdge,
-  onDeleteWireMark,
-  hiddenCrossingKeys = [],
-  onStraightenEdge,
-  onSelectEdge,
-  onOpenComponentProps,
-  viewApiRef,
-}: {
+/** Public Canvas props (named so JSX typings stay in sync with App). */
+export type CanvasProps = {
   nodes: Node<ComponentData>[];
   edges: Edge[];
   mode: CanvasMode;
@@ -752,7 +754,56 @@ export function Canvas({
   } | null;
   /** Filled by Canvas so the top toolbar can zoom / fit / lock. */
   viewApiRef?: MutableRefObject<CanvasViewApi | null>;
-}) {
+  /** Light/dark — drives grid dot contrast on the schematic canvas. */
+  uiTheme?: "dark" | "light";
+};
+
+// The schematic canvas. Custom click wiring (LTspice-style), not drag-auto-route.
+export function Canvas({
+  nodes,
+  edges,
+  mode,
+  onModeChange,
+  placeKind,
+  placeGhostName,
+  pasteClip,
+  copyMarquee = false,
+  onCopyRegion,
+  onCancelCopyMarquee,
+  onToggleSelectEdge,
+  onCopyPartImmediate,
+  onCopyEdgeImmediate,
+  onPlaceAt,
+  onPasteAt,
+  onPasteShortcut,
+  onRotatePasteClip,
+  onCancelPlace,
+  onNodesChange,
+  onEdgesChange,
+  onWire,
+  onWirePartial,
+  onTrimWire,
+  onWirePathUpdate,
+  onMoveWireDisconnect,
+  onPushHistory,
+  onReplace,
+  onAddAt,
+  onCutMoveRegion,
+  onSelectRegion,
+  onMoveDisconnect,
+  onWireBranch,
+  onCancelWireBranch,
+  onDeleteNode,
+  onDeleteEdge,
+  onDeleteWireMark,
+  hiddenCrossingKeys = [],
+  onStraightenEdge,
+  onSelectEdge,
+  onOpenComponentProps,
+  viewApiRef,
+  uiTheme = "dark",
+}: CanvasProps) {
+  const simResult = useSimResult();
   const canvasElRef = useRef<HTMLDivElement | null>(null);
   const rfRef = useRef<ReactFlowInstance<Node<ComponentData>> | null>(null);
   const [viewLocked, setViewLocked] = useState(false);
@@ -773,6 +824,16 @@ export function Canvas({
   /** Ignore the pane click that follows a box-select mouseup. */
   const skipPaneClickRef = useRef(false);
   const [, setMoveHint] = useState<string | null>(null);
+  const [probeTip, setProbeTip] = useState<{
+    x: number;
+    y: number;
+    lines: string[];
+  } | null>(null);
+  const probesLive =
+    Boolean(simResult?.ok && simResult.series.length) &&
+    !placeKind &&
+    !pasteClip &&
+    !wiring;
   const modeRef = useRef(mode);
   modeRef.current = mode;
   const placeKindRef = useRef(placeKind);
@@ -1220,6 +1281,17 @@ export function Canvas({
         cursor,
         WIRE_JOIN_RADIUS,
         WIRE_DRAW_GRID,
+        draft.branchOriginTipId && draft.waypoints.length === 0
+          ? new Set(
+              edgesRef.current
+                .filter(
+                  (e) =>
+                    e.source === draft.branchOriginTipId ||
+                    e.target === draft.branchOriginTipId,
+                )
+                .map((e) => e.id),
+            )
+          : undefined,
       );
 
       let hit =
@@ -2498,68 +2570,42 @@ export function Canvas({
         return;
       }
       if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      // One Esc → idle Explore: clear stamp/copy/wire draft, then leave the tool.
       if (placingRef.current) {
-        e.preventDefault();
-        e.stopPropagation();
         onCancelPlaceRef.current();
-        return;
       }
       if (copyMarqueeRef.current) {
-        e.preventDefault();
-        e.stopPropagation();
         marqueeRef.current = null;
         setMarquee(null);
         onCancelCopyMarqueeRef.current?.();
-        return;
       }
-      if (modeRef.current === "delete") {
-        e.preventDefault();
-        e.stopPropagation();
-        onModeChangeRef.current("explore");
-        return;
-      }
-      // While drawing: Esc keeps locked segments (white), drops the blue preview
-      // (same as right-click). Nothing locked yet → discard draft / restore branch.
       if (wiringRef.current) {
-        e.preventDefault();
-        e.stopPropagation();
+        // Keep any locked bends; drop the live rubber band.
         finishOrKeepPartial();
-        return;
       }
-      // Explore / Move / Drag: Esc clears part + wire selection before wire peel.
-      if (
-        modeRef.current === "explore" ||
-        modeRef.current === "move" ||
-        modeRef.current === "drag"
-      ) {
-        const selNodes = nodes.filter((n) => n.selected);
-        const selEdges = edges.filter((e) => e.selected);
-        if (selNodes.length || selEdges.length) {
-          e.preventDefault();
-          e.stopPropagation();
-          if (selNodes.length) {
-            onNodesChange(
-              selNodes.map((n) => ({ type: "select" as const, id: n.id, selected: false })),
-            );
-          }
-          if (selEdges.length) {
-            onEdgesChange(
-              selEdges.map((e) => ({ type: "select" as const, id: e.id, selected: false })),
-            );
-          }
-          return;
-        }
-      }
-      // Idle wire mode: Esc peels a selected wire one bend at a time.
-      if (onTrimWireRef.current()) {
-        e.preventDefault();
-        e.stopPropagation();
-        return;
-      }
+
       if (modeRef.current !== "explore") {
-        e.preventDefault();
-        e.stopPropagation();
         onModeChangeRef.current("explore");
+        return;
+      }
+
+      // Already Explore: Esc clears selection (if any).
+      const selNodes = nodes.filter((n) => n.selected);
+      const selEdges = edges.filter((ed) => ed.selected);
+      if (selNodes.length || selEdges.length) {
+        if (selNodes.length) {
+          onNodesChange(
+            selNodes.map((n) => ({ type: "select" as const, id: n.id, selected: false })),
+          );
+        }
+        if (selEdges.length) {
+          onEdgesChange(
+            selEdges.map((ed) => ({ type: "select" as const, id: ed.id, selected: false })),
+          );
+        }
       }
     };
     // Capture so React Flow cannot clear selection before we peel.
@@ -2604,11 +2650,85 @@ export function Canvas({
 
   const onNodeMouseMove = useCallback(
     (e: React.MouseEvent, node: Node<ComponentData>) => {
-      if (!wiringRef.current) return;
-      updateDraftPreview(e.clientX, e.clientY, node);
+      if (wiringRef.current) {
+        updateDraftPreview(e.clientX, e.clientY, node);
+        return;
+      }
+      if (!probesLive || !simResult?.series.length) {
+        setProbeTip(null);
+        return;
+      }
+      if (node.data.kind === "TIP") {
+        setProbeTip(null);
+        return;
+      }
+      const nets = extractNets(nodesRef.current, edgesRef.current);
+      const lines: string[] = [];
+      const seen = new Set<string>();
+      for (const pin of getComponentPins(node.data.kind, node.data.params)) {
+        const net = nets.netOf(node.id, pin.id);
+        if (seen.has(net)) continue;
+        seen.add(net);
+        const v = voltageAtNet(simResult.series, net);
+        if (v) {
+          lines.push(`${v.name} = ${formatProbeValue(v.value, "V")}`);
+        } else {
+          lines.push(`V(${net}) — not in results`);
+        }
+      }
+      if (node.data.refdes) {
+        const i = currentThrough(simResult.series, node.data.refdes);
+        if (i) lines.push(`${i.name} = ${formatProbeValue(i.value, "A")}`);
+      }
+      setProbeTip(
+        lines.length
+          ? { x: e.clientX + 14, y: e.clientY + 14, lines }
+          : null,
+      );
     },
-    [updateDraftPreview],
+    [updateDraftPreview, probesLive, simResult],
   );
+
+  const onNodeMouseLeave = useCallback(() => {
+    if (!wiringRef.current) setProbeTip(null);
+  }, []);
+
+  const onEdgeMouseMove = useCallback(
+    (e: React.MouseEvent, edge: Edge) => {
+      if (!probesLive || !simResult?.series.length) {
+        setProbeTip(null);
+        return;
+      }
+      const ns = nodesRef.current;
+      const lines: string[] = [];
+      for (const end of [edge.source, edge.target]) {
+        const n = ns.find((x) => x.id === end);
+        if (!n || n.data.kind === "TIP" || !n.data.refdes) continue;
+        const i = currentThrough(simResult.series, n.data.refdes);
+        if (i) lines.push(`${i.name} = ${formatProbeValue(i.value, "A")}`);
+      }
+      const nets = extractNets(ns, edgesRef.current);
+      if (edge.sourceHandle) {
+        const net = nets.netOf(edge.source, edge.sourceHandle);
+        const v = voltageAtNet(simResult.series, net);
+        if (v) lines.push(`${v.name} = ${formatProbeValue(v.value, "V")}`);
+      }
+      setProbeTip(
+        lines.length
+          ? { x: e.clientX + 14, y: e.clientY + 14, lines: [...new Set(lines)] }
+          : {
+              x: e.clientX + 14,
+              y: e.clientY + 14,
+              lines: ["Branch — no I() in results"],
+            },
+      );
+    },
+    [probesLive, simResult],
+  );
+
+  const onEdgeMouseLeave = useCallback(() => {
+    setProbeTip(null);
+  }, []);
 
   const selectOnlyEdge = useCallback((edgeId: string) => {
     // Direct setState — RF applyEdgeChanges batches can leave extra edges selected.
@@ -2649,6 +2769,14 @@ export function Canvas({
         start = branchPt;
       }
       if (!tipId) return;
+
+      // Draft must start at the real TIP (projected split), not the pre-split
+      // resolve point — otherwise the rubber band sits beside the junction.
+      const tipNode = nodesRef.current.find((n) => n.id === tipId);
+      if (tipNode) {
+        // TIP node top-left; pin/"t" is at y + TIP_SIZE/2 (see busBranch tipPos).
+        start = { x: tipNode.position.x, y: tipNode.position.y + 4 };
+      }
 
       onSelectEdgeRef.current("");
       const next: WiringDraft = {
@@ -2944,6 +3072,9 @@ export function Canvas({
         onEdgesChange={onEdgesChange}
         onNodeClick={onNodeClick}
         onNodeMouseMove={onNodeMouseMove}
+        onNodeMouseLeave={onNodeMouseLeave}
+        onEdgeMouseMove={onEdgeMouseMove}
+        onEdgeMouseLeave={onEdgeMouseLeave}
         elementsSelectable={false}
         nodesFocusable={false}
         edgesFocusable={false}
@@ -3050,7 +3181,11 @@ export function Canvas({
           onCancelPlaceRef.current();
         }}
       >
-        <Background gap={SCHEMATIC_GRID} />
+        <Background
+          gap={SCHEMATIC_GRID}
+          color={uiTheme === "light" ? "#b0bcc9" : "#2a3544"}
+          style={{ backgroundColor: uiTheme === "light" ? "#e8ecf1" : "#0f1419" }}
+        />
         <WireDraftOverlay
           lockedPath={lockedPath}
           rubberRef={rubberPathElRef}
@@ -3073,6 +3208,17 @@ export function Canvas({
         ) : null}
         {pasteClip ? <PasteGhostOverlay clip={pasteClip} origin={placeGhost} /> : null}
       </ReactFlow>
+      {probeTip && (
+        <div
+          className="sim-probe-tip"
+          style={{ left: probeTip.x, top: probeTip.y }}
+          role="status"
+        >
+          {probeTip.lines.map((line) => (
+            <div key={line}>{line}</div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

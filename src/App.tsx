@@ -17,10 +17,13 @@ import {
 } from "./components/ComponentPropertiesDialog";
 import { NetlistPanel } from "./components/NetlistPanel";
 import { ChatPanel } from "./components/ChatPanel";
-import { SimPanel } from "./components/SimPanel";
+import { SimPanel, type SimControlApi, type SimRunState } from "./components/SimPanel";
+import type { SimResult } from "./sim/runSimulation";
+import { SimResultContext } from "./sim/SimResultContext";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { FloatingWindow } from "./components/FloatingWindow";
-import { COMPONENT_SPECS, defaultParams } from "./model/componentSpecs";
+import { COMPONENT_SPECS, defaultParams, getComponentPins, isGroundKind } from "./model/componentSpecs";
+import { readCommonlyUsed, recordCommonlyUsed } from "./model/commonlyUsed";
 import type { ComponentData, ComponentKind, ComponentRotation } from "./model/types";
 import { normalizeRotation } from "./model/rotation";
 import { toNetlist } from "./netlist/toNetlist";
@@ -29,6 +32,7 @@ import { applyNetlistToGraph } from "./netlist/applyNetlistToGraph";
 import { createHistory, type CircuitSnapshot } from "./history/circuitHistory";
 import { downloadCircuit, parseCircuitFile, readCircuitFile } from "./persistence/circuitFile";
 import starterCircuit from "../examples/demo-circuit.json";
+import { applyTheme, readStoredTheme, type UiTheme } from "./theme";
 import type { Op } from "./llm/ops";
 import type { AssistantContext } from "./llm/assistantTypes";
 import {
@@ -119,7 +123,7 @@ const mk = (
 });
 
 const INITIAL_NODES: Node<ComponentData>[] = [
-  mk("n1", "V", "V1", 40, 180, 0, { value: "V" }),
+  mk("n1", "BATTERY", "V1", 40, 180, 0),
   mk("n2", "R", "R1", 280, 90),
   mk("n3", "C", "C1", 540, 180),
   mk("n4", "GND", "", 280, 360),
@@ -215,9 +219,36 @@ export default function App() {
     });
   }, [setNodes]);
 
+  // One-time: shrink net-name node box 64×48 → 16×16 without moving the join.
+  useEffect(() => {
+    setNodes((ns) => {
+      let changed = false;
+      const next = ns.map((n) => {
+        if (n.data.kind !== "WIRELABEL") return n;
+        if (n.data.params._lb === "2") return n;
+        changed = true;
+        // Old join was bottom-center of 64×48; keep that world point on 16×16.
+        return {
+          ...n,
+          position: {
+            x: n.position.x + (64 - 16) / 2,
+            y: n.position.y + (48 - 16),
+          },
+          data: {
+            ...n.data,
+            params: { ...n.data.params, _lb: "2" },
+          },
+        };
+      });
+      return changed ? next : ns;
+    });
+  }, [setNodes]);
+
   const [textEditMode, setTextEditMode] = useState(false);
+  const [uiTheme, setUiTheme] = useState<UiTheme>(() => readStoredTheme());
   const [draftNetlist, setDraftNetlist] = useState("");
   const [netlistStatus, setNetlistStatus] = useState<string | null>(null);
+  const [netlistStatusError, setNetlistStatusError] = useState(false);
   const [directives, setDirectives] = useState<string[] | undefined>(undefined);
   const [library, setLibrary] = useState("");
   const [showLibrary, setShowLibrary] = useState(false);
@@ -233,8 +264,18 @@ export default function App() {
   const rightColRef = useRef<HTMLDivElement>(null);
   const [canvasMode, setCanvasMode] = useState<CanvasMode>("explore");
   const canvasViewApiRef = useRef<CanvasViewApi | null>(null);
+  const simControlRef = useRef<SimControlApi | null>(null);
+  const [simRunState, setSimRunState] = useState<SimRunState>("idle");
+  /** Last successful/failed sim waveforms — enables canvas probe hover when ok. */
+  const [simResult, setSimResult] = useState<SimResult | null>(null);
   const [placeKind, setPlaceKind] = useState<ComponentKind | null>(null);
   const [placeParams, setPlaceParams] = useState<Record<string, string> | null>(null);
+  /** Session palette “Commonly used” (most recent first). */
+  const [commonlyUsed, setCommonlyUsed] = useState<ComponentKind[]>(() => readCommonlyUsed());
+  const noteCommonlyUsed = useCallback((...kinds: ComponentKind[]) => {
+    if (!kinds.length) return;
+    setCommonlyUsed(recordCommonlyUsed(...kinds));
+  }, []);
   const [netNameDialog, setNetNameDialog] = useState(false);
   const lastWireLabelName = useRef("");
   const [pasteClip, setPasteClip] = useState<CircuitClipboard | null>(null);
@@ -247,6 +288,10 @@ export default function App() {
     y: number;
   } | null>(null);
   const [histTick, setHistTick] = useState(0);
+
+  useEffect(() => {
+    applyTheme(uiTheme);
+  }, [uiTheme]);
 
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
@@ -719,7 +764,9 @@ export default function App() {
             id: `${edge.source}${edge.sourceHandle}-${tipId}t`,
             target: tipId,
             targetHandle: "t",
-            data: { waypoints: beforeBranch },
+            // Freeze the pre-split geometry — without directPath, tip routing
+            // re-injects pin stubs and the bus jogs the moment you branch.
+            data: { waypoints: beforeBranch, directPath: true },
             selected: false,
           },
           {
@@ -727,7 +774,7 @@ export default function App() {
             id: `${tipId}t-${edge.target}${edge.targetHandle}`,
             source: tipId,
             sourceHandle: "t",
-            data: { waypoints: afterBranch },
+            data: { waypoints: afterBranch, directPath: true },
             selected: false,
           },
         ]);
@@ -807,30 +854,48 @@ export default function App() {
   /** Box-select real parts in a rectangle (Ctrl/⌘ = add to selection). */
   const onSelectRegion = useCallback(
     (rect: FlowRect, additive: boolean) => {
+      const ns = nodesRef.current;
+      const es = edgesRef.current;
       const hit = new Set(
-        nodesInRect(nodesRef.current, rect).filter((id) => {
-          const n = nodesRef.current.find((x) => x.id === id);
+        nodesInRect(ns, rect).filter((id) => {
+          const n = ns.find((x) => x.id === id);
           return Boolean(n && n.data.kind !== "TIP");
         }),
       );
-      if (!hit.size && !additive) {
-        setNodes((ns) => ns.map((n) => (n.selected ? { ...n, selected: false } : n)));
-        setEdges((es) => es.map((e) => (e.selected ? { ...e, selected: false } : e)));
+      const tipHits = nodesInRect(ns, rect).filter((id) => {
+        const n = ns.find((x) => x.id === id);
+        return n?.data.kind === "TIP";
+      });
+      // Same coverage idea as Move/Drag / copy-marquee: include wires in the box.
+      const coveredEdges = new Set(edgesCoveredByRect(ns, es, rect, 0.7));
+      const endpointOk = new Set([...hit, ...tipHits]);
+      for (const e of es) {
+        if (endpointOk.has(e.source) && endpointOk.has(e.target)) coveredEdges.add(e.id);
+      }
+
+      if (!hit.size && !coveredEdges.size && !additive) {
+        setNodes((cur) => cur.map((n) => (n.selected ? { ...n, selected: false } : n)));
+        setEdges((cur) => cur.map((e) => (e.selected ? { ...e, selected: false } : e)));
         return;
       }
-      if (!hit.size) return;
-      setNodes((ns) =>
-        ns.map((n) => {
+      if (!hit.size && !coveredEdges.size) return;
+
+      setNodes((cur) =>
+        cur.map((n) => {
           if (n.data.kind === "TIP") {
-            return additive ? n : n.selected ? { ...n, selected: false } : n;
+            const next = tipHits.includes(n.id) || (additive && n.selected);
+            return n.selected === next ? n : { ...n, selected: next };
           }
           const next = hit.has(n.id) || (additive && n.selected);
           return n.selected === next ? n : { ...n, selected: next };
         }),
       );
-      if (!additive) {
-        setEdges((es) => es.map((e) => (e.selected ? { ...e, selected: false } : e)));
-      }
+      setEdges((cur) =>
+        cur.map((e) => {
+          const next = coveredEdges.has(e.id) || (additive && e.selected);
+          return e.selected === next ? e : { ...e, selected: next };
+        }),
+      );
     },
     [setNodes, setEdges],
   );
@@ -1127,6 +1192,7 @@ export default function App() {
       edgesRef.current = absorbed.edges;
       setNodes(absorbed.nodes);
       setEdges(absorbed.edges);
+      noteCommonlyUsed(kind);
       return;
     }
     if (kind === "WIRELABEL") {
@@ -1136,12 +1202,14 @@ export default function App() {
         edgesRef.current = onPin.edges;
         setNodes(onPin.nodes);
         setEdges(onPin.edges);
+        noteCommonlyUsed(kind);
         return;
       }
     }
     nodesRef.current = nextNodes;
     setNodes(nextNodes);
-  }, [setNodes, setEdges, pushHistory, placeParams]);
+    noteCommonlyUsed(kind);
+  }, [setNodes, setEdges, pushHistory, placeParams, noteCommonlyUsed]);
 
   const setCanvasModeAndClearPlace = useCallback((mode: CanvasMode) => {
     setPlaceKind(null);
@@ -1178,7 +1246,8 @@ export default function App() {
         return true;
       }),
     );
-  }, [setNodes, setEdges, pushHistory]);
+    noteCommonlyUsed(kind);
+  }, [setNodes, setEdges, pushHistory, noteCommonlyUsed]);
 
   const openComponentProps = useCallback(
     (nodeId: string, x: number, y: number) => {
@@ -1194,6 +1263,15 @@ export default function App() {
   const applyComponentProps = useCallback(
     (nodeId: string, draft: ComponentPropsDraft) => {
       pushHistory();
+      const target = nodesRef.current.find((n) => n.id === nodeId);
+      const nextParams = target
+        ? { ...target.data.params, ...draft.params }
+        : { ...draft.params };
+      const kind = target?.data.kind;
+      const pinIds =
+        kind != null
+          ? new Set(getComponentPins(kind, nextParams).map((p) => p.id))
+          : null;
       setNodes((ns) =>
         ns.map((n) => {
           if (n.id !== nodeId) return n;
@@ -1202,16 +1280,25 @@ export default function App() {
             data: {
               ...n.data,
               refdes: draft.refdes,
-              params: { ...n.data.params, ...draft.params },
+              params: nextParams,
               labelPos: draft.labelPos === "auto" ? undefined : draft.labelPos,
               rotation: normalizeRotation(draft.rotation),
             },
           };
         }),
       );
+      if (pinIds) {
+        setEdges((es) =>
+          es.filter((e) => {
+            if (e.source === nodeId && e.sourceHandle && !pinIds.has(e.sourceHandle)) return false;
+            if (e.target === nodeId && e.targetHandle && !pinIds.has(e.targetHandle)) return false;
+            return true;
+          }),
+        );
+      }
       setPropsDialog(null);
     },
-    [setNodes, pushHistory],
+    [setNodes, setEdges, pushHistory],
   );
 
   const rotateNodeLive = useCallback(
@@ -2324,7 +2411,8 @@ export default function App() {
     edgesRef.current = nextEdges;
     setNodes(nextNodes);
     setEdges(nextEdges);
-  }, [pushHistory, setNodes, setEdges]);
+    noteCommonlyUsed(...built.nodes.map((n) => n.data.kind));
+  }, [pushHistory, setNodes, setEdges, noteCommonlyUsed]);
 
   const pasteShortcut = useCallback((origin: Point | null) => {
     const clip = clipboard.current;
@@ -2345,9 +2433,46 @@ export default function App() {
   }, []);
 
   const cutSelection = useCallback(() => {
+    const nodesNow = nodesRef.current;
+    const edgesNow = edgesRef.current;
+    const selectedNodeIds = nodesNow.filter((n) => n.selected).map((n) => n.id);
+    const selectedEdgeIds = edgesNow.filter((e) => e.selected).map((e) => e.id);
+    if (!selectedNodeIds.length && !selectedEdgeIds.length) return;
     copySelection();
-    deleteNodes(nodesRef.current.filter((n) => n.selected).map((n) => n.id));
-  }, [copySelection, deleteNodes]);
+    pushHistory();
+    const dropNodes = new Set(selectedNodeIds);
+    const dropEdges = new Set(selectedEdgeIds);
+    const nextNodes = nodesNow.filter((n) => !dropNodes.has(n.id));
+    const nextEdges = edgesNow.filter(
+      (e) =>
+        !dropEdges.has(e.id) &&
+        !dropNodes.has(e.source) &&
+        !dropNodes.has(e.target),
+    );
+    const pruned = pruneOrphanTips(nextNodes, nextEdges);
+    const collapsed = collapsePassThroughTips(pruned.nodes, pruned.edges);
+    setNodes(collapsed.nodes);
+    setEdges(collapsed.edges);
+  }, [copySelection, pushHistory, setNodes, setEdges]);
+
+  /** Toolbar / Ctrl+C: copy selection immediately, else enter copy-marquee. */
+  const triggerCopy = useCallback(() => {
+    if (copyMarquee) {
+      const hasSel =
+        nodesRef.current.some((n) => n.selected && n.data.kind !== "TIP") ||
+        edgesRef.current.some((ed) => ed.selected);
+      if (hasSel) copySelection();
+      return;
+    }
+    const hasSel =
+      nodesRef.current.some((n) => n.selected && n.data.kind !== "TIP") ||
+      edgesRef.current.some((ed) => ed.selected);
+    if (hasSel) {
+      copySelection();
+      return;
+    }
+    beginCopyMarquee();
+  }, [beginCopyMarquee, copyMarquee, copySelection]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -2361,14 +2486,7 @@ export default function App() {
       }
       else if (mod && e.key.toLowerCase() === "c") {
         e.preventDefault();
-        if (copyMarquee) {
-          const hasSel =
-            nodesRef.current.some((n) => n.selected && n.data.kind !== "TIP") ||
-            edgesRef.current.some((ed) => ed.selected);
-          if (hasSel) copySelection();
-          return;
-        }
-        beginCopyMarquee();
+        triggerCopy();
       }
       else if (mod && e.key.toLowerCase() === "x") { e.preventDefault(); cutSelection(); }
       else if (e.key === "Escape" && copyMarquee) {
@@ -2437,6 +2555,7 @@ export default function App() {
       copyMarquee,
       copySelection,
       cutSelection,
+      triggerCopy,
       nodes,
       placeKind,
       pasteClip,
@@ -2454,12 +2573,14 @@ export default function App() {
     setDraftNetlist(netlist);
     setTextEditMode(true);
     setNetlistStatus(null);
+    setNetlistStatusError(false);
   }, [netlist]);
 
   const cancelTextEdit = useCallback(() => {
     setTextEditMode(false);
     setDraftNetlist("");
     setNetlistStatus(null);
+    setNetlistStatusError(false);
   }, []);
 
   const applyTextEdit = useCallback(() => {
@@ -2472,16 +2593,30 @@ export default function App() {
     const dirs = extractDirectives(draftNetlist);
     if (dirs.length) setDirectives(dirs);
 
-    setTextEditMode(false);
-    setDraftNetlist("");
+    const errors: string[] = [];
+    if (result.skippedUnknown.length) {
+      errors.push(
+        `unknown or incomplete device(s): ${result.skippedUnknown.join(", ")} — no matching symbol`,
+      );
+    }
 
     const parts: string[] = [];
     if (result.updated.length) parts.push(`updated ${result.updated.join(", ")}`);
     if (result.added.length) parts.push(`added ${result.added.join(", ")} (unplaced — drag to position)`);
     if (result.deleted.length) parts.push(`deleted ${result.deleted.join(", ")}`);
-    if (result.skippedUnknown.length) parts.push(`skipped unknown ${result.skippedUnknown.join(", ")}`);
-    if (!parts.length) parts.push("no device changes");
+    if (!parts.length && !errors.length) parts.push("no device changes");
     if (result.rewired) parts.push("wires rebuilt from nets");
+
+    if (errors.length) {
+      // Keep the user's draft visible so they can fix syntax / unknown parts.
+      setNetlistStatusError(true);
+      setNetlistStatus(`Error: ${errors.join(" · ")}${parts.length ? ` · ${parts.join(" · ")}` : ""}`);
+      return;
+    }
+
+    setTextEditMode(false);
+    setDraftNetlist("");
+    setNetlistStatusError(false);
     setNetlistStatus(parts.join(" · "));
   }, [nodes, edges, draftNetlist, setNodes, setEdges, pushHistory]);
 
@@ -2644,7 +2779,7 @@ export default function App() {
     const components = nodes.map((n) => {
       const refdes =
         n.data.refdes ||
-        (n.data.kind === "GND"
+        (isGroundKind(n.data.kind)
           ? "GND"
           : n.data.kind === "NODE" || n.data.kind === "WIRELABEL"
             ? (n.data.params.name || n.data.kind)
@@ -2674,6 +2809,7 @@ export default function App() {
   }, [nodes, edges, netlist]);
 
   return (
+    <SimResultContext.Provider value={simResult}>
     <div className="app">
       <header className="app-header">
         <span className="app-title">SimulAI · Schematic Editor</span>
@@ -2688,6 +2824,26 @@ export default function App() {
           <button type="button" className="ghost-btn" onClick={() => setShowLibrary((v) => !v)}>
             {showLibrary ? "Hide models" : "Models"}
           </button>
+          <div className="theme-toggle" role="group" aria-label="Color theme">
+            <button
+              type="button"
+              className={`theme-toggle-btn${uiTheme === "light" ? " is-active" : ""}`}
+              aria-pressed={uiTheme === "light"}
+              title="Light theme"
+              onClick={() => setUiTheme("light")}
+            >
+              Light
+            </button>
+            <button
+              type="button"
+              className={`theme-toggle-btn${uiTheme === "dark" ? " is-active" : ""}`}
+              aria-pressed={uiTheme === "dark"}
+              title="Dark theme"
+              onClick={() => setUiTheme("dark")}
+            >
+              Dark
+            </button>
+          </div>
           <input
             ref={fileInputRef}
             type="file"
@@ -2720,7 +2876,7 @@ export default function App() {
               <ul className="mode-guide-list">
                 <li><kbd>Drag</kbd> empty canvas to pan · <kbd>Scroll</kbd> to zoom · <kbd>Space</kbd> fit view</li>
                 <li>Palette: click a part, then left-click to stamp · <kbd>R</kbd> rotates the ghost · right-click / Esc cancels</li>
-                <li><kbd>N</kbd> or palette <strong>Label</strong>: type a name, stamp text on the schematic · <kbd>R</kbd> rotates (3 ways) · same name joins nets</li>
+                <li><kbd>N</kbd> or toolbar <strong>Net name</strong>: type a name, stamp text on the schematic · <kbd>R</kbd> rotates (3 ways) · same name joins nets</li>
                 <li><kbd>Ctrl</kbd>+C copy mode · click a part/wire or drag a box (≥70%) to copy · paste ghost follows · <kbd>Esc</kbd> exits</li>
                 <li>Palette <strong>Net label</strong> is the older flag symbol (still names nets when connected)</li>
                 <li><kbd>Click</kbd> a part or wire to select · <kbd>Ctrl</kbd>+click toggles multi-select</li>
@@ -2736,22 +2892,26 @@ export default function App() {
               <ul className="mode-guide-list">
                 <li><kbd>Click</kbd> a pin or empty space to start · <kbd>Click</kbd> a pin to finish</li>
                 <li>While drawing: <kbd>Click</kbd> empty = bend · click a pin/wire = finish</li>
-                <li>Right-click = keep white segments, discard blue preview, then stop · <kbd>Esc</kbd> = cancel draft</li>
+                <li>Right-click = keep white segments, discard blue preview, then stop</li>
                 <li><kbd>Click</kbd> a wire to branch at that column (first stroke prefers vertical off an H bus)</li>
                 <li><kbd>Alt</kbd>+click a wire to select it (turns amber)</li>
                 <li><kbd>Double-click</kbd> a wire to straighten it (pulls the run into the nearer pin)</li>
                 <li>Hollow square = free <strong>wire end</strong> — select it, then <kbd>Delete</kbd> to remove the stub</li>
-                <li><kbd>Esc</kbd> on a selected wire: peels one bend at a time · also removes short dangling stubs</li>
-                <li><kbd>Delete</kbd> / <kbd>Backspace</kbd>: remove selected part/wire · with nothing selected, enter Delete · <kbd>Esc</kbd> Explore</li>
+                <li><kbd>Esc</kbd> = stop drawing (keeps locked bends) and return to Explore</li>
+                <li><kbd>Delete</kbd> / <kbd>Backspace</kbd>: remove selected part/wire · with nothing selected, enter Delete</li>
               </ul>
               <div className="mode-guide-legend" aria-label="Wire legend">
                 <span className="wl-item">
-                  <svg width="10" height="10" aria-hidden><rect x="1" y="1" width="8" height="8" fill="#e8eef5" stroke="#0f1419" strokeWidth="1"/></svg>
+                  <svg width="10" height="10" aria-hidden><rect x="1" y="1" width="8" height="8" fill="currentColor" /></svg>
                   Connected junction
                 </span>
                 <span className="wl-item">
-                  <svg width="12" height="12" aria-hidden><circle cx="6" cy="6" r="5" fill="#0f1419" stroke="#e8eef5" strokeWidth="2"/></svg>
-                  Crossing (not joined)
+                  <svg width="16" height="12" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.6">
+                    <path d="M1 9 H5.5 A4 4 0 0 1 13.5 9 H15" />
+                    <path d="M8.5 1 V5.2" />
+                    <path d="M8.5 9 V11" />
+                  </svg>
+                  Crossing hop (not joined)
                 </span>
               </div>
             </>
@@ -2761,7 +2921,7 @@ export default function App() {
               <ul className="mode-guide-list">
                 <li><kbd>Click</kbd> a part, wire, or hollow <strong>wire end</strong> square to delete it</li>
                 <li><kbd>Click</kbd> a filled junction square to break the join (wires stay, ends open)</li>
-                <li><kbd>Click</kbd> a hollow crossing ring to hide it — wires stay as they are</li>
+                <li><kbd>Click</kbd> a crossing hop to hide it — wires stay as they are</li>
                 <li>Short stubs are easiest to remove by clicking the square at the end</li>
                 <li><kbd>Esc</kbd> Explore · toolbar Delete toggles scissors off · <kbd>E</kbd> <kbd>W</kbd> <kbd>M</kbd> <kbd>D</kbd> switch tools · <kbd>Delete</kbd> / <kbd>Backspace</kbd> removes a selection</li>
               </ul>
@@ -2801,6 +2961,7 @@ export default function App() {
           activeKind={placeKind}
           pasting={Boolean(pasteClip)}
           copying={copyMarquee}
+          commonlyUsed={commonlyUsed}
           onPick={pickPlaceKind}
         />
 
@@ -2809,12 +2970,20 @@ export default function App() {
             mode={canvasMode}
             onModeChange={setCanvasModeAndClearPlace}
             viewApiRef={canvasViewApiRef}
+            onPlaceLabel={() => pickPlaceKind("WIRELABEL")}
+            labelActive={placeKind === "WIRELABEL"}
+            simControlRef={simControlRef}
+            simRunState={simRunState}
+            onCut={cutSelection}
+            onCopy={triggerCopy}
+            copyActive={copyMarquee}
           />
           <Canvas
             viewApiRef={canvasViewApiRef}
             nodes={nodes}
             edges={edges}
             mode={canvasMode}
+            uiTheme={uiTheme}
             onModeChange={setCanvasModeAndClearPlace}
             placeKind={placeKind}
             placeGhostName={
@@ -2870,11 +3039,13 @@ export default function App() {
                 editing={textEditMode}
                 draft={draftNetlist}
                 status={netlistStatus}
+                statusError={netlistStatusError}
                 onStartEdit={startTextEdit}
                 onDraftChange={setDraftNetlist}
                 onApply={applyTextEdit}
                 onCancel={cancelTextEdit}
                 onPopOut={() => setNetlistFloating(true)}
+                editorTheme={uiTheme === "light" ? "light" : "vs-dark"}
               />
             </div>
           )}
@@ -2904,7 +3075,14 @@ export default function App() {
                 />
               )}
               <div className="right-slot" style={{ flex: `${slotFr.sim} 1 80px` }}>
-                <SimPanel netlist={netlist} onPopOut={() => setSimFloating(true)} />
+                <SimPanel
+                  netlist={netlist}
+                  uiTheme={uiTheme}
+                  controlRef={simControlRef}
+                  onRunStateChange={setSimRunState}
+                  onSimResult={setSimResult}
+                  onPopOut={() => setSimFloating(true)}
+                />
               </div>
             </>
           )}
@@ -2958,10 +3136,12 @@ export default function App() {
             editing={textEditMode}
             draft={draftNetlist}
             status={netlistStatus}
+            statusError={netlistStatusError}
             onStartEdit={startTextEdit}
             onDraftChange={setDraftNetlist}
             onApply={applyTextEdit}
             onCancel={cancelTextEdit}
+            editorTheme={uiTheme === "light" ? "light" : "vs-dark"}
           />
         </FloatingWindow>
       )}
@@ -2971,9 +3151,16 @@ export default function App() {
           defaultRect={{ x: 200, y: 140, w: 720, h: 460 }}
           onClose={() => setSimFloating(false)}
         >
-          <SimPanel netlist={netlist} />
+          <SimPanel
+            netlist={netlist}
+            uiTheme={uiTheme}
+            controlRef={simControlRef}
+            onRunStateChange={setSimRunState}
+            onSimResult={setSimResult}
+          />
         </FloatingWindow>
       )}
     </div>
+    </SimResultContext.Provider>
   );
 }

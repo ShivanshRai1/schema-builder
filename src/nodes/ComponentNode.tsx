@@ -8,7 +8,7 @@ import {
   type Node,
 } from "@xyflow/react";
 import type { ComponentData, ComponentKind, PinSpec } from "../model/types";
-import { COMPONENT_SPECS } from "../model/componentSpecs";
+import { COMPONENT_SPECS, getComponentPins } from "../model/componentSpecs";
 import { isPaletteDrag, PALETTE_DND_MIME } from "../dnd";
 import { normalizeRotation, rotatePinSpec } from "../model/rotation";
 import { getSymbolLayout, getLabelInkAnchorX, hasSymbol } from "./symbols/layout";
@@ -47,26 +47,44 @@ export function ComponentNode({
 }) {
   const spec = COMPONENT_SPECS[data.kind];
   const updateNodeInternals = useUpdateNodeInternals();
-  const paramText = data.params.value ?? data.params.model ?? data.params.name ?? "";
+  /** Primary value shown beside the part (R/C use `value`; DC sources use `dc`, etc.). */
+  const canvasValue =
+    data.params.value ??
+    data.params.dc ??
+    data.params.vamp ??
+    data.params.iamp ??
+    data.params.von ??
+    data.params.gain ??
+    data.params.signs ??
+    data.params.ops ??
+    data.params.op ??
+    "";
+  const paramText =
+    canvasValue ||
+    data.params.model ||
+    data.params.name ||
+    "";
   /** Values on canvas; model names live in Properties / tooltip only. */
   const isNetLabel = data.kind === "NODE" || data.kind === "WIRELABEL";
   /** Net / wire labels show the net name only — never the generic catalog title. */
   const displayRefdes = isNetLabel
     ? (data.params.name || "net")
     : data.refdes || spec.label;
-  const symbolSecondary = isNetLabel
-    ? ""
-    : data.params.value ?? data.params.name ?? "";
+  const symbolSecondary = isNetLabel ? "" : canvasValue;
   const symbolTooltip = [data.refdes || spec.label, paramText].filter(Boolean).join(" · ");
   const unplaced = Boolean(data.unplaced);
   const rotation = normalizeRotation(data.rotation);
+  const basePins = useMemo(
+    () => getComponentPins(data.kind, data.params),
+    [data.kind, data.params],
+  );
   // Net name: join stays on the bottom of the box; text spins around that point.
   const pins = useMemo(
     () =>
       data.kind === "WIRELABEL"
-        ? spec.pins
-        : spec.pins.map((p) => rotatePinSpec(p, rotation)),
-    [spec.pins, rotation, data.kind],
+        ? basePins
+        : basePins.map((p) => rotatePinSpec(p, rotation)),
+    [basePins, rotation, data.kind],
   );
   const isTip = data.kind === "TIP";
   const tipDegree = useStore((s) => {
@@ -91,7 +109,7 @@ export function ComponentNode({
     for (const part of s.nodes) {
       const kind = (part.data as ComponentData).kind;
       if (kind === "TIP") continue;
-      for (const pin of COMPONENT_SPECS[kind].pins) {
+      for (const pin of getComponentPins(kind, (part.data as ComponentData).params)) {
         const pt = pinWorldPoint(part as Node<ComponentData>, pin.id);
         if (pt && Math.hypot(pt.x - t.x, pt.y - t.y) <= 8) return true;
       }
@@ -208,7 +226,12 @@ export function ComponentNode({
                   transform: `translate(-50%, -50%) rotate(${rotation}deg)`,
                 }}
               >
-                <SchematicSymbol kind={data.kind} selected={selected} rotation={rotation} />
+                <SchematicSymbol
+                  kind={data.kind}
+                  selected={selected}
+                  rotation={rotation}
+                  params={data.params}
+                />
               </div>
               {labelLayout.mode === "split" ? (
                 <div className={symLabelsClass}>

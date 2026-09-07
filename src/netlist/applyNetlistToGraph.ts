@@ -1,6 +1,6 @@
 import type { Edge, Node } from "@xyflow/react";
 import type { ComponentData, ComponentKind } from "../model/types";
-import { COMPONENT_SPECS, defaultParams } from "../model/componentSpecs";
+import { COMPONENT_SPECS, defaultParams, isGroundKind } from "../model/componentSpecs";
 import {
   extractParamsFromRest,
   inferKindFromRefdes,
@@ -215,7 +215,7 @@ export function applyNetlistToGraph(
   }
 
   for (const n of working) {
-    if (n.data.kind === "GND") addEndpoint(netToPins, "0", n.id, "g");
+    if (isGroundKind(n.data.kind)) addEndpoint(netToPins, "0", n.id, "g");
     if (n.data.kind === "NODE" && n.data.params.name) {
       addEndpoint(netToPins, n.data.params.name, n.id, "g");
     }

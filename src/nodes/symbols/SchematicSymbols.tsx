@@ -1,9 +1,10 @@
 import { createContext, useContext, type ReactNode } from "react";
 import type { ComponentKind } from "../../model/types";
+import { parseProductOps, parseSumSigns } from "../../model/mathBlocks";
 import { getSymbolLayout } from "./layout";
 
 const STROKE = "var(--symbol-stroke, #5eb0ff)";
-const SW = 1.6;
+const SW = 2.05;
 /** LTspice-like strokes: butt caps + miter joins — no gaps at vertices or past pins. */
 const STROKE_BUTT = {
   fill: "none" as const,
@@ -15,7 +16,11 @@ const STROKE_BUTT = {
 
 const SymbolPreviewCtx = createContext(false);
 
-type SymProps = { selected?: boolean; rotation?: number };
+type SymProps = {
+  selected?: boolean;
+  rotation?: number;
+  params?: Record<string, string>;
+};
 
 /**
  * Draw path-space glyph (`w`×`h` viewBox) stretched to the grid-aligned
@@ -337,6 +342,511 @@ function GroundSymbol({ selected }: SymProps) {
   );
 }
 
+/** DIG / ANG ground — hollow inverted triangle. */
+function GroundSigSymbol({ selected }: SymProps) {
+  return (
+    <SymbolSvg kind="GND_SIG" w={36} h={28}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M18 0 V10" />
+        <path d="M8 10 L18 24 L28 10 Z" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** Chassis ground — rake / diagonal strokes. */
+function GroundChassisSymbol({ selected }: SymProps) {
+  return (
+    <SymbolSvg kind="GND_CH" w={36} h={28}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M18 0 V10" />
+        <path d="M8 10 H28" />
+        <path d="M10 10 L6 18" />
+        <path d="M18 10 L14 18" />
+        <path d="M26 10 L22 18" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** DC voltage — same circle +/− glyph as classic V (not capacitor-like plates). */
+function BatterySymbol({ selected, rotation = 0 }: SymProps) {
+  const cx = 20;
+  const cy = 32;
+  const r = 18;
+  const h = 64;
+  return (
+    <SymbolSvg kind="BATTERY" w={40} h={h}>
+      <circle cx={cx} cy={cy} r={r} fill="var(--bg, #0f1419)" stroke="none" />
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d={`M${cx} 0 V${cy - r}`} />
+        <circle cx={cx} cy={cy} r={r} />
+        <path d={`M${cx} ${cy + r} V${h}`} />
+      </g>
+      <g
+        fill={STROKE}
+        stroke="none"
+        fontFamily="ui-sans-serif, system-ui, sans-serif"
+        fontWeight="700"
+        fontSize="11"
+        textAnchor="middle"
+        opacity={selected ? 1 : 0.92}
+      >
+        <text x={cx} y={26} dominantBaseline="central" transform={upright(rotation, cx, 26)}>
+          +
+        </text>
+        <text x={cx} y={38} dominantBaseline="central" transform={upright(rotation, cx, 38)}>
+          −
+        </text>
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** AC voltage — circle with sine; + above / − below. */
+function AcSourceSymbol({ selected, rotation = 0 }: SymProps) {
+  const cx = 20;
+  const cy = 32;
+  const r = 18;
+  const h = 64;
+  return (
+    <SymbolSvg kind="VAC" w={40} h={h}>
+      <circle cx={cx} cy={cy} r={r} fill="var(--bg, #0f1419)" stroke="none" />
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d={`M${cx} 0 V${cy - r}`} />
+        <circle cx={cx} cy={cy} r={r} />
+        <path d={`M${cx} ${cy + r} V${h}`} />
+        <path d={`M${cx - 9} ${cy} Q ${cx - 4.5} ${cy - 8} ${cx} ${cy} Q ${cx + 4.5} ${cy + 8} ${cx + 9} ${cy}`} />
+      </g>
+      <g
+        fill={STROKE}
+        stroke="none"
+        fontFamily="ui-sans-serif, system-ui, sans-serif"
+        fontWeight="700"
+        fontSize="9"
+        textAnchor="middle"
+        opacity={selected ? 1 : 0.92}
+      >
+        <text x={cx} y={cy - r - 6} dominantBaseline="central" transform={upright(rotation, cx, cy - r - 6)}>
+          +
+        </text>
+        <text x={cx} y={cy + r + 7} dominantBaseline="central" transform={upright(rotation, cx, cy + r + 7)}>
+          −
+        </text>
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** AC current — circle with sine (same pins as I). */
+function AcCurrentSymbol({ selected }: SymProps) {
+  const cx = 20;
+  const cy = 32;
+  const r = 18;
+  const h = 64;
+  return (
+    <SymbolSvg kind="IAC" w={40} h={h}>
+      <circle cx={cx} cy={cy} r={r} fill="var(--bg, #0f1419)" stroke="none" />
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d={`M${cx} 0 V${cy - r}`} />
+        <circle cx={cx} cy={cy} r={r} />
+        <path d={`M${cx} ${cy + r} V${h}`} />
+        <path d={`M${cx - 9} ${cy} Q ${cx - 4.5} ${cy - 8} ${cx} ${cy} Q ${cx + 4.5} ${cy + 8} ${cx + 9} ${cy}`} />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** Pulse generator — box with two square pulses (schematic pins top/bottom). */
+function PulseGenSymbol({ selected }: SymProps) {
+  return (
+    <SymbolSvg kind="VPULSE" w={40} h={64}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M20 0 V10" />
+        <rect x="5" y="10" width="30" height="44" rx="1.5" />
+        {/* Two consecutive rectangular pulses */}
+        <path d="M9 40 H12 V24 H17 V40 H20 V24 H25 V40 H28 V24 H31" fill="none" />
+        <path d="M20 54 V64" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** TVS unidirectional — Zener-like cathode bar. */
+function TvsUniSymbol({ selected }: SymProps) {
+  return (
+    <SymbolSvg kind="DTVS" w={48} h={24}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 12 H16" />
+        <path d="M16 4 L32 12 L16 20 Z" fill={STROKE} stroke="none" />
+        <path d="M28 0 L32 4 V20 L36 24" />
+        <path d="M32 12 H48" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** TVS bidirectional — two triangles tip-to-tip on a bar. */
+function TvsBiSymbol({ selected }: SymProps) {
+  return (
+    <SymbolSvg kind="DTVSBI" w={48} h={24}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 12 H10" />
+        <path d="M10 4 L22 12 L10 20 Z" fill={STROKE} stroke="none" />
+        <path d="M22 4 V20" />
+        <path d="M38 4 L26 12 L38 20 Z" fill={STROKE} stroke="none" />
+        <path d="M38 12 H48" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** Thermistor — box with diagonal tick. */
+function ThermistorSymbol({ selected }: SymProps) {
+  return (
+    <SymbolSvg kind="THERM" w={48} h={28}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 14 H10" />
+        <rect x="10" y="6" width="28" height="16" />
+        <path d="M38 14 H48" />
+        <path d="M8 22 L30 4" />
+        <path d="M8 22 H14" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** LDR — resistor in circle with incoming light arrows. */
+function LdrSymbol({ selected }: SymProps) {
+  const op = selected ? 1 : 0.92;
+  return (
+    <SymbolSvg kind="LDR" w={48} h={32}>
+      <circle cx="24" cy="16" r="13" fill="var(--bg, #0f1419)" stroke="none" />
+      <g {...STROKE_BUTT} opacity={op}>
+        <path d="M0 16 H8" />
+        <circle cx="24" cy="16" r="13" />
+        <path d="M11 16 H14 L16.5 10 L19.5 22 L22.5 10 L25.5 22 L28.5 10 L31.5 22 L34 16 H37" />
+        <path d="M40 16 H48" />
+        <path d="M36 4 L42 0" />
+        <path d="M38 7 L44 3" />
+      </g>
+      <g fill={STROKE} stroke="none" opacity={op}>
+        <path d="M36 4 L39.2 5.6 L37.4 1.2 Z" />
+        <path d="M38 7 L41.2 8.6 L39.4 4.2 Z" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** Crystal — rectangle between capacitor plates. */
+function CrystalSymbol({ selected }: SymProps) {
+  return (
+    <SymbolSvg kind="XTAL" w={48} h={24}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 12 H12" />
+        <path d="M14 4 V20" />
+        <rect x="17" y="6" width="14" height="12" />
+        <path d="M34 4 V20" />
+        <path d="M36 12 H48" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** Common-mode choke — two coils with coupling lines. */
+function CmmcSymbol({ selected }: SymProps) {
+  return (
+    <SymbolSvg kind="CMMC" w={56} h={48}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 12 H8" />
+        <path d="M8 12 A4 4 0 0 1 16 12 A4 4 0 0 1 24 12 A4 4 0 0 1 32 12" />
+        <path d="M32 12 H40" />
+        <path d="M0 36 H8" />
+        <path d="M8 36 A4 4 0 0 1 16 36 A4 4 0 0 1 24 36 A4 4 0 0 1 32 36" />
+        <path d="M32 36 H40" />
+        <path d="M42 16 H52" />
+        <path d="M42 32 H52" />
+        <circle cx="10" cy="8" r="1.4" fill={STROKE} stroke="none" />
+        <circle cx="10" cy="40" r="1.4" fill={STROKE} stroke="none" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** Two-winding transformer — primary / secondary coils with coupling bars. */
+function TransformerSymbol({ selected }: SymProps) {
+  return (
+    <SymbolSvg kind="XFMR" w={56} h={48}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 12 H10" />
+        <path d="M10 12 A4 4 0 0 1 18 12 A4 4 0 0 1 26 12" />
+        <path d="M0 36 H10" />
+        <path d="M10 36 A4 4 0 0 1 18 36 A4 4 0 0 1 26 36" />
+        <path d="M30 10 V38" />
+        <path d="M34 10 V38" />
+        <path d="M38 12 A4 4 0 0 0 46 12 A4 4 0 0 0 54 12" />
+        <path d="M54 12 H56" />
+        <path d="M38 36 A4 4 0 0 0 46 36 A4 4 0 0 0 54 36" />
+        <path d="M54 36 H56" />
+        <circle cx="14" cy="8" r="1.4" fill={STROKE} stroke="none" />
+        <circle cx="42" cy="8" r="1.4" fill={STROKE} stroke="none" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** Ferrite bead — wire with humps. */
+function FerriteBeadSymbol({ selected }: SymProps) {
+  return (
+    <SymbolSvg kind="FBEAD" w={48} h={24}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 14 H48" />
+        <path d="M14 14 A4 4 0 0 1 22 14 A4 4 0 0 1 30 14 A4 4 0 0 1 38 14" />
+        <path d="M16 6 H36" />
+        <path d="M16 9 H36" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** Antenna. */
+function AntennaSymbol({ selected }: SymProps) {
+  return (
+    <SymbolSvg kind="ANT" w={36} h={40}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M18 40 V16" />
+        <path d="M18 16 L6 4" />
+        <path d="M18 16 L18 2" />
+        <path d="M18 16 L30 4" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** SPST open switch. */
+function SpstSymbol({ selected }: SymProps) {
+  return (
+    <SymbolSvg kind="SPST" w={48} h={24}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 16 H10" />
+        <circle cx="12" cy="16" r="2.2" fill={STROKE} stroke="none" />
+        <path d="M14 15 L34 6" />
+        <circle cx="36" cy="16" r="2.2" fill={STROKE} stroke="none" />
+        <path d="M38 16 H48" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** SPDT switch. */
+function SpdtSymbol({ selected }: SymProps) {
+  return (
+    <SymbolSvg kind="SPDT" w={48} h={32}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 16 H10" />
+        <circle cx="12" cy="16" r="2.2" fill={STROKE} stroke="none" />
+        <path d="M14 15 L34 8" />
+        <circle cx="36" cy="8" r="2.2" fill={STROKE} stroke="none" />
+        <circle cx="36" cy="24" r="2.2" fill={STROKE} stroke="none" />
+        <path d="M38 8 H48" />
+        <path d="M38 24 H48" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** Push button (NO). */
+function PushButtonSymbol({ selected }: SymProps) {
+  return (
+    <SymbolSvg kind="PB" w={48} h={32}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 22 H12" />
+        <circle cx="14" cy="22" r="2.2" fill={STROKE} stroke="none" />
+        <circle cx="34" cy="22" r="2.2" fill={STROKE} stroke="none" />
+        <path d="M36 22 H48" />
+        <path d="M12 14 H36" />
+        <path d="M24 14 V6" />
+        <path d="M20 6 H28" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** AND gate. */
+function AndGateSymbol({ selected }: SymProps) {
+  return (
+    <SymbolSvg kind="AND" w={56} h={40}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 12 H14" />
+        <path d="M0 28 H14" />
+        <path d="M14 4 V36 H30 A16 16 0 0 0 30 4 Z" />
+        <path d="M46 20 H56" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** OR gate. */
+function OrGateSymbol({ selected }: SymProps) {
+  return (
+    <SymbolSvg kind="OR" w={56} h={40}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 12 H16" />
+        <path d="M0 28 H16" />
+        <path d="M10 4 Q22 4 34 12 Q40 16 46 20 Q40 24 34 28 Q22 36 10 36 Q18 20 10 4 Z" />
+        <path d="M46 20 H56" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** NAND = AND + bubble. */
+function NandGateSymbol({ selected }: SymProps) {
+  return (
+    <SymbolSvg kind="NAND" w={56} h={40}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 12 H14" />
+        <path d="M0 28 H14" />
+        <path d="M14 4 V36 H28 A16 16 0 0 0 28 4 Z" />
+        <circle cx="46" cy="20" r="3.2" fill="var(--bg, #0f1419)" />
+        <path d="M49 20 H56" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** NOR = OR + bubble. */
+function NorGateSymbol({ selected }: SymProps) {
+  return (
+    <SymbolSvg kind="NOR" w={56} h={40}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 12 H16" />
+        <path d="M0 28 H16" />
+        <path d="M10 4 Q22 4 32 12 Q36 16 42 20 Q36 24 32 28 Q22 36 10 36 Q18 20 10 4 Z" />
+        <circle cx="46" cy="20" r="3.2" fill="var(--bg, #0f1419)" />
+        <path d="M49 20 H56" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** XOR gate. */
+function XorGateSymbol({ selected }: SymProps) {
+  return (
+    <SymbolSvg kind="XOR" w={56} h={40}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 12 H14" />
+        <path d="M0 28 H14" />
+        <path d="M8 4 Q16 20 8 36" fill="none" />
+        <path d="M14 4 Q26 4 36 12 Q42 16 46 20 Q42 24 36 28 Q26 36 14 36 Q22 20 14 4 Z" />
+        <path d="M46 20 H56" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** XNOR = XOR + bubble. */
+function XnorGateSymbol({ selected }: SymProps) {
+  return (
+    <SymbolSvg kind="XNOR" w={56} h={40}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 12 H14" />
+        <path d="M0 28 H14" />
+        <path d="M8 4 Q16 20 8 36" fill="none" />
+        <path d="M14 4 Q26 4 34 12 Q38 16 42 20 Q38 24 34 28 Q26 36 14 36 Q22 20 14 4 Z" />
+        <circle cx="46" cy="20" r="3.2" fill="var(--bg, #0f1419)" />
+        <path d="M49 20 H56" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** NOT / inverter. */
+function NotGateSymbol({ selected }: SymProps) {
+  return (
+    <SymbolSvg kind="NOT" w={56} h={40}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 20 H14" />
+        <path d="M14 6 L40 20 L14 34 Z" />
+        <circle cx="44" cy="20" r="3.2" fill="var(--bg, #0f1419)" />
+        <path d="M47 20 H56" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** Rectangular flip-flop body with pin stubs. */
+function FlipFlopSymbol({
+  kind,
+  selected,
+  leftLabels,
+  rightLabels = ["Q", "Q̅"],
+}: SymProps & { kind: ComponentKind; leftLabels: string[]; rightLabels?: string[] }) {
+  const h = 48;
+  const w = 64;
+  const nL = leftLabels.length;
+  const nR = rightLabels.length;
+  return (
+    <SymbolSvg kind={kind} w={w} h={h}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <rect x="14" y="4" width="36" height="40" />
+        {leftLabels.map((lab, i) => {
+          const y = 4 + ((i + 1) / (nL + 1)) * 40;
+          return (
+            <g key={`L${lab}${i}`}>
+              <path d={`M0 ${y} H14`} />
+              <text
+                x={18}
+                y={y}
+                fill={STROKE}
+                stroke="none"
+                fontSize="7"
+                dominantBaseline="central"
+                fontFamily="ui-sans-serif, system-ui, sans-serif"
+              >
+                {lab}
+              </text>
+            </g>
+          );
+        })}
+        {rightLabels.map((lab, i) => {
+          const y = 4 + ((i + 1) / (nR + 1)) * 40;
+          return (
+            <g key={`R${lab}${i}`}>
+              <path d={`M50 ${y} H${w}`} />
+              <text
+                x={46}
+                y={y}
+                fill={STROKE}
+                stroke="none"
+                fontSize="7"
+                textAnchor="end"
+                dominantBaseline="central"
+                fontFamily="ui-sans-serif, system-ui, sans-serif"
+              >
+                {lab}
+              </text>
+            </g>
+          );
+        })}
+      </g>
+    </SymbolSvg>
+  );
+}
+
+function SrFfSymbol({ selected }: SymProps) {
+  return <FlipFlopSymbol kind="SRFF" selected={selected} leftLabels={["S", "R"]} />;
+}
+function JkFfSymbol({ selected }: SymProps) {
+  return <FlipFlopSymbol kind="JKFF" selected={selected} leftLabels={["J", "CLK", "K"]} />;
+}
+function TFfSymbol({ selected }: SymProps) {
+  return <FlipFlopSymbol kind="TFF" selected={selected} leftLabels={["T", "CLK"]} />;
+}
+function DFfSymbol({ selected }: SymProps) {
+  return <FlipFlopSymbol kind="DFF" selected={selected} leftLabels={["D", "CLK"]} />;
+}
+
 function DiodeSymbol({ selected }: SymProps) {
   return (
     <SymbolSvg kind="D" w={48} h={24}>
@@ -379,22 +889,24 @@ function SchottkyDiodeSymbol({ selected }: SymProps) {
   );
 }
 
-/** LED: standard diode + two emission arrows (↗↗). */
+/** LED: PN diode + two emission arrows (no enclosure box). */
 function LedSymbol({ selected }: SymProps) {
   const op = selected ? 1 : 0.92;
   return (
     <SymbolSvg kind="LED" w={48} h={28}>
       <g {...STROKE_BUTT} opacity={op}>
+        {/* Same body as PN diode, centered on y=14 for arrow headroom. */}
         <path d="M0 14 H16" />
         <path d="M16 6 L32 14 L16 22 Z" fill={STROKE} stroke="none" />
         <path d="M32 6 V22" />
         <path d="M32 14 H48" />
-        <path d="M26 5 L35 0" />
-        <path d="M29 8 L38 3" />
+        {/* Emission arrows (up-right from cathode side). */}
+        <path d="M34 7 L42 2" />
+        <path d="M36 10 L44 5" />
       </g>
       <g fill={STROKE} stroke="none" opacity={op}>
-        <path d="M35 0 L31.5 0.6 L33.6 3.4 Z" />
-        <path d="M38 3 L34.5 3.6 L36.6 6.4 Z" />
+        <path d="M42 2 L38.5 2.6 L40.6 5.4 Z" />
+        <path d="M44 5 L40.5 5.6 L42.6 8.4 Z" />
       </g>
     </SymbolSvg>
   );
@@ -712,6 +1224,28 @@ function PnpSymbol({ selected }: SymProps) {
   return <BjtBody kind="PNP" selected={selected} npn={false} />;
 }
 
+/** UJT — B2 top, B1 bottom, emitter arrow into channel from left. */
+function UjtSymbol({ selected }: SymProps) {
+  const ch = 40;
+  const yTop = 46;
+  const yBot = 82;
+  const cy = TX.cy;
+  const arr = filledArrow(ch - 1.5, cy, 18, cy);
+  return circledTransistor({
+    kind: "UJT",
+    selected,
+    arrow: arr.d,
+    children: (
+      <>
+        <path d={`M${ch} ${yTop} H${TX.cx} V0`} />
+        <path d={`M${ch} ${yBot} H${TX.cx} V${TX.h}`} />
+        <path d={`M${ch} ${yTop} V${yBot}`} strokeWidth={TX.gateSw} />
+        <path d={`M0 ${cy} H${arr.bx}`} />
+      </>
+    ),
+  });
+}
+
 /** BJT — compact junction in a large circle; filled emitter arrow on the diagonal. */
 function BjtBody({
   kind,
@@ -873,20 +1407,358 @@ function ScrSymbol({ selected }: SymProps) {
   return (
     <SymbolSvg kind="SCR" w={64} h={96}>
       <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
-        {/* Anode lead */}
         <path d={`M${cx} 0 V${yBase}`} />
-        {/* Triangle pointing down (anode → cathode) */}
         <path
           d={`M${cx - half} ${yBase} L${cx + half} ${yBase} L${cx} ${yTip} Z`}
           fill={STROKE}
           stroke="none"
         />
-        {/* Cathode bar */}
         <path d={`M${cx - half - 2} ${yTip} H${cx + half + 2}`} />
-        {/* Cathode lead */}
         <path d={`M${cx} ${yTip} V96`} />
-        {/* Gate: left → then up-right into cathode just below the bar */}
         <path d={`M0 ${yGate} H${cx - 12} L${cx} ${yTip + 5}`} />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** SCS — SCR with cathode gate + anode gate. */
+function ScsSymbol({ selected }: SymProps) {
+  const cx = 40;
+  const yBase = 22;
+  const yTip = 50;
+  const half = 16;
+  return (
+    <SymbolSvg kind="SCS" w={64} h={96}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d={`M${cx} 0 V${yBase}`} />
+        <path
+          d={`M${cx - half} ${yBase} L${cx + half} ${yBase} L${cx} ${yTip} Z`}
+          fill={STROKE}
+          stroke="none"
+        />
+        <path d={`M${cx - half - 2} ${yTip} H${cx + half + 2}`} />
+        <path d={`M${cx} ${yTip} V96`} />
+        <path d={`M0 64 H${cx - 12} L${cx} ${yTip + 5}`} />
+        <path d={`M64 28 H${cx + 12} L${cx} ${yBase + 4}`} />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** TRIAC — antiparallel SCR triangles + gate. */
+function TriacSymbol({ selected }: SymProps) {
+  const cx = 40;
+  return (
+    <SymbolSvg kind="TRIAC" w={64} h={96}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d={`M${cx} 0 V18`} />
+        <path d={`M${cx - 14} 18 L${cx + 14} 18 L${cx} 42 Z`} fill={STROKE} stroke="none" />
+        <path d={`M${cx - 16} 42 H${cx + 16}`} />
+        <path d={`M${cx + 14} 78 L${cx - 14} 78 L${cx} 54 Z`} fill={STROKE} stroke="none" />
+        <path d={`M${cx - 16} 54 H${cx + 16}`} />
+        <path d={`M${cx} 78 V96`} />
+        <path d="M0 70 H28 L40 58" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** DIAC — two triangles tip-to-tip (no gate). */
+function DiacSymbol({ selected }: SymProps) {
+  return (
+    <SymbolSvg kind="DIAC" w={48} h={24}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 12 H10" />
+        <path d="M10 4 L22 12 L10 20 Z" fill={STROKE} stroke="none" />
+        <path d="M22 4 V20" />
+        <path d="M38 4 L26 12 L38 20 Z" fill={STROKE} stroke="none" />
+        <path d="M38 12 H48" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** GTO — SCR with gate cross-bar. */
+function GtoSymbol({ selected }: SymProps) {
+  const cx = 40;
+  const yBase = 22;
+  const yTip = 50;
+  const yGate = 64;
+  const half = 16;
+  return (
+    <SymbolSvg kind="GTO" w={64} h={96}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d={`M${cx} 0 V${yBase}`} />
+        <path
+          d={`M${cx - half} ${yBase} L${cx + half} ${yBase} L${cx} ${yTip} Z`}
+          fill={STROKE}
+          stroke="none"
+        />
+        <path d={`M${cx - half - 2} ${yTip} H${cx + half + 2}`} />
+        <path d={`M${cx} ${yTip} V96`} />
+        <path d={`M0 ${yGate} H${cx - 12} L${cx} ${yTip + 5}`} />
+        <path d={`M4 ${yGate - 5} V${yGate + 5}`} />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** Photo-thyristor — SCR + light arrows. */
+function PhotoScrSymbol({ selected }: SymProps) {
+  const cx = 40;
+  const yBase = 22;
+  const yTip = 50;
+  const half = 16;
+  return (
+    <SymbolSvg kind="SCR_PH" w={64} h={96}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d={`M${cx} 0 V${yBase}`} />
+        <path
+          d={`M${cx - half} ${yBase} L${cx + half} ${yBase} L${cx} ${yTip} Z`}
+          fill={STROKE}
+          stroke="none"
+        />
+        <path d={`M${cx - half - 2} ${yTip} H${cx + half + 2}`} />
+        <path d={`M${cx} ${yTip} V96`} />
+        <path d={`M0 64 H${cx - 12} L${cx} ${yTip + 5}`} />
+        <path d="M8 28 L18 36" />
+        <path d="M10 22 L20 30" />
+      </g>
+      <g fill={STROKE} stroke="none" opacity={selected ? 1 : 0.92}>
+        <path d="M18 36 L14.8 33.2 L17.2 31.6 Z" />
+        <path d="M20 30 L16.8 27.2 L19.2 25.6 Z" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** SIDAC — DIAC-like in a circle with breakover zig. */
+function SidacSymbol({ selected }: SymProps) {
+  return (
+    <SymbolSvg kind="SIDAC" w={48} h={28}>
+      <circle cx="24" cy="14" r="12" fill="var(--bg, #0f1419)" stroke="none" />
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 14 H8" />
+        <circle cx="24" cy="14" r="12" />
+        <path d="M12 14 L18 8 L24 14 L30 20 L36 14" />
+        <path d="M40 14 H48" />
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** Differential amplifier — triangle with Δ mark. */
+function DiffAmpSymbol({ selected }: SymProps) {
+  return (
+    <SymbolSvg kind="DIFFAMP" w={56} h={40}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 12 H14" />
+        <path d="M0 28 H14" />
+        <path d="M14 4 L48 20 L14 36 Z" />
+        <path d="M48 20 H56" />
+        <text
+          x="22"
+          y="21"
+          fill={STROKE}
+          stroke="none"
+          fontSize="9"
+          fontWeight="700"
+          fontFamily="ui-sans-serif, system-ui, sans-serif"
+        >
+          Δ
+        </text>
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** Constant — box with value, output on right. */
+function MathConstSymbol({ selected, params }: SymProps) {
+  const v = (params?.value ?? "1").slice(0, 6);
+  return (
+    <SymbolSvg kind="MATH_CONST" w={48} h={40}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <rect x="4" y="6" width="32" height="28" />
+        <path d="M36 20 H48" />
+        <text
+          x="20"
+          y="21"
+          fill={STROKE}
+          stroke="none"
+          fontSize="11"
+          fontWeight="700"
+          textAnchor="middle"
+          dominantBaseline="central"
+          fontFamily="ui-sans-serif, system-ui, sans-serif"
+        >
+          {v || "1"}
+        </text>
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** Sum — circle with +/− marks for each input. */
+function MathSumSymbol({ selected, params }: SymProps) {
+  const signs = parseSumSigns(params?.signs ?? "+-");
+  const n = signs.length;
+  return (
+    <SymbolSvg kind="MATH_SUM" w={48} h={48}>
+      <circle cx="22" cy="24" r="14" fill="var(--bg, #0f1419)" stroke="none" />
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <circle cx="22" cy="24" r="14" />
+        <path d="M36 24 H48" />
+        {signs.map((s, i) => {
+          const y = ((i + 1) / (n + 1)) * 48;
+          return (
+            <g key={i}>
+              <path d={`M0 ${y} H8`} />
+              <text
+                x="14"
+                y={y}
+                fill={STROKE}
+                stroke="none"
+                fontSize="10"
+                fontWeight="700"
+                textAnchor="middle"
+                dominantBaseline="central"
+                fontFamily="ui-sans-serif, system-ui, sans-serif"
+              >
+                {s}
+              </text>
+            </g>
+          );
+        })}
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** Product — tall box with × / ÷ per input. */
+function MathProdSymbol({ selected, params }: SymProps) {
+  const ops = parseProductOps(params?.ops ?? "**");
+  const n = ops.length;
+  const h = 64;
+  return (
+    <SymbolSvg kind="MATH_PROD" w={40} h={h}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <rect x="10" y="4" width="20" height={h - 8} />
+        <path d={`M30 ${h / 2} H40`} />
+        {ops.map((op, i) => {
+          const y = ((i + 1) / (n + 1)) * h;
+          return (
+            <g key={i}>
+              <path d={`M0 ${y} H10`} />
+              <text
+                x="20"
+                y={y}
+                fill={STROKE}
+                stroke="none"
+                fontSize="11"
+                fontWeight="700"
+                textAnchor="middle"
+                dominantBaseline="central"
+                fontFamily="ui-sans-serif, system-ui, sans-serif"
+              >
+                {op === "*" ? "×" : "÷"}
+              </text>
+            </g>
+          );
+        })}
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** Gain — triangle with gain value. */
+function MathGainSymbol({ selected, params }: SymProps) {
+  const g = (params?.gain ?? "1").slice(0, 5);
+  return (
+    <SymbolSvg kind="MATH_GAIN" w={48} h={40}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 20 H8" />
+        <path d="M8 4 L40 20 L8 36 Z" />
+        <path d="M40 20 H48" />
+        <text
+          x="20"
+          y="21"
+          fill={STROKE}
+          stroke="none"
+          fontSize="10"
+          fontWeight="700"
+          textAnchor="middle"
+          dominantBaseline="central"
+          fontFamily="ui-sans-serif, system-ui, sans-serif"
+        >
+          {g || "1"}
+        </text>
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** Relational operator block. */
+function MathRelSymbol({ selected, params }: SymProps) {
+  const op = (params?.op ?? "<=").slice(0, 3);
+  return (
+    <SymbolSvg kind="MATH_REL" w={56} h={40}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        <path d="M0 12 H10" />
+        <path d="M0 28 H10" />
+        <rect x="10" y="4" width="32" height="32" />
+        <path d="M42 20 H56" />
+        <text
+          x="26"
+          y="21"
+          fill={STROKE}
+          stroke="none"
+          fontSize="11"
+          fontWeight="700"
+          textAnchor="middle"
+          dominantBaseline="central"
+          fontFamily="ui-sans-serif, system-ui, sans-serif"
+        >
+          {op}
+        </text>
+      </g>
+    </SymbolSvg>
+  );
+}
+
+/** Logical operator block — N left inputs from params.inputs (NOT → 1). */
+function MathLogicSymbol({ selected, params }: SymProps) {
+  const op = (params?.op ?? "AND").toUpperCase();
+  const pins = (() => {
+    const raw = params?.inputs ?? "2";
+    if (op === "NOT") return 1;
+    let n = Math.round(Number(raw));
+    if (!Number.isFinite(n) || n < 2) n = 2;
+    if (n > 8) n = 8;
+    return n;
+  })();
+  const label = op.slice(0, 4);
+  return (
+    <SymbolSvg kind="MATH_LOGIC" w={56} h={40}>
+      <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
+        {Array.from({ length: pins }, (_, i) => {
+          const y = ((i + 1) / (pins + 1)) * 40;
+          return <path key={i} d={`M0 ${y} H10`} />;
+        })}
+        <rect x="10" y="4" width="32" height="32" />
+        <path d="M42 20 H56" />
+        <text
+          x="26"
+          y="21"
+          fill={STROKE}
+          stroke="none"
+          fontSize={label.length > 3 ? "8" : "9"}
+          fontWeight="700"
+          textAnchor="middle"
+          dominantBaseline="central"
+          fontFamily="ui-sans-serif, system-ui, sans-serif"
+        >
+          {label}
+        </text>
       </g>
     </SymbolSvg>
   );
@@ -1282,13 +2154,42 @@ const MAP: Partial<Record<ComponentKind, (p: SymProps) => JSX.Element>> = {
   CVAR: CapacitorVarSymbol,
   L: InductorSymbol,
   LVAR: InductorVarSymbol,
+  XFMR: TransformerSymbol,
   V: VoltageSymbol,
+  BATTERY: BatterySymbol,
+  VAC: AcSourceSymbol,
+  I: CurrentSymbol,
+  IAC: AcCurrentSymbol,
+  VPULSE: PulseGenSymbol,
   GND: GroundSymbol,
+  GND_SIG: GroundSigSymbol,
+  GND_CH: GroundChassisSymbol,
   D: DiodeSymbol,
   DZ: ZenerDiodeSymbol,
   DS: SchottkyDiodeSymbol,
   LED: LedSymbol,
-  I: CurrentSymbol,
+  DTVS: TvsUniSymbol,
+  DTVSBI: TvsBiSymbol,
+  THERM: ThermistorSymbol,
+  LDR: LdrSymbol,
+  XTAL: CrystalSymbol,
+  CMMC: CmmcSymbol,
+  FBEAD: FerriteBeadSymbol,
+  ANT: AntennaSymbol,
+  SPST: SpstSymbol,
+  SPDT: SpdtSymbol,
+  PB: PushButtonSymbol,
+  AND: AndGateSymbol,
+  OR: OrGateSymbol,
+  NAND: NandGateSymbol,
+  NOR: NorGateSymbol,
+  XOR: XorGateSymbol,
+  XNOR: XnorGateSymbol,
+  NOT: NotGateSymbol,
+  SRFF: SrFfSymbol,
+  JKFF: JkFfSymbol,
+  TFF: TFfSymbol,
+  DFF: DFfSymbol,
   NMOS: NmosSymbol,
   PMOS: PmosSymbol,
   NMOS_D: NmosDepSymbol,
@@ -1297,17 +2198,31 @@ const MAP: Partial<Record<ComponentKind, (p: SymProps) => JSX.Element>> = {
   PJFET: PjfetSymbol,
   NPN: NpnSymbol,
   PNP: PnpSymbol,
+  UJT: UjtSymbol,
   SICMOS: SicMosSymbol,
   SICMOS_K: SicMosKelvinSymbol,
   GANHEMT: GanHemtSymbol,
   IGBT: IgbtSymbol,
   IGBT_K: IgbtKelvinSymbol,
   SCR: ScrSymbol,
+  SCS: ScsSymbol,
+  TRIAC: TriacSymbol,
+  DIAC: DiacSymbol,
+  GTO: GtoSymbol,
+  SCR_PH: PhotoScrSymbol,
+  SIDAC: SidacSymbol,
   GATEDRV: GateDrvSymbol,
   COMP: CompSymbol,
   EAMP: OpAmpSymbol,
   OPAMP: BasicOpampSymbol,
   OPAMP5: GeneralOpampSymbol,
+  DIFFAMP: DiffAmpSymbol,
+  MATH_CONST: MathConstSymbol,
+  MATH_SUM: MathSumSymbol,
+  MATH_PROD: MathProdSymbol,
+  MATH_GAIN: MathGainSymbol,
+  MATH_REL: MathRelSymbol,
+  MATH_LOGIC: MathLogicSymbol,
   CSENSE: CsenseSymbol,
   VSENSE: VsenseSymbol,
   IPROBE: IprobeSymbol,
@@ -1321,18 +2236,20 @@ export function SchematicSymbol({
   selected,
   rotation = 0,
   preview = false,
+  params,
 }: {
   kind: ComponentKind;
   selected?: boolean;
   rotation?: number;
   /** Palette miniature — keep aspect ratio, ignore layout stretch. */
   preview?: boolean;
+  params?: Record<string, string>;
 }) {
   const Comp = MAP[kind];
   if (!Comp) return null;
   return (
     <SymbolPreviewCtx.Provider value={preview}>
-      <Comp selected={selected} rotation={rotation} />
+      <Comp selected={selected} rotation={rotation} params={params} />
     </SymbolPreviewCtx.Provider>
   );
 }

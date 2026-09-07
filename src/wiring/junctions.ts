@@ -89,12 +89,17 @@ export type JunctionMark = Point & {
 export type CrossingMark = Point & {
   /** The two edges that cross here (not electrically joined). */
   edgeIds?: [string, string];
+  /**
+   * Which wire draws the hop bump.
+   * `"h"` = horizontal semicircle (LTspice default); `"v"` = vertical.
+   */
+  hop?: "h" | "v";
 };
 
 export type WireMarks = {
   /** Filled square — wires are on the same net and truly join here. */
   junctions: JunctionMark[];
-  /** Hollow ring — wires visually cross but are on different nets (not connected). */
+  /** Visual hop — wires cross but are on different nets (not connected). */
   crossings: CrossingMark[];
 };
 
@@ -149,7 +154,7 @@ function branchPointFromPin(pin: Point, polys: Point[][]): Point | null {
 /**
  * Find every point where wires meet or cross:
  * - Same net: shared TIP join or T/+ junction → filled square.
- * - Different net: wires cross visually → hollow ring so it's obvious they
+ * - Different net: wires cross visually → hop bump so it's obvious they
  *   are NOT connected.
  * Component pins already have squares via CSS, so they are skipped for
  * junction marks but NOT for crossing marks (a crossing at a pin is still
@@ -212,10 +217,10 @@ export function findWireJunctions(
     junctions.push(tipId ? { ...p, tipId } : { ...p });
   };
 
-  const addC = (p: Point, edgeIds?: [string, string]) => {
+  const addC = (p: Point, edgeIds?: [string, string], hop: "h" | "v" = "h") => {
     const k = keyOf(p);
     if (seenJ.has(k) || seenC.has(k)) return;
-    // Pin square (or hidden connected pin) — don't stack a hollow crossing ring.
+    // Pin square (or hidden connected pin) — don't stack a hop on the pin.
     for (const pt of pinPoints.values()) {
       if (near(p, pt)) return;
     }
@@ -226,7 +231,7 @@ export function findWireJunctions(
       if (pt && near(p, pt, TOL + 4)) return;
     }
     seenC.add(k);
-    crossings.push(edgeIds ? { ...p, edgeIds } : { ...p });
+    crossings.push(edgeIds ? { ...p, edgeIds, hop } : { ...p, hop });
   };
 
   // Shared TIP with 2+ edges → junction mark (not on a component pin).
@@ -290,28 +295,33 @@ export function findWireJunctions(
       // Geometric segment crossings (true mid-segment X).
       for (let s = 0; s < A.pts.length - 1; s++) {
         for (let t = 0; t < B.pts.length - 1; t++) {
-          const hit = orthoCross(A.pts[s]!, A.pts[s + 1]!, B.pts[t]!, B.pts[t + 1]!);
+          const a1 = A.pts[s]!;
+          const a2 = A.pts[s + 1]!;
+          const b1 = B.pts[t]!;
+          const b2 = B.pts[t + 1]!;
+          const hit = orthoCross(a1, a2, b1, b2);
           if (!hit) continue;
+          const aH = Math.abs(a1.y - a2.y) < 0.6;
+          const bH = Math.abs(b1.y - b2.y) < 0.6;
+          // LTspice-style: the horizontal wire hops over the vertical.
+          const hop: "h" | "v" = aH || bH ? "h" : "v";
           const onAEnd = aEnds.some((p) => near(hit, p));
           const onBEnd = bEnds.some((p) => near(hit, p));
           if (onAEnd && onBEnd) continue; // shared endpoint already at pin/tip
           // Mid-mid cross
-          if (
-            onInterior(hit, A.pts[s]!, A.pts[s + 1]!) &&
-            onInterior(hit, B.pts[t]!, B.pts[t + 1]!)
-          ) {
+          if (onInterior(hit, a1, a2) && onInterior(hit, b1, b2)) {
             if (sameNet) addJ(hit);
-            else addC(hit, pair);
+            else addC(hit, pair, hop);
             continue;
           }
           // Endpoint of one on interior of the other (caught above too, but
           // orthoCross can also hit exactly at the tip).
-          if (onAEnd && onInterior(hit, B.pts[t]!, B.pts[t + 1]!)) {
+          if (onAEnd && onInterior(hit, b1, b2)) {
             if (sameNet) addJ(hit);
-            else addC(hit, pair);
-          } else if (onBEnd && onInterior(hit, A.pts[s]!, A.pts[s + 1]!)) {
+            else addC(hit, pair, hop);
+          } else if (onBEnd && onInterior(hit, a1, a2)) {
             if (sameNet) addJ(hit);
-            else addC(hit, pair);
+            else addC(hit, pair, hop);
           }
         }
       }

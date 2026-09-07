@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import type { Op } from "../llm/ops";
 import type { AssistantContext } from "../llm/assistantTypes";
-import { COMPONENT_SPECS } from "../model/componentSpecs";
+import { COMPONENT_SPECS, isGroundKind } from "../model/componentSpecs";
 
 /**
  * Live device table for the interactive netlist: edit values, apply one row
@@ -17,7 +17,7 @@ export function DeviceTable({
   const rows = useMemo(
     () =>
       context.components.filter(
-        (c) => c.kind !== "TIP" && c.kind !== "GND" && c.kind !== "NODE" && c.kind !== "WIRELABEL",
+        (c) => c.kind !== "TIP" && !isGroundKind(c.kind) && c.kind !== "NODE" && c.kind !== "WIRELABEL",
       ),
     [context.components],
   );

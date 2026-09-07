@@ -1,4 +1,5 @@
-import { COMPONENT_SPECS, PALETTE } from "../model/componentSpecs";
+import { useMemo } from "react";
+import { buildPalette, COMPONENT_SPECS } from "../model/componentSpecs";
 import type { ComponentKind } from "../model/types";
 import { PALETTE_DND_MIME } from "../dnd";
 import { hasSymbol } from "../nodes/symbols/layout";
@@ -15,55 +16,64 @@ export function Palette({
   activeKind,
   pasting = false,
   copying = false,
+  commonlyUsed = [],
   onPick,
 }: {
   activeKind: ComponentKind | null;
   pasting?: boolean;
   /** Ctrl+C copy-marquee active — drag a box (≥70% coverage). */
   copying?: boolean;
+  /** Session “Commonly used” kinds (most recent first). */
+  commonlyUsed?: readonly ComponentKind[];
   onPick: (kind: ComponentKind) => void;
 }) {
+  const groups = useMemo(() => buildPalette(commonlyUsed), [commonlyUsed]);
+
   return (
     <div className="palette">
-      {PALETTE.map((group) => (
+      {groups.map((group) => (
         <div className="palette-group" key={group.category}>
           <div className="palette-title">{group.category}</div>
-          <div className="palette-grid">
-            {group.kinds.map((kind) => {
-              const spec = COMPONENT_SPECS[kind];
-              const showSvg = hasSymbol(kind);
-              const active = activeKind === kind;
-              const tip = flatLabel(spec.label);
-              return (
-                <button
-                  key={kind}
-                  type="button"
-                  className={`palette-item${active ? " is-active" : ""}`}
-                  title={
-                    active
-                      ? `${tip} — left-click canvas to place, right-click to cancel`
-                      : `${tip} — click to place (stamp), or drag onto canvas / a part`
-                  }
-                  aria-pressed={active}
-                  draggable
-                  onClick={() => onPick(kind)}
-                  onDragStart={(e) => {
-                    e.dataTransfer.setData(PALETTE_DND_MIME, kind);
-                    e.dataTransfer.effectAllowed = "copy";
-                  }}
-                >
-                  {showSvg ? (
-                    <span className="palette-glyph palette-glyph-svg">
-                      <SchematicSymbol kind={kind} preview />
-                    </span>
-                  ) : (
-                    <span className="palette-glyph">{spec.glyph}</span>
-                  )}
-                  <span className="palette-label">{spec.label}</span>
-                </button>
-              );
-            })}
-          </div>
+          {group.category === "Commonly used" && group.kinds.length === 0 ? (
+            <p className="palette-empty-hint">Parts you place this session appear here</p>
+          ) : (
+            <div className="palette-grid">
+              {group.kinds.map((kind) => {
+                const spec = COMPONENT_SPECS[kind];
+                const showSvg = hasSymbol(kind);
+                const active = activeKind === kind;
+                const tip = flatLabel(spec.label);
+                return (
+                  <button
+                    key={kind}
+                    type="button"
+                    className={`palette-item${active ? " is-active" : ""}`}
+                    title={
+                      active
+                        ? `${tip} — left-click canvas to place, right-click to cancel`
+                        : `${tip} — click to place (stamp), or drag onto canvas / a part`
+                    }
+                    aria-pressed={active}
+                    draggable
+                    onClick={() => onPick(kind)}
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData(PALETTE_DND_MIME, kind);
+                      e.dataTransfer.effectAllowed = "copy";
+                    }}
+                  >
+                    {showSvg ? (
+                      <span className="palette-glyph palette-glyph-svg">
+                        <SchematicSymbol kind={kind} preview />
+                      </span>
+                    ) : (
+                      <span className="palette-glyph">{spec.glyph}</span>
+                    )}
+                    <span className="palette-label">{spec.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       ))}
       {activeKind ? (

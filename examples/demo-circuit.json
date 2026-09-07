@@ -8,9 +8,9 @@
       "type": "component",
       "position": { "x": 40, "y": 180 },
       "data": {
-        "kind": "V",
+        "kind": "BATTERY",
         "refdes": "V1",
-        "params": { "value": "DC 48" }
+        "params": { "dc": "V", "rser": "" }
       }
     },
     {

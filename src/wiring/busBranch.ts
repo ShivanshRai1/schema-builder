@@ -5,7 +5,11 @@
  */
 import type { Edge, Node } from "@xyflow/react";
 import type { ComponentData } from "../model/types";
-import { computeEdgePolyline, distToPolyline } from "./wireGeometry";
+import {
+  closestPointOnPolylineRaw,
+  computeEdgePolyline,
+  distToPolyline,
+} from "./wireGeometry";
 import { snapCoord, type Point } from "./orthogonal";
 
 const TIP_SIZE = 8;
@@ -120,6 +124,11 @@ export function resolveBranchOnEdge(
     }
     point = { x: bestX, y: snapCoord(cursor.y, grid) };
   }
+
+  // Keep the attach point on the rail. Column/row snap can land inside the
+  // bbox but off a segment (L-shaped buses); projecting avoids a tip that
+  // sits beside the wire and a rubber band that starts offset.
+  point = closestPointOnPolylineRaw(poly, point);
 
   const extended = extendEdgeThroughPoint(nodes, edges, edgeId, point, axis);
   return {

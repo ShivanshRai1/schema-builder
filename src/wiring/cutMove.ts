@@ -4,7 +4,7 @@ import { pinWorldPoint } from "./pinGeometry";
 import { getSymbolLayout } from "../nodes/symbols/layout";
 import { snapPoint, type PinSide, type Point } from "./orthogonal";
 import { computeEdgePolyline } from "./wireGeometry";
-import { COMPONENT_SPECS } from "../model/componentSpecs";
+import { COMPONENT_SPECS, getComponentPins } from "../model/componentSpecs";
 import { pruneOrphanTips } from "./tipCleanup";
 
 export type FlowRect = { x: number; y: number; w: number; h: number };
@@ -459,7 +459,7 @@ export function reconnectTipsOnPins(
     let best: { partId: string; pinId: string; d: number } | null = null;
     for (const part of nextNodes) {
       if (part.data.kind === "TIP") continue;
-      for (const pin of COMPONENT_SPECS[part.data.kind].pins) {
+      for (const pin of getComponentPins(part.data.kind, part.data.params)) {
         const pt = pinWorldPoint(part, pin.id);
         if (!pt) continue;
         const d = Math.hypot(pt.x - t.x, pt.y - t.y);
