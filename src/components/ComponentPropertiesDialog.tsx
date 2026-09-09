@@ -3,6 +3,10 @@ import type { Node } from "@xyflow/react";
 import { COMPONENT_SPECS } from "../model/componentSpecs";
 import type { ComponentData, ComponentRotation, LabelPosition } from "../model/types";
 import { normalizeRotation, nextLabelRotation, nextRotation } from "../model/rotation";
+import {
+  isNumericParamKey,
+  normalizeSpiceNumericInput,
+} from "../model/spiceValue";
 import { hasSymbol } from "../nodes/symbols/layout";
 
 const LABEL_POSITION_OPTIONS: { value: LabelPosition; label: string }[] = [
@@ -53,6 +57,14 @@ function composeVoltageStimulus(
   // Keep the schematic default as plain "V" until a real magnitude is entered.
   if (!mag || /^v$/i.test(mag)) return kind === "DC" ? "V" : `${kind} 0`;
   return `${kind} ${mag}`;
+}
+
+/** Normalize DC/AC magnitude only — leave full PULSE/SIN custom text alone. */
+function normalizeVoltageValueParam(raw: string): string {
+  const parsed = parseVoltageStimulus(raw);
+  if (parsed.kind === "CUSTOM") return raw;
+  const mag = normalizeSpiceNumericInput(parsed.magnitude);
+  return composeVoltageStimulus(parsed.kind, mag, parsed.custom);
 }
 
 function VoltageValueFields({
@@ -134,6 +146,13 @@ function VoltageValueFields({
             placeholder="V"
             onChange={(e) => {
               const next = e.target.value;
+              setMagnitude(next);
+              commit(kind, next, custom);
+            }}
+            onBlur={() => {
+              if (!magnitude.trim() || /^v$/i.test(magnitude.trim())) return;
+              const next = normalizeSpiceNumericInput(magnitude);
+              if (next === magnitude) return;
               setMagnitude(next);
               commit(kind, next, custom);
             }}
@@ -453,6 +472,23 @@ export function ComponentPropertiesDialog({
                             params: { ...d.params, [attr.key]: e.target.value },
                           }))
                         }
+                        onBlur={
+                          attr.type === "number" ||
+                          isNumericParamKey(attr.key, {
+                            unit: attr.unit,
+                            type: attr.type,
+                          })
+                            ? () => {
+                                const cur = draft.params[attr.key] ?? attr.default;
+                                const next = normalizeSpiceNumericInput(cur);
+                                if (next === cur) return;
+                                setDraft((d) => ({
+                                  ...d,
+                                  params: { ...d.params, [attr.key]: next },
+                                }));
+                              }
+                            : undefined
+                        }
                       />
                     )}
                     {attr.hint ? <span className="prop-hint">{attr.hint}</span> : null}
@@ -524,7 +560,27 @@ export function ComponentPropertiesDialog({
             <button
               type="button"
               className="comp-props-btn primary"
-              onClick={() => onApply(node.id, draft)}
+              onClick={() => {
+                const params = { ...draft.params };
+                for (const attr of spec.attributes) {
+                  const cur = params[attr.key];
+                  if (cur == null) continue;
+                  if (node.data.kind === "V" && attr.key === "value") {
+                    params[attr.key] = normalizeVoltageValueParam(cur);
+                    continue;
+                  }
+                  if (
+                    !isNumericParamKey(attr.key, {
+                      unit: attr.unit,
+                      type: attr.type,
+                    })
+                  ) {
+                    continue;
+                  }
+                  params[attr.key] = normalizeSpiceNumericInput(cur);
+                }
+                onApply(node.id, { ...draft, params });
+              }}
             >
               OK
             </button>

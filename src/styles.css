@@ -1052,6 +1052,17 @@ body { background: var(--bg); color: var(--text); }
 .canvas .react-flow__nodes { z-index: 3 !important; }
 .canvas .react-flow__edges { z-index: 1 !important; }
 .canvas .react-flow__edgelabel-renderer { z-index: 2 !important; }
+/* Junction squares + hop bumps live in ViewportPortal. Without an explicit
+   z-index the portal sits under edges (z=1), so marks paint behind wires and
+   look “missing”. Keep above edges/nodes; children use pointer-events:none
+   so part/wire hits still reach the layers below. */
+.canvas .react-flow__viewport-portal {
+  z-index: 4 !important;
+  pointer-events: none;
+}
+.canvas .react-flow__viewport-portal .junction-overlay-interactive {
+  pointer-events: auto;
+}
 .canvas-explore .react-flow__pane { cursor: grab; }
 .canvas-explore .react-flow__pane:active { cursor: grabbing; }
 .canvas-explore .react-flow__node { cursor: default; }

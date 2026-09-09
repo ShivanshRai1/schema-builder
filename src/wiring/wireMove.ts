@@ -19,6 +19,7 @@ import {
   computeEdgePolyline,
   distToPolyline,
   dragWireSegment,
+  hitTestWirePolyline,
   polylineToStoredWaypoints,
 } from "./wireGeometry";
 import { collapsePassThroughTips, pruneOrphanTips } from "./tipCleanup";
@@ -717,7 +718,10 @@ export function applyRemoveBend(
     return { waypoints: polylineToStoredWaypoints(nodes, edge, reduced) };
   }
 
-  if (free) {
+  // Free tip↔tip L (one elbow): may move a tip onto a true H/V.
+  // Multi-bend snakes must never fall through to planUnbend — that collapses
+  // the whole meander (looks like every segment was deleted).
+  if (free && before <= 1) {
     const planned = planUnbend(nodes, edge, poly, cornerPolyIndex);
     if (planned) return planned;
   }
@@ -1008,7 +1012,32 @@ export function straightenWire(
   const tgtTip = tgt.data.kind === "TIP";
 
   if (srcTip && tgtTip) {
-    return flattenWire(nodes, edge);
+    // Free-wire snakes: never flatten the whole path (that wiped every bend).
+    // Double-click only removes/straightens the bend under the cursor.
+    if (!clickPoint) return null;
+    const poly = computeEdgePolyline(nodes, edge);
+    if (poly.length < 3) return null;
+    const hit = hitTestWirePolyline(poly, clickPoint, { tipWire: true });
+    if (!hit) return null;
+    const cornerIndex =
+      hit.kind === "corner"
+        ? hit.polyIndex
+        : hit.kind === "segment"
+          ? // Prefer the corner of this run that is closer to the click.
+            (() => {
+              const a = hit.segIndex;
+              const b = hit.segIndex + 1;
+              const pa = poly[a]!;
+              const pb = poly[b]!;
+              const da = Math.hypot(clickPoint.x - pa.x, clickPoint.y - pa.y);
+              const db = Math.hypot(clickPoint.x - pb.x, clickPoint.y - pb.y);
+              const cand = da <= db ? a : b;
+              // Interior corners only.
+              return cand > 0 && cand < poly.length - 1 ? cand : null;
+            })()
+          : null;
+    if (cornerIndex == null) return null;
+    return applyBendEdit(nodes, edge, cornerIndex, "straighten");
   }
 
   if (srcTip !== tgtTip) {

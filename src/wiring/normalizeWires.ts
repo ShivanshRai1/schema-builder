@@ -77,14 +77,18 @@ export function isShortDanglingStub(
 }
 
 /**
- * Leftover after a segment cut / cancel: a free pin↔tip stub, or a floating
- * tip↔tip scrap (both tips degree 1). Junction rails with one free tip are
- * NOT leftovers — those still peel/trim.
+ * Leftover after a segment cut / cancel: a *short* free pin↔tip stub, or a
+ * short floating tip↔tip scrap (both tips degree 1).
+ *
+ * Long tip↔tip snakes are intentional free-wire drawings — never treat them
+ * as wipe-on-click leftovers (that deleted the whole zig-zag when one run
+ * was selected).
  */
 export function isFullyDanglingLeftover(
   nodes: Node<ComponentData>[],
   edges: Edge[],
   edge: Edge,
+  maxLen = SHORT_STUB_MAX_LEN,
 ): boolean {
   const nodesById = new Map(nodes.map((n) => [n.id, n] as const));
   const deg = tipDegree(edges);
@@ -97,14 +101,14 @@ export function isFullyDanglingLeftover(
   const srcDeg = deg.get(edge.source) ?? 0;
   const tgtDeg = deg.get(edge.target) ?? 0;
 
-  // Floating scrap: both ends free tips.
-  if (srcTip && tgtTip && srcDeg === 1 && tgtDeg === 1) return true;
+  const floatingTipTip = srcTip && tgtTip && srcDeg === 1 && tgtDeg === 1;
+  const pinFreeTip =
+    (srcTip && srcDeg === 1 && !tgtTip) || (tgtTip && tgtDeg === 1 && !srcTip);
+  if (!floatingTipTip && !pinFreeTip) return false;
 
-  // Pin↔free-tip leftover (the usual cutOpen remnant).
-  if (srcTip && srcDeg === 1 && !tgtTip) return true;
-  if (tgtTip && tgtDeg === 1 && !srcTip) return true;
-
-  return false;
+  const poly = computeEdgePolyline(nodes, edge);
+  if (poly.length < 2) return true;
+  return polylineLength(poly) <= maxLen + 0.5;
 }
 
 /** Exactly one end is a TIP (pin↔tip or tip↔pin branch). */
@@ -274,26 +278,68 @@ function peelUTurnSpurNearClick(
 /**
  * Cut out only the polyline segment under the click (LTspice-like scissors on
  * one run). Multi-segment wires leave the other runs as dangling pieces.
- * A single-segment wire deletes entirely.
- * Micro remnants (pin-stub length) are dropped so they do not linger.
+ * A short single-segment wire deletes entirely; a long one splits at the click.
+ * Micro remnants (below minKeep) are dropped so they do not linger.
+ *
+ * Pass `forcedSegIndex` when the UI already knows which H/V run is selected
+ * (Delete on segment highlight) so hit-radius cannot miss and fall through
+ * to a whole-edge wipe.
  */
 function planCutOpenSegment(
   edgeId: string,
   poly: Point[],
   clickPoint: Point,
   hitRadius: number,
+  forcedSegIndex?: number,
 ): ScissorDeletePlan | null {
   if (poly.length < 2) return null;
-  const { index: bestSeg, dist: bestD } = closestSegmentOnPoly(poly, clickPoint);
-  if (bestD > hitRadius || bestSeg < 0) return null;
-
-  if (poly.length === 2) {
-    return { action: "delete", edgeId };
+  let bestSeg: number;
+  if (
+    typeof forcedSegIndex === "number" &&
+    forcedSegIndex >= 0 &&
+    forcedSegIndex < poly.length - 1
+  ) {
+    bestSeg = forcedSegIndex;
+  } else {
+    const hit = closestSegmentOnPoly(poly, clickPoint);
+    if (hit.dist > hitRadius || hit.index < 0) return null;
+    bestSeg = hit.index;
   }
 
+  const minKeep = 4;
+
+  // Single H/V run: split at the click into two dangling stubs when both
+  // sides are long enough; otherwise wipe (tiny leftover only).
+  if (poly.length === 2) {
+    const a = poly[0]!;
+    const b = poly[1]!;
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (len < minKeep * 2) {
+      return { action: "delete", edgeId };
+    }
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const lenSq = dx * dx + dy * dy;
+    let t =
+      lenSq < 0.01
+        ? 0.5
+        : ((clickPoint.x - a.x) * dx + (clickPoint.y - a.y) * dy) / lenSq;
+    // Keep both remnants above minKeep along the segment.
+    const minT = minKeep / len;
+    const maxT = 1 - minT;
+    t = Math.max(minT, Math.min(maxT, t));
+    const cut = { x: a.x + t * dx, y: a.y + t * dy };
+    return {
+      action: "cutOpen",
+      edgeId,
+      beforePoly: [a, cut],
+      afterPoly: [cut, b],
+    };
+  }
+
+  // Multi-segment: remove the chosen H/V run entirely (leave a gap).
   const beforeRaw = poly.slice(0, bestSeg + 1);
   const afterRaw = poly.slice(bestSeg + 1);
-  const minKeep = 4;
   const before =
     beforeRaw.length >= 2 ? collapseMicroBends(beforeRaw, 10) : null;
   const after = afterRaw.length >= 2 ? collapseMicroBends(afterRaw, 10) : null;
@@ -313,6 +359,38 @@ function planCutOpenSegment(
     beforePoly: beforeOk,
     afterPoly: afterOk,
   };
+}
+
+/**
+ * Delete exactly one stored H/V run by index (segment selection + Delete key).
+ * Never falls back to wiping a long free-wire snake.
+ */
+export function planDeleteSelectedSegment(
+  nodes: Node<ComponentData>[],
+  edges: Edge[],
+  edgeId: string,
+  segIndex: number,
+): ScissorDeletePlan | null {
+  const edge = edges.find((e) => e.id === edgeId);
+  if (!edge) return null;
+  const poly = computeEdgePolyline(nodes, edge);
+  if (poly.length < 2) return { action: "delete", edgeId };
+  if (segIndex < 0 || segIndex >= poly.length - 1) return null;
+
+  // Short single-run leftovers: wipe. Everything else: open-cut that run.
+  if (
+    poly.length === 2 &&
+    (isShortDanglingStub(nodes, edges, edge) ||
+      isFullyDanglingLeftover(nodes, edges, edge))
+  ) {
+    return { action: "delete", edgeId };
+  }
+
+  const mid = {
+    x: (poly[segIndex]!.x + poly[segIndex + 1]!.x) / 2,
+    y: (poly[segIndex]!.y + poly[segIndex + 1]!.y) / 2,
+  };
+  return planCutOpenSegment(edgeId, poly, mid, Infinity, segIndex);
 }
 
 /**
@@ -338,17 +416,29 @@ export function planScissorWireDelete(
   let targetId = edgeId;
 
   if (clickPoint) {
-    let bestStub: { id: string; d: number } | null = null;
+    let bestStub: { id: string; d: number; len: number } | null = null;
     for (const edge of edges) {
-      const leftover =
-        isFullyDanglingLeftover(nodes, edges, edge) ||
-        isShortDanglingStub(nodes, edges, edge, maxStubLen);
-      if (!leftover) continue;
       const poly = computeEdgePolyline(nodes, edge);
       if (poly.length < 2) continue;
+      const len = polylineLength(poly);
+      const leftover =
+        isFullyDanglingLeftover(nodes, edges, edge, Math.max(maxStubLen, 96)) ||
+        isShortDanglingStub(nodes, edges, edge, Math.max(maxStubLen, 96)) ||
+        (len <= 64 &&
+          byId.get(edge.source)?.data.kind === "TIP" &&
+          byId.get(edge.target)?.data.kind === "TIP" &&
+          (deg.get(edge.source) ?? 0) <= 1 &&
+          (deg.get(edge.target) ?? 0) <= 1);
+      if (!leftover) continue;
       const d = distToPolyline(poly, clickPoint);
-      if (d > hitRadius) continue;
-      if (!bestStub || d < bestStub.d) bestStub = { id: edge.id, d };
+      if (d > hitRadius + 8) continue;
+      if (
+        !bestStub ||
+        d < bestStub.d - 0.5 ||
+        (Math.abs(d - bestStub.d) <= 0.5 && len < bestStub.len)
+      ) {
+        bestStub = { id: edge.id, d, len };
+      }
     }
     if (bestStub) targetId = bestStub.id;
 
@@ -388,13 +478,11 @@ export function planScissorWireDelete(
 
   const clicked = edges.find((e) => e.id === targetId)!;
 
-  // Short stubs, cutOpen leftovers, and any pin↔tip branch: wipe that edge.
-  // Pin↔tip (incl. junction tip) used to cutOpen/trim into the same-looking
-  // path so scissors appeared to do nothing on the vertical V1→R1 run.
+  // Only wipe tiny leftovers / short stubs. Long pin↔tip and pin↔pin runs
+  // open-cut at the click (below) so scissors do not delete the whole rail.
   if (
     isShortDanglingStub(nodes, edges, clicked, maxStubLen) ||
-    isFullyDanglingLeftover(nodes, edges, clicked) ||
-    isPinTipEdge(nodes, clicked)
+    isFullyDanglingLeftover(nodes, edges, clicked)
   ) {
     return { action: "delete", edgeId: targetId };
   }
@@ -540,11 +628,16 @@ export function planScissorWireDelete(
   if (distToTip > maxStubLen + hitRadius && segLen > maxStubLen) {
     const cut = planCutOpenSegment(targetId, poly, clickPoint, hitRadius);
     if (cut) return cut;
+    // Long rail: never wipe — keep trying open-cut with a looser hit.
+    const loose = planCutOpenSegment(targetId, poly, clickPoint, hitRadius * 3);
+    if (loose) return loose;
     return { action: "delete", edgeId: targetId };
   }
   if (segLen > maxStubLen && distToTip > hitRadius) {
     const cut = planCutOpenSegment(targetId, poly, clickPoint, hitRadius);
     if (cut) return cut;
+    const loose = planCutOpenSegment(targetId, poly, clickPoint, hitRadius * 3);
+    if (loose) return loose;
     return { action: "delete", edgeId: targetId };
   }
   if (poly.length < 3 || segLen > maxStubLen) {
@@ -553,11 +646,15 @@ export function planScissorWireDelete(
     // Prefer open-cutting the clicked segment over wiping a long rail.
     const cut = planCutOpenSegment(targetId, poly, clickPoint, hitRadius);
     if (cut) return cut;
-    return null;
+    const loose = planCutOpenSegment(targetId, poly, clickPoint, hitRadius * 3);
+    if (loose) return loose;
+    return { action: "delete", edgeId: targetId };
   }
 
   const trimmed = peelTerminal(poly, chosen.atStart);
   if (!trimmed || trimmed.length < 2) {
+    const cut = planCutOpenSegment(targetId, poly, clickPoint, hitRadius * 3);
+    if (cut) return cut;
     return { action: "delete", edgeId: targetId };
   }
   const newEnd = chosen.atStart ? trimmed[0]! : trimmed[trimmed.length - 1]!;

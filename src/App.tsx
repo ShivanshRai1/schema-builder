@@ -33,6 +33,7 @@ import { applyNetlistToGraph } from "./netlist/applyNetlistToGraph";
 import { createHistory, type CircuitSnapshot } from "./history/circuitHistory";
 import { downloadCircuit, parseCircuitFile, readCircuitFile } from "./persistence/circuitFile";
 import starterCircuit from "../examples/demo-circuit.json";
+import hbridgeSimplifiedCircuit from "../examples/hbridge-simplified.json";
 import { applyTheme, readStoredTheme, type UiTheme } from "./theme";
 import type { Op } from "./llm/ops";
 import type { AssistantContext } from "./llm/assistantTypes";
@@ -46,7 +47,6 @@ import {
 import { applyCutMove, detachPartForMove, edgesCoveredByRect, nodesCoveredByRect, nodesInRect, reconnectPartsOnTips, reconnectTipsOnPins, type FlowRect } from "./wiring/cutMove";
 import { attachPartsToWires, attachNetNameToNearestPin } from "./wiring/insertOnWire";
 import {
-  collapseMicroBends,
   detachWireForMove,
   detachWireSegmentForDrag,
   finalizeConnectedPartMove,
@@ -60,6 +60,7 @@ import {
   clearTipStubsOnPins,
   pruneOrphanTips,
   collapsePassThroughTips,
+  collapseOnePassThroughTip,
   pruneGhostTipsOnPins,
   absorbTipsOntoPins,
 } from "./wiring/tipCleanup";
@@ -68,16 +69,21 @@ import { pinWorldPoint } from "./wiring/pinGeometry";
 import {
   computeEdgePolyline,
   distToPolyline,
+  hitTestWirePolyline,
   polylineToStoredWaypoints,
 } from "./wiring/wireGeometry";
+import type { SchematicWireData } from "./edges/SchematicWireEdge";
 import {
   cleanEdgeTrailingNubs,
   isDanglingOrTrailingEdge,
+  isFullyDanglingLeftover,
   isShortDanglingStub,
   normalizeWires,
+  planDeleteSelectedSegment,
   planScissorWireDelete,
   removeDanglingOrTrailingEdges,
   trimEdgeEndsToJoins,
+  type ScissorDeletePlan,
 } from "./wiring/normalizeWires";
 import {
   instantiateClipboard,
@@ -86,23 +92,6 @@ import {
   type CircuitClipboard,
 } from "./model/circuitClipboard";
 import { WIRE_GRID, type Point } from "./wiring/orthogonal";
-
-type Pt = { x: number; y: number };
-
-/**
- * Clean the waypoints of a wire formed by joining an existing (possibly frozen)
- * half with a freshly drawn half. Runs the full pin→pin path through the ortho
- * collapse so redundant routing stubs at the join don't leave extra segments.
- */
-function cleanReconnectPath(
-  startPin: Pt | null,
-  interior: Pt[],
-  endPin: Pt | null,
-): Pt[] {
-  if (!startPin || !endPin) return interior;
-  const cleaned = collapseMicroBends([startPin, ...interior, endPin]);
-  return cleaned.slice(1, -1);
-}
 
 // --- seed circuit: examples/demo-circuit.json (Restore starter uses the same) ---
 const mk = (
@@ -263,6 +252,11 @@ export default function App() {
   }, []);
   const [netNameDialog, setNetNameDialog] = useState(false);
   const lastWireLabelName = useRef("");
+  /** Last flow-space click on a wire — Delete uses scissors here, not whole-edge wipe. */
+  const lastWireClickRef = useRef<{ edgeId: string; point: Point } | null>(null);
+  const deleteEdgeWithToolRef = useRef<
+    (edgeId: string, clickPoint?: Point, forcedPlan?: ScissorDeletePlan) => void
+  >(() => {});
   const [pasteClip, setPasteClip] = useState<CircuitClipboard | null>(null);
   /** Ctrl+C copy-marquee tool (dotted box); finishes into pasteClip. */
   const [copyMarquee, setCopyMarquee] = useState(false);
@@ -412,172 +406,52 @@ export default function App() {
     const srcNode = ns.find((n) => n.id === c.source);
     const tgtNode = ns.find((n) => n.id === c.target);
 
-    // Continuing from a dangling TIP: extend the old wire and remove the tip.
-    if (srcNode?.data.kind === "TIP") {
-      const srcTipEdges = eds.filter(
-        (e) =>
-          (e.target === c.source && e.targetHandle === "t") ||
-          (e.source === c.source && e.sourceHandle === "t"),
-      );
-      // Junction TIP (2+ edges) — just add the new edge, keep the junction node.
-      if (srcTipEdges.length >= 2) {
-        const added = addEdge(
-          { ...c, type: "schematic", data: { waypoints, directPath: true } },
-          eds,
-        );
-        setNodes(ns);
-        setEdges(added);
-        return;
-      }
-      const intoTip = srcTipEdges[0] ?? null;
-      if (!intoTip) {
-        // Brand-new free-start tip (no edge yet) → pin or another tip.
-        if (freeStart) setNodes(ns);
-        setEdges((prev) =>
-          addEdge(
-            { ...c, type: "schematic", data: { waypoints, directPath: true } },
-            freeStart ? eds : prev,
-          ),
-        );
-        return;
-      }
-      const fromSource = intoTip.target === c.source;
-      const otherId = fromSource ? intoTip.source! : intoTip.target!;
-      const otherHandle = fromSource ? intoTip.sourceHandle! : intoTip.targetHandle!;
-      const baseWaypoints =
-        ((intoTip.data as { waypoints?: { x: number; y: number }[] } | undefined)?.waypoints) ?? [];
-      // World point where the two wire halves join (the grabbed tip itself).
-      const tipPos = {
-        x: srcNode.position.x,
-        y: srcNode.position.y + TIP_SIZE / 2,
-      };
-      // New edge runs otherId → c.target. Orient the old interior points to start
-      // at otherId, then bridge through the tip corner into the freshly drawn bends.
-      // Dropping the tip corner is what detaches the wire, so keep it in the list.
-      const orientedBase = fromSource ? baseWaypoints : [...baseWaypoints].reverse();
-      const merged = [...orientedBase, tipPos, ...waypoints];
-      // Collapse the now-redundant routing stub left where the tip joined, so
-      // reconnecting doesn't leave little extra segments sticking out.
-      const otherNode = ns.find((n) => n.id === otherId);
-      const cleanedMerged = cleanReconnectPath(
-        otherNode ? pinWorldPoint(otherNode, otherHandle) : null,
-        merged,
-        tgtNode ? pinWorldPoint(tgtNode, c.targetHandle) : null,
-      );
-
-      // Drop the grabbed tip and the edge that held it.
-      let nextNodes = ns.filter((n) => n.id !== c.source);
-      let nextEdges = eds.filter(
-        (e) => e.source !== c.source && e.target !== c.source,
-      );
-      // Replace any pre-existing stub already parked on the landing pin.
+    // TIP endpoints: always ADD the new run. Never "dissolve tip → drop all its
+    // edges → rebuild" — that wiped half/most of free-wire meshes whenever you
+    // extended from a tip and finished on the same net / mid-rail / other tip.
+    // Straight pass-throughs are healed afterward with collapseOnePassThroughTip.
+    if (srcNode?.data.kind === "TIP" || tgtNode?.data.kind === "TIP") {
       if (tgtNode && tgtNode.data.kind !== "TIP") {
-        const cleared = clearTipStubsOnPins(nextNodes, nextEdges, [
+        const cleared = clearTipStubsOnPins(ns, eds, [
           { nodeId: c.target, handle: c.targetHandle },
         ]);
-        nextNodes = cleared.nodes;
-        nextEdges = cleared.edges;
-      }
-      // Reconnect the wire's other end to the landing pin. Add BEFORE pruning so
-      // a dangling other-end tip isn't orphaned and deleted with its wire.
-      if (!(otherId === c.target && otherHandle === c.targetHandle)) {
-        nextEdges = addEdge(
-          {
-            id: `${otherId}${otherHandle}-${c.target}${c.targetHandle}`,
-            type: "schematic",
-            source: otherId,
-            sourceHandle: otherHandle,
-            target: c.target,
-            targetHandle: c.targetHandle,
-            data: { waypoints: cleanedMerged, directPath: true },
-          },
-          nextEdges,
-        );
-      }
-      const pruned = pruneOrphanTips(nextNodes, nextEdges);
-      setNodes(pruned.nodes);
-      setEdges(pruned.edges);
-      return;
-    }
-
-    // Landing on a TIP: merge into existing dangling wire; remove tip.
-    if (tgtNode?.data.kind === "TIP") {
-      // If the TIP already has 2+ edges (it's a junction TIP from onWireBranch),
-      // just add the new edge — don't merge/remove the junction TIP.
-      const tipEdges = eds.filter(
-        (e) =>
-          (e.target === c.target && e.targetHandle === "t") ||
-          (e.source === c.target && e.sourceHandle === "t"),
-      );
-      if (tipEdges.length >= 2) {
-        const added = addEdge(
-          { ...c, type: "schematic", data: { waypoints, directPath: true } },
-          eds,
-        );
-        setNodes(ns);
-        setEdges(added);
-        return;
-      }
-      const intoTip = tipEdges[0] ?? null;
-      if (!intoTip) {
-        setEdges((prev) =>
-          addEdge(
-            { ...c, type: "schematic", data: { waypoints, directPath: true } },
-            prev,
-          ),
-        );
-        return;
-      }
-      const tipIsTarget = intoTip.target === c.target;
-      const otherId = tipIsTarget ? intoTip.source! : intoTip.target!;
-      const otherHandle = tipIsTarget ? intoTip.sourceHandle! : intoTip.targetHandle!;
-      const baseWaypoints =
-        ((intoTip.data as { waypoints?: { x: number; y: number }[] } | undefined)?.waypoints) ?? [];
-      // World point where the two wire halves join (the landed tip itself).
-      const tipPos = {
-        x: tgtNode.position.x,
-        y: tgtNode.position.y + TIP_SIZE / 2,
-      };
-      // New edge runs c.source → otherId: freshly drawn bends, then the tip corner,
-      // then the old interior points oriented to end at otherId.
-      const orientedBase = tipIsTarget ? [...baseWaypoints].reverse() : baseWaypoints;
-      const merged = [...waypoints, tipPos, ...orientedBase];
-      // Collapse the redundant routing stub at the join so no extra segment sticks out.
-      const otherNode = ns.find((n) => n.id === otherId);
-      const cleanedMerged = cleanReconnectPath(
-        srcNode ? pinWorldPoint(srcNode, c.sourceHandle) : null,
-        merged,
-        otherNode ? pinWorldPoint(otherNode, otherHandle) : null,
-      );
-
-      // Drop the landed tip and the edge that held it.
-      let nextNodes = ns.filter((n) => n.id !== c.target);
-      let nextEdges = eds.filter(
-        (e) => e.source !== c.target && e.target !== c.target,
-      );
-      // src already proven non-TIP above; clear any leftover Move stubs on that pin.
-      if (srcNode) {
-        const cleared = clearTipStubsOnPins(nextNodes, nextEdges, [
+        ns = cleared.nodes;
+        eds = cleared.edges;
+      } else if (srcNode && srcNode.data.kind !== "TIP") {
+        const cleared = clearTipStubsOnPins(ns, eds, [
           { nodeId: c.source, handle: c.sourceHandle },
         ]);
-        nextNodes = cleared.nodes;
-        nextEdges = cleared.edges;
+        ns = cleared.nodes;
+        eds = cleared.edges;
       }
-      // Add the reconnected edge BEFORE pruning so the other-end tip survives.
-      if (!(otherId === c.source && otherHandle === c.sourceHandle)) {
-        nextEdges = addEdge(
-          {
-            id: `${c.source}${c.sourceHandle}-${otherId}${otherHandle}`,
-            type: "schematic",
-            source: c.source,
-            sourceHandle: c.sourceHandle,
-            target: otherId,
-            targetHandle: otherHandle,
-            data: { waypoints: cleanedMerged, directPath: true },
-          },
-          nextEdges,
+
+      let nextNodes = ns;
+      let nextEdges = addEdge(
+        { ...c, type: "schematic", data: { waypoints, directPath: true } },
+        eds,
+      );
+
+      // Only collapse tips that were dangling (deg 1) before this add and are
+      // now a straight H/V through-run. Junction tips (deg ≥ 2) stay put.
+      const degBefore = (id: string) =>
+        eds.reduce(
+          (n, e) => n + (e.source === id || e.target === id ? 1 : 0),
+          0,
         );
+      if (srcNode?.data.kind === "TIP" && degBefore(c.source) === 1) {
+        const collapsed = collapseOnePassThroughTip(nextNodes, nextEdges, c.source);
+        nextNodes = collapsed.nodes;
+        nextEdges = collapsed.edges;
       }
+      if (tgtNode?.data.kind === "TIP" && degBefore(c.target) === 1) {
+        // Target tip id still valid after optional source collapse.
+        if (nextNodes.some((n) => n.id === c.target)) {
+          const collapsed = collapseOnePassThroughTip(nextNodes, nextEdges, c.target);
+          nextNodes = collapsed.nodes;
+          nextEdges = collapsed.edges;
+        }
+      }
+
       const pruned = pruneOrphanTips(nextNodes, nextEdges);
       setNodes(pruned.nodes);
       setEdges(pruned.edges);
@@ -653,10 +527,10 @@ export default function App() {
       currentEdges,
     );
     // Extending an existing free wire end turns that old TIP into a degree-2
-    // pass-through point. Merge both halves so a straight continuation does
-    // not display a false junction square. Real branch TIPs (degree 2+) stay.
+    // pass-through point. Merge *only that tip* when the run is straight —
+    // never scan the whole mesh (that wiped free-wire drawings on finish).
     if (sourceNode?.data.kind === "TIP" && sourceDegree === 1) {
-      const collapsed = collapsePassThroughTips(nextNodes, nextEdges);
+      const collapsed = collapseOnePassThroughTip(nextNodes, nextEdges, source);
       setNodes(collapsed.nodes);
       setEdges(collapsed.edges);
       return;
@@ -790,42 +664,135 @@ export default function App() {
       0,
     );
     if (degree !== 2) return;
-    const collapsed = collapsePassThroughTips(nodesRef.current, es);
+    // Only heal this branch tip — do not collapse unrelated free-wire corners.
+    const collapsed = collapseOnePassThroughTip(nodesRef.current, es, tipId);
     setNodes(collapsed.nodes);
     setEdges(collapsed.edges);
   }, [setNodes, setEdges]);
 
   const onSelectEdge = useCallback(
-    (edgeId: string) => {
+    (edgeId: string, clickPoint?: Point, opts?: { additive?: boolean }) => {
       if (!edgeId) {
-        setEdges((eds) => eds.map((e) => (e.selected ? { ...e, selected: false } : e)));
+        lastWireClickRef.current = null;
+        setEdges((eds) =>
+          eds.map((e) => {
+            if (!e.selected && (e.data as SchematicWireData | undefined)?.selectedSegIndex == null) {
+              return e;
+            }
+            const data = { ...(e.data as object) } as SchematicWireData;
+            delete data.selectedSegIndex;
+            return { ...e, selected: false, data };
+          }),
+        );
         setNodes((ns) => ns.map((n) => (n.selected ? { ...n, selected: false } : n)));
         return;
       }
-      setEdges((eds) => eds.map((e) => ({ ...e, selected: e.id === edgeId })));
+
+      const additive = Boolean(opts?.additive);
+
+      // Ctrl/⌘+click: toggle whole-wire selection (no segment highlight).
+      // Plain click needs a point so only one H/V run lights up.
+      if (additive) {
+        lastWireClickRef.current = clickPoint
+          ? { edgeId, point: clickPoint }
+          : lastWireClickRef.current?.edgeId === edgeId
+            ? lastWireClickRef.current
+            : null;
+        setEdges((eds) =>
+          eds.map((e) => {
+            if (e.id !== edgeId) return e;
+            const data = { ...(e.data as object) } as SchematicWireData;
+            delete data.selectedSegIndex;
+            return { ...e, selected: !e.selected, data };
+          }),
+        );
+        return;
+      }
+
+      let segIndex: number | undefined;
+      const point =
+        clickPoint ??
+        (lastWireClickRef.current?.edgeId === edgeId
+          ? lastWireClickRef.current.point
+          : undefined);
+      if (!point) {
+        // Refuse whole-snake select from click paths that forgot the point.
+        return;
+      }
+      lastWireClickRef.current = { edgeId, point };
+      const edge = edgesRef.current.find((e) => e.id === edgeId);
+      if (edge) {
+        const poly = computeEdgePolyline(nodesRef.current, edge);
+        const hit = hitTestWirePolyline(poly, point, {
+          tipWire:
+            nodesRef.current.find((n) => n.id === edge.source)?.data.kind === "TIP" ||
+            nodesRef.current.find((n) => n.id === edge.target)?.data.kind === "TIP",
+        });
+        if (hit?.kind === "segment") segIndex = hit.segIndex;
+        else if (hit?.kind === "corner") {
+          segIndex = Math.max(0, Math.min(poly.length - 2, hit.polyIndex - 1));
+        } else if (poly.length >= 2) {
+          // Fallback: nearest segment.
+          let best = 0;
+          let bestD = Infinity;
+          for (let i = 0; i < poly.length - 1; i++) {
+            const a = poly[i]!;
+            const b = poly[i + 1]!;
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const lenSq = dx * dx + dy * dy;
+            const t =
+              lenSq < 0.01
+                ? 0
+                : Math.max(
+                    0,
+                    Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / lenSq),
+                  );
+            const d = Math.hypot(point.x - (a.x + t * dx), point.y - (a.y + t * dy));
+            if (d < bestD) {
+              bestD = d;
+              best = i;
+            }
+          }
+          segIndex = best;
+        }
+      }
+      if (segIndex == null) return;
+
+      setEdges((eds) =>
+        eds.map((e) => {
+          const data = { ...(e.data as object) } as SchematicWireData;
+          delete data.selectedSegIndex;
+          if (e.id === edgeId) {
+            return {
+              ...e,
+              selected: true,
+              data: { ...data, selectedSegIndex: segIndex },
+            };
+          }
+          return e.selected || (e.data as SchematicWireData | undefined)?.selectedSegIndex != null
+            ? { ...e, selected: false, data }
+            : e;
+        }),
+      );
       setNodes((ns) => ns.map((n) => (n.selected ? { ...n, selected: false } : n)));
     },
     [setEdges, setNodes],
   );
 
-  /** RF can select several overlapping edges at a junction — coerce to one. */
+  /** RF can select several overlapping edges at a junction — coerce to one.
+   * Whole-edge select is ignored: segment select must go through onSelectEdge
+   * (needs a click point). Marquee uses onSelectRegion directly. */
   const handleEdgesChange = useCallback(
     (changes: Parameters<typeof onEdgesChange>[0]) => {
-      const selecting = changes.filter(
-        (c): c is { type: "select"; id: string; selected: boolean } =>
-          c.type === "select" && c.selected === true,
-      );
-      const rest = changes.filter((c) => c.type !== "select");
-      if (selecting.length) {
-        const id = selecting[selecting.length - 1]!.id;
-        setEdges((eds) => eds.map((e) => ({ ...e, selected: e.id === id })));
-        setNodes((ns) => ns.map((n) => (n.selected ? { ...n, selected: false } : n)));
-        if (rest.length) onEdgesChange(rest);
-        return;
-      }
-      onEdgesChange(changes);
+      const rest = changes.filter((c) => {
+        if (c.type !== "select") return true;
+        // Allow deselect; ignore select-true (would paint the whole snake amber).
+        return c.selected === false;
+      });
+      if (rest.length) onEdgesChange(rest);
     },
-    [onEdgesChange, setEdges, setNodes],
+    [onEdgesChange],
   );
 
   const onCutMoveRegion = useCallback((rect: FlowRect) => {
@@ -860,11 +827,21 @@ export default function App() {
 
       if (!hit.size && !coveredEdges.size && !additive) {
         setNodes((cur) => cur.map((n) => (n.selected ? { ...n, selected: false } : n)));
-        setEdges((cur) => cur.map((e) => (e.selected ? { ...e, selected: false } : e)));
+        setEdges((cur) =>
+          cur.map((e) => {
+            if (!e.selected && (e.data as SchematicWireData | undefined)?.selectedSegIndex == null) {
+              return e;
+            }
+            const data = { ...(e.data as object) } as SchematicWireData;
+            delete data.selectedSegIndex;
+            return { ...e, selected: false, data };
+          }),
+        );
         return;
       }
       if (!hit.size && !coveredEdges.size) return;
 
+      lastWireClickRef.current = null;
       setNodes((cur) =>
         cur.map((n) => {
           if (n.data.kind === "TIP") {
@@ -875,10 +852,16 @@ export default function App() {
           return n.selected === next ? n : { ...n, selected: next };
         }),
       );
+      // Marquee = whole wires (no segment highlight).
       setEdges((cur) =>
         cur.map((e) => {
           const next = coveredEdges.has(e.id) || (additive && e.selected);
-          return e.selected === next ? e : { ...e, selected: next };
+          const data = { ...(e.data as object) } as SchematicWireData;
+          delete data.selectedSegIndex;
+          if (e.selected === next && (e.data as SchematicWireData | undefined)?.selectedSegIndex == null) {
+            return e;
+          }
+          return { ...e, selected: next, data };
         }),
       );
     },
@@ -1398,6 +1381,56 @@ export default function App() {
       setCanvasMode("delete");
       return;
     }
+
+    // Free-wire snakes are one edge. Delete on a tip/spur must trim that stub —
+    // not wipe the whole orange path the user thought was "one small wire".
+    const selectedTips = nodesNow.filter(
+      (n) => n.selected && n.data.kind === "TIP",
+    );
+    if (
+      selectedTips.length === 1 &&
+      selectedNodeIds.every((id) => selectedTips.some((t) => t.id === id))
+    ) {
+      const tip = selectedTips[0]!;
+      const tipEdge =
+        edgesNow.find(
+          (e) =>
+            (selectedEdgeIds.length === 0 || selectedEdgeIds.includes(e.id)) &&
+            (e.source === tip.id || e.target === tip.id),
+        ) ?? edgesNow.find((e) => e.source === tip.id || e.target === tip.id);
+      if (tipEdge) {
+        const tipPt = pinWorldPoint(tip, "t") ?? {
+          x: tip.position.x,
+          y: tip.position.y + 4,
+        };
+        deleteEdgeWithToolRef.current(tipEdge.id, tipPt);
+        return;
+      }
+    }
+
+    if (selectedEdgeIds.length === 1 && selectedNodeIds.length === 0) {
+      const edgeId = selectedEdgeIds[0]!;
+      const edge = edgesNow.find((e) => e.id === edgeId);
+      const segIdx = (edge?.data as SchematicWireData | undefined)?.selectedSegIndex;
+      if (edge && typeof segIdx === "number") {
+        // Exact segment index — never wipe the whole free-wire snake.
+        const plan = planDeleteSelectedSegment(nodesNow, edgesNow, edgeId, segIdx);
+        if (plan) {
+          deleteEdgeWithToolRef.current(edgeId, undefined, plan);
+          return;
+        }
+      }
+      const click =
+        lastWireClickRef.current?.edgeId === edgeId
+          ? lastWireClickRef.current.point
+          : undefined;
+      if (edge && click) {
+        deleteEdgeWithToolRef.current(edgeId, click);
+        return;
+      }
+      // Whole-edge selection (marquee / no segment): delete that one edge only.
+    }
+
     pushHistory();
     const dropNodes = new Set(selectedNodeIds);
     const dropEdges = new Set(selectedEdgeIds);
@@ -1416,9 +1449,26 @@ export default function App() {
 
   const deleteNodeWithTool = useCallback((nodeId: string) => {
     const nodesNow = nodesRef.current;
-    if (!nodesNow.some((node) => node.id === nodeId)) return;
+    const node = nodesNow.find((n) => n.id === nodeId);
+    if (!node) return;
+
+    // TIP on a long free wire: scissors at the tip (trim stub), never drop the rail.
+    if (node.data.kind === "TIP") {
+      const tipEdge = edgesRef.current.find(
+        (e) => e.source === nodeId || e.target === nodeId,
+      );
+      if (tipEdge) {
+        const tipPt = pinWorldPoint(node, "t") ?? {
+          x: node.position.x,
+          y: node.position.y + 4,
+        };
+        deleteEdgeWithToolRef.current(tipEdge.id, tipPt);
+        return;
+      }
+    }
+
     pushHistory();
-    const nextNodes = nodesNow.filter((node) => node.id !== nodeId);
+    const nextNodes = nodesNow.filter((n) => n.id !== nodeId);
     const nextEdges = edgesRef.current.filter(
       (edge) => edge.source !== nodeId && edge.target !== nodeId,
     );
@@ -1428,12 +1478,17 @@ export default function App() {
     setEdges(collapsed.edges);
   }, [setNodes, setEdges, pushHistory]);
 
-  const deleteEdgeWithTool = useCallback((edgeId: string, clickPoint?: Point) => {
+  const deleteEdgeWithTool = useCallback((
+    edgeId: string,
+    clickPoint?: Point,
+    forcedPlan?: ScissorDeletePlan,
+  ) => {
     const edgesNow = edgesRef.current;
     const nodesNow = nodesRef.current;
     if (!edgesNow.some((edge) => edge.id === edgeId)) return;
 
-    let plan = planScissorWireDelete(nodesNow, edgesNow, edgeId, clickPoint);
+    let plan =
+      forcedPlan ?? planScissorWireDelete(nodesNow, edgesNow, edgeId, clickPoint);
     // Scissors on a normal rail (e.g. pin↔pin): trim logic may refuse; still
     // delete the clicked wire instead of silently no-op + leaving it selected.
     if (!plan) {
@@ -1597,6 +1652,7 @@ export default function App() {
     setNodes(collapsed.nodes);
     setEdges(collapsed.edges);
   }, [setNodes, setEdges, pushHistory]);
+  deleteEdgeWithToolRef.current = deleteEdgeWithTool;
 
   /** Delete-mode scissors on a junction square or crossing ring. */
   const deleteWireMarkWithTool = useCallback(
@@ -1637,12 +1693,27 @@ export default function App() {
         return;
       }
 
-      // Crossing ring is only a visual "not joined" mark. Hide it; do not
-      // split or delete either wire.
+      // Crossing hop: if either rail is a short free stub, delete that stub.
+      // Otherwise only hide the visual hop (wires stay).
       setHiddenCrossingKeys((prev) => {
         const k = wireMarkKey(point);
         return prev.includes(k) ? prev : [...prev, k];
       });
+      const ids = meta?.edgeIds;
+      if (ids?.length) {
+        const stub = ids
+          .map((id) => edgesNow.find((e) => e.id === id))
+          .filter((e): e is Edge => Boolean(e))
+          .find(
+            (e) =>
+              isShortDanglingStub(nodesNow, edgesNow, e, 96) ||
+              isFullyDanglingLeftover(nodesNow, edgesNow, e, 96),
+          );
+        if (stub) {
+          deleteEdgeWithToolRef.current(stub.id, point);
+          return;
+        }
+      }
     },
     [setNodes, setEdges, pushHistory],
   );
@@ -1697,10 +1768,22 @@ export default function App() {
       candidate.id === edge!.id
         ? {
             ...candidate,
-            data: { ...(candidate.data as object), waypoints: result.waypoints },
-            selected: true,
+            data: {
+              ...(candidate.data as object),
+              waypoints: result.waypoints,
+              selectedSegIndex: undefined,
+            },
+            selected: false,
           }
-        : { ...candidate, selected: false },
+        : {
+            ...candidate,
+            selected: false,
+            data: (() => {
+              const data = { ...(candidate.data as object) } as SchematicWireData;
+              delete data.selectedSegIndex;
+              return data;
+            })(),
+          },
     );
 
     // Part nudge to kill a 1–2 grid stair: re-route every wire on that part.
@@ -1708,7 +1791,17 @@ export default function App() {
       const finalized = finalizeConnectedPartMove(nextNodes, nextEdges, movedPartIds);
       nextNodes = finalized.nodes;
       nextEdges = finalized.edges.map((candidate) =>
-        candidate.id === edge!.id ? { ...candidate, selected: true } : candidate,
+        candidate.id === edge!.id
+          ? {
+              ...candidate,
+              selected: false,
+              data: (() => {
+                const data = { ...(candidate.data as object) } as SchematicWireData;
+                delete data.selectedSegIndex;
+                return data;
+              })(),
+            }
+          : candidate,
       );
     }
 
@@ -2621,8 +2714,16 @@ export default function App() {
   }, []);
 
   const applyTextEdit = useCallback(() => {
-    pushHistory();
     const result = applyNetlistToGraph(nodes, edges, draftNetlist);
+
+    // Foreign / unsafe paste: never touch history or the live graph.
+    if (result.rejected) {
+      setNetlistStatusError(true);
+      setNetlistStatus(`Error: ${result.rejected}`);
+      return;
+    }
+
+    pushHistory();
     setNodes(result.nodes);
     setEdges(result.edges);
     syncIdCounter(result.nodes, idCounter);
@@ -2645,7 +2746,7 @@ export default function App() {
     if (result.rewired) parts.push("wires rebuilt from nets");
 
     if (errors.length) {
-      // Keep the user's draft visible so they can fix syntax / unknown parts.
+      // Graph already updated for recognized devices; keep draft so user can fix unknowns.
       setNetlistStatusError(true);
       setNetlistStatus(`Error: ${errors.join(" · ")}${parts.length ? ` · ${parts.join(" · ")}` : ""}`);
       return;
@@ -2728,6 +2829,19 @@ export default function App() {
       setNetlistStatus("restored starter circuit (examples/demo-circuit.json)");
     } catch (e) {
       setNetlistStatus(`restore failed: ${e instanceof Error ? e.message : "error"}`);
+    }
+  }, [pushHistory, restore]);
+
+  /** Optional example — does not replace starter; undo via history. */
+  const onLoadHbridgeExample = useCallback(() => {
+    try {
+      pushHistory();
+      restore(parseCircuitFile(hbridgeSimplifiedCircuit));
+      setNetlistStatus(
+        "loaded H-bridge example (examples/hbridge-simplified.json) — simplified PWM, toy SIC_MOS",
+      );
+    } catch (e) {
+      setNetlistStatus(`H-bridge load failed: ${e instanceof Error ? e.message : "error"}`);
     }
   }, [pushHistory, restore]);
 
@@ -2857,6 +2971,14 @@ export default function App() {
           <button type="button" className="ghost-btn" onClick={onLoadClick} title="Open circuit JSON (Ctrl+O)">Open</button>
           <button type="button" className="ghost-btn" onClick={onRestoreStarter} title="Reload the starter schematic">
             Restore starter
+          </button>
+          <button
+            type="button"
+            className="ghost-btn"
+            onClick={onLoadHbridgeExample}
+            title="Load simplified H-bridge example (does not change the default starter)"
+          >
+            Load H-bridge
           </button>
           <button type="button" className="ghost-btn" onClick={() => setShowLibrary((v) => !v)}>
             {showLibrary ? "Hide models" : "Models"}

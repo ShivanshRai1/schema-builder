@@ -359,18 +359,27 @@ export function findNearestWireHit(
   excludeEdgeIds?: Set<string>,
 ): WireHit | null {
   let best: WireHit | null = null;
+  let bestLen = Infinity;
   for (const edge of edges) {
     if (excludeEdgeIds?.has(edge.id)) continue;
     const poly = computeEdgePolyline(nodes, edge);
     if (poly.length < 2) continue;
     const d = distToPolyline(poly, cursor);
     if (d > maxDist) continue;
-    if (best && d >= best.dist) continue;
+    let len = 0;
+    for (let i = 0; i < poly.length - 1; i++) {
+      len += Math.hypot(poly[i + 1]!.x - poly[i]!.x, poly[i + 1]!.y - poly[i]!.y);
+    }
+    // At a hop/crossing both wires sit under the cursor (same dist). Prefer the
+    // shorter edge so a tiny stub is scissors-selected instead of the long rail.
+    if (best && d > best.dist + 0.5) continue;
+    if (best && Math.abs(d - best.dist) <= 0.5 && len >= bestLen - 0.5) continue;
     best = {
       edgeId: edge.id,
       point: closestPointOnPolyline(poly, cursor, grid),
       dist: d,
     };
+    bestLen = len;
   }
   return best;
 }

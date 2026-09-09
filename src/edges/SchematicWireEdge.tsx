@@ -15,6 +15,9 @@ import type { ComponentData } from "../model/types";
 
 export type SchematicWireData = {
   waypoints?: Point[];
+  /** Click-selected H/V run only (not the whole snake). Marquee leaves this unset. */
+  selectedSegIndex?: number;
+  directPath?: boolean;
 };
 
 export type SchematicWireEdgeType = Edge<SchematicWireData>;
@@ -85,6 +88,43 @@ export function SchematicWireEdge({
           fallbackPoint(targetX, targetY),
         ]);
   const path = polylinePath(points);
+  const segIdx = data?.selectedSegIndex;
+  const segmentOnly =
+    selected &&
+    typeof segIdx === "number" &&
+    segIdx >= 0 &&
+    segIdx < points.length - 1;
+
+  if (segmentOnly) {
+    const a = points[segIdx]!;
+    const b = points[segIdx + 1]!;
+    const segPath = polylinePath([a, b]);
+    return (
+      <>
+        <BaseEdge
+          id={id}
+          path={path}
+          markerEnd={markerEnd}
+          interactionWidth={32}
+          style={{
+            ...style,
+            stroke: "var(--wire)",
+            strokeWidth: 1.75,
+          }}
+        />
+        <BaseEdge
+          id={`${id}-seg`}
+          path={segPath}
+          interactionWidth={32}
+          style={{
+            ...style,
+            stroke: "var(--wire-selected)",
+            strokeWidth: 2.6,
+          }}
+        />
+      </>
+    );
+  }
 
   return (
     <BaseEdge

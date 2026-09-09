@@ -6,6 +6,7 @@ import {
   cleanEdgeTrailingNubs,
   isDanglingOrTrailingEdge,
   normalizeWires,
+  planDeleteSelectedSegment,
   planScissorWireDelete,
   removeDanglingOrTrailingEdges,
   trimEdgeEndsToJoins,
@@ -129,16 +130,26 @@ assert(cleaned.changed, "cleanEdgeTrailingNubs should change L-nub wire");
   assert(plan?.action === "delete", "stub click deletes");
   assert(plan && plan.action === "delete" && plan.edgeId === "STUB", "deletes stub not rail");
 
-  // Floating tip↔tip scrap (both free): scissors wipe the whole leftover.
-  // (Previously this trimmed a nub and left more fragments.)
+  // Floating tip↔tip scrap (both free): short leftovers wipe; long snakes open-cut.
   const A = tip("A", 40, 160);
   const B = tip("B", 220, 200);
   const n2 = [A, B];
   const es2 = [edge("LONG", "A", "B", [{ x: 220, y: 160 }])];
   const wipe = planScissorWireDelete(n2, es2, "LONG", { x: 220, y: 190 });
-  assert(wipe?.action === "delete", "floating tip↔tip leftover deletes");
   assert(
-    wipe && wipe.action === "delete" && wipe.edgeId === "LONG",
+    wipe?.action === "cutOpen" || wipe?.action === "trimTip",
+    `long free tip↔tip open-cuts/trims, does not wipe (got ${wipe?.action})`,
+  );
+
+  // Short floating tip↔tip scrap still wipes.
+  const S1 = tip("S1", 40, 160);
+  const S2 = tip("S2", 80, 160);
+  const nShort = [S1, S2];
+  const esShort = [edge("SHORT", "S1", "S2")];
+  const shortWipe = planScissorWireDelete(nShort, esShort, "SHORT", { x: 60, y: 160 });
+  assert(shortWipe?.action === "delete", "short floating tip↔tip leftover deletes");
+  assert(
+    shortWipe && shortWipe.action === "delete" && shortWipe.edgeId === "SHORT",
     "deletes the floating scrap edge",
   );
 
@@ -157,7 +168,7 @@ assert(cleaned.changed, "cleanEdgeTrailingNubs should change L-nub wire");
   assert(peel && peel.action === "peelToNewTip" && peel.edgeId === "RAIL2", "peels the rail edge");
 }
 
-// Pin↔free-tip leftover (typical after segment cut): scissors wipe it.
+// Pin↔free-tip leftover (typical after segment cut): short scraps wipe.
 {
   const mk = (
     id: string,
@@ -177,7 +188,8 @@ assert(cleaned.changed, "cleanEdgeTrailingNubs should change L-nub wire");
     measured: { width: 92, height: 54 },
   });
   const r = mk("r", "R", 300, 80);
-  const t = tip("T", 450, 96);
+  // Short stub off the right pin (~32u) — wipe; long intentional pin↔tip open-cuts.
+  const t = tip("T", 380, 107);
   const n = [r, t];
   const es = [
     {
@@ -187,11 +199,11 @@ assert(cleaned.changed, "cleanEdgeTrailingNubs should change L-nub wire");
       sourceHandle: "b",
       target: "T",
       targetHandle: "t",
-      data: { waypoints: [{ x: 450, y: 96 }], directPath: true },
+      data: { waypoints: [], directPath: true },
     } as Edge,
   ];
-  const plan = planScissorWireDelete(n, es, "leftover", { x: 420, y: 96 });
-  assert(plan?.action === "delete", `pin↔tip leftover deletes (got ${plan?.action})`);
+  const plan = planScissorWireDelete(n, es, "leftover", { x: 360, y: 107 });
+  assert(plan?.action === "delete", `short pin↔tip leftover deletes (got ${plan?.action})`);
 }
 
 // Pin↔junction tip (V1 vertical with corner circle): delete that branch.
@@ -398,6 +410,46 @@ assert(cleaned.changed, "cleanEdgeTrailingNubs should change L-nub wire");
       plan2?.action === "delete" ||
       plan2?.action === "trimTip",
     `overhang tip click acts (got ${plan2?.action})`,
+  );
+}
+
+// Selected mid-run on a long free tip↔tip snake: delete that run only.
+{
+  const A = tip("MA", 0, 0);
+  const B = tip("MB", 160, 0);
+  // Battlement: vertical, right, up, right, down, right (many segments).
+  const n = [A, B];
+  const es = [
+    edge("SNAKE", "MA", "MB", [
+      { x: 0, y: 80 },
+      { x: 40, y: 80 },
+      { x: 40, y: 40 },
+      { x: 80, y: 40 },
+      { x: 80, y: 80 },
+      { x: 120, y: 80 },
+      { x: 120, y: 40 },
+      { x: 160, y: 40 },
+      { x: 160, y: 0 },
+    ]),
+  ];
+  const poly = computeEdgePolyline(n, es[0]!);
+  assert(poly.length > 4, "snake has many segments");
+  // Delete a middle horizontal (index 3: (40,40)-(80,40)).
+  const plan = planDeleteSelectedSegment(n, es, "SNAKE", 3);
+  assert(plan?.action === "cutOpen", `selected segment open-cuts (got ${plan?.action})`);
+  if (plan?.action === "cutOpen") {
+    assert(plan.beforePoly != null && plan.afterPoly != null, "both remnants kept");
+    assert(
+      plan.beforePoly!.length >= 2 && plan.afterPoly!.length >= 2,
+      "remnants are real paths",
+    );
+  }
+  // Scissors click mid-snake must not wipe either.
+  const mid = { x: 60, y: 40 };
+  const clickPlan = planScissorWireDelete(n, es, "SNAKE", mid);
+  assert(
+    clickPlan?.action === "cutOpen",
+    `scissors mid-snake open-cuts (got ${clickPlan?.action})`,
   );
 }
 

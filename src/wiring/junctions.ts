@@ -97,9 +97,9 @@ export type CrossingMark = Point & {
 };
 
 export type WireMarks = {
-  /** Filled square — wires are on the same net and truly join here. */
+  /** Filled square — real join (shared tip / T onto a rail). */
   junctions: JunctionMark[];
-  /** Visual hop — wires cross but are on different nets (not connected). */
+  /** Visual hop — wires cross mid-segment (passing, not joined there). */
   crossings: CrossingMark[];
 };
 
@@ -152,10 +152,34 @@ function branchPointFromPin(pin: Point, polys: Point[][]): Point | null {
 }
 
 /**
+ * Tip of a single polyline lands on an earlier segment of the same wire
+ * (self-T). Excludes the segment(s) incident to that tip.
+ */
+function selfJoinOnOwnRail(pts: Point[]): Point | null {
+  if (pts.length < 4) return null;
+  for (const atStart of [true, false] as const) {
+    const tip = atStart ? pts[0]! : pts[pts.length - 1]!;
+    // Segments not adjacent to this tip.
+    const iLo = atStart ? 1 : 0;
+    const iHi = atStart ? pts.length - 2 : pts.length - 3;
+    for (let i = iLo; i <= iHi; i++) {
+      const a = pts[i]!;
+      const b = pts[i + 1]!;
+      if (onInterior(tip, a, b)) return tip;
+      // Landed exactly on a bend that isn't next to the tip.
+      if (near(tip, a) && !(atStart && i <= 1) && !(!atStart && i >= pts.length - 2)) {
+        return a;
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Find every point where wires meet or cross:
- * - Same net: shared TIP join or T/+ junction → filled square.
- * - Different net: wires cross visually → hop bump so it's obvious they
- *   are NOT connected.
+ * - Real join (shared TIP, T-end on a rail, multi-wire pin split) → filled square.
+ * - Mid-segment X (wires pass through each other) → hop bump, even on the
+ *   same net — a square there falsely looks like a deliberate junction.
  * Component pins already have squares via CSS, so they are skipped for
  * junction marks but NOT for crossing marks (a crossing at a pin is still
  * useful to show).
@@ -284,6 +308,15 @@ export function findWireJunctions(
     nodes.filter((n) => n.data.kind === "WIRELABEL").map((n) => n.id),
   );
 
+  // One wire ends on its own earlier run (draw down, across, then T back onto
+  // the rail). Pair-wise edge checks never see this — same polyline. Mark a
+  // filled square so the join is visible (LTspice-like).
+  for (const { edge, pts } of edgePolys) {
+    if (labelNodeIds.has(edge.source) || labelNodeIds.has(edge.target)) continue;
+    const join = selfJoinOnOwnRail(pts);
+    if (join) addJ(join);
+  }
+
   // Wire-pair comparisons.
   for (let i = 0; i < edgePolys.length; i++) {
     for (let j = i + 1; j < edgePolys.length; j++) {
@@ -350,10 +383,12 @@ export function findWireJunctions(
           const onAEnd = aEnds.some((p) => near(hit, p));
           const onBEnd = bEnds.some((p) => near(hit, p));
           if (onAEnd && onBEnd) continue; // shared endpoint already at pin/tip
-          // Mid-mid cross
+          // Mid-mid cross = wires pass through each other → always a hop.
+          // Filled squares are only for real joins (shared tip / T-end on a rail).
+          // Same-net mid-crosses used to draw squares and looked “connected”
+          // when the user only meant a visual pass.
           if (onInterior(hit, a1, a2) && onInterior(hit, b1, b2)) {
-            if (sameNet) addJ(hit);
-            else addC(hit, pair, hop);
+            addC(hit, pair, hop);
             continue;
           }
           // Endpoint of one on interior of the other (caught above too, but
@@ -366,6 +401,37 @@ export function findWireJunctions(
             else addC(hit, pair, hop);
           }
         }
+      }
+    }
+  }
+
+  // Same-wire self-cross (one polyline snakes over itself): always a hop —
+  // there is no join node at that X, so it must not look connected.
+  for (const { edge, pts } of edgePolys) {
+    if (labelNodeIds.has(edge.source) || labelNodeIds.has(edge.target)) continue;
+    if (pts.length < 4) continue;
+    for (let s = 0; s < pts.length - 1; s++) {
+      for (let t = s + 2; t < pts.length - 1; t++) {
+        const a1 = pts[s]!;
+        const a2 = pts[s + 1]!;
+        const b1 = pts[t]!;
+        const b2 = pts[t + 1]!;
+        // Skip segments that share an endpoint (U-turn fold).
+        if (
+          near(a1, b1) ||
+          near(a1, b2) ||
+          near(a2, b1) ||
+          near(a2, b2)
+        ) {
+          continue;
+        }
+        const hit = orthoCross(a1, a2, b1, b2);
+        if (!hit) continue;
+        if (!onInterior(hit, a1, a2) || !onInterior(hit, b1, b2)) continue;
+        const aH = Math.abs(a1.y - a2.y) < 0.6;
+        const bH = Math.abs(b1.y - b2.y) < 0.6;
+        const hop: "h" | "v" = aH || bH ? "h" : "v";
+        addC(hit, [edge.id, edge.id], hop);
       }
     }
   }

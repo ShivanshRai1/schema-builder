@@ -932,38 +932,10 @@ const PALETTE_SECTIONS: { category: Category; kinds: ComponentKind[] }[] = [
 ];
 
 /**
- * Still in COMPONENT_SPECS (circuits / load / netlist work) — just not shown
- * in the left palette until we want them back.
+ * Optional palette suppress list. Empty = show every kind in PALETTE_SECTIONS.
+ * (TIP / WIRELABEL / legacy EAMP stay out because they are not in sections.)
  */
-const PALETTE_HIDDEN = new Set<ComponentKind>([
-  // Passives / RF extras
-  "CMMC",
-  "FBEAD",
-  "ANT",
-  "PB",
-  // Inductor
-  "XFMR",
-  // Entire Math section
-  "MATH_CONST",
-  "MATH_SUM",
-  "MATH_PROD",
-  "MATH_GAIN",
-  "MATH_REL",
-  "MATH_LOGIC",
-  // Entire Flipflop section
-  "DFF",
-  "JKFF",
-  "SRFF",
-  "TFF",
-  // Entire Thyristor section
-  "DIAC",
-  "GTO",
-  "SCR",
-  "SCR_PH",
-  "SCS",
-  "SIDAC",
-  "TRIAC",
-]);
+const PALETTE_HIDDEN = new Set<ComponentKind>([]);
 
 export function isPaletteHidden(kind: ComponentKind): boolean {
   return PALETTE_HIDDEN.has(kind);

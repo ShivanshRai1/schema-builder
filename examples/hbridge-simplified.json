@@ -1,0 +1,764 @@
+{
+  "format": "simulai-schematic",
+  "version": 1,
+  "savedAt": "2026-09-09T19:28:57.611Z",
+  "nodes": [
+    {
+      "id": "vin",
+      "type": "component",
+      "position": {
+        "x": 48,
+        "y": 160
+      },
+      "data": {
+        "kind": "BATTERY",
+        "refdes": "Vin",
+        "params": {
+          "dc": "48",
+          "rser": ""
+        },
+        "rotation": 0
+      }
+    },
+    {
+      "id": "gnd",
+      "type": "component",
+      "position": {
+        "x": 320,
+        "y": 480
+      },
+      "data": {
+        "kind": "GND",
+        "refdes": "",
+        "params": {},
+        "rotation": 0
+      }
+    },
+    {
+      "id": "q1",
+      "type": "component",
+      "position": {
+        "x": 192,
+        "y": 48
+      },
+      "data": {
+        "kind": "SICMOS",
+        "refdes": "XQ1",
+        "params": {
+          "model": "SIC_MOS"
+        },
+        "rotation": 0
+      }
+    },
+    {
+      "id": "q3",
+      "type": "component",
+      "position": {
+        "x": 512,
+        "y": 48
+      },
+      "data": {
+        "kind": "SICMOS",
+        "refdes": "XQ3",
+        "params": {
+          "model": "SIC_MOS"
+        },
+        "rotation": 0
+      }
+    },
+    {
+      "id": "q4",
+      "type": "component",
+      "position": {
+        "x": 192,
+        "y": 288
+      },
+      "data": {
+        "kind": "SICMOS",
+        "refdes": "XQ4",
+        "params": {
+          "model": "SIC_MOS"
+        },
+        "rotation": 0
+      }
+    },
+    {
+      "id": "q2",
+      "type": "component",
+      "position": {
+        "x": 512,
+        "y": 288
+      },
+      "data": {
+        "kind": "SICMOS",
+        "refdes": "XQ2",
+        "params": {
+          "model": "SIC_MOS"
+        },
+        "rotation": 0
+      }
+    },
+    {
+      "id": "lout",
+      "type": "component",
+      "position": {
+        "x": 336,
+        "y": 200
+      },
+      "data": {
+        "kind": "L",
+        "refdes": "Lout",
+        "params": {
+          "value": "1m",
+          "ic": ""
+        },
+        "rotation": 90
+      }
+    },
+    {
+      "id": "rload",
+      "type": "component",
+      "position": {
+        "x": 432,
+        "y": 200
+      },
+      "data": {
+        "kind": "R",
+        "refdes": "R",
+        "params": {
+          "value": "10"
+        },
+        "rotation": 90
+      }
+    },
+    {
+      "id": "vg1",
+      "type": "component",
+      "position": {
+        "x": -160,
+        "y": 64
+      },
+      "data": {
+        "kind": "VPULSE",
+        "refdes": "Vg1",
+        "params": {
+          "vinitial": "0",
+          "von": "10",
+          "tdelay": "0",
+          "trise": "10n",
+          "tfall": "10n",
+          "ton": "20u",
+          "tperiod": "50u"
+        },
+        "rotation": 0
+      }
+    },
+    {
+      "id": "vg2",
+      "type": "component",
+      "position": {
+        "x": -160,
+        "y": 304
+      },
+      "data": {
+        "kind": "VPULSE",
+        "refdes": "Vg2",
+        "params": {
+          "vinitial": "0",
+          "von": "10",
+          "tdelay": "25u",
+          "trise": "10n",
+          "tfall": "10n",
+          "ton": "20u",
+          "tperiod": "50u"
+        },
+        "rotation": 0
+      }
+    },
+    {
+      "id": "rg1",
+      "type": "component",
+      "position": {
+        "x": 32,
+        "y": 96
+      },
+      "data": {
+        "kind": "R",
+        "refdes": "Rg1",
+        "params": {
+          "value": "5"
+        },
+        "rotation": 90
+      }
+    },
+    {
+      "id": "rg2",
+      "type": "component",
+      "position": {
+        "x": 32,
+        "y": 240
+      },
+      "data": {
+        "kind": "R",
+        "refdes": "Rg2",
+        "params": {
+          "value": "5"
+        },
+        "rotation": 90
+      }
+    },
+    {
+      "id": "rg3",
+      "type": "component",
+      "position": {
+        "x": 672,
+        "y": 96
+      },
+      "data": {
+        "kind": "R",
+        "refdes": "Rg3",
+        "params": {
+          "value": "5"
+        },
+        "rotation": 90
+      }
+    },
+    {
+      "id": "rg4",
+      "type": "component",
+      "position": {
+        "x": 672,
+        "y": 240
+      },
+      "data": {
+        "kind": "R",
+        "refdes": "Rg4",
+        "params": {
+          "value": "5"
+        },
+        "rotation": 90
+      }
+    },
+    {
+      "id": "lblVin",
+      "type": "component",
+      "position": {
+        "x": 64,
+        "y": 48
+      },
+      "data": {
+        "kind": "WIRELABEL",
+        "refdes": "",
+        "params": {
+          "name": "Vin"
+        },
+        "rotation": 0
+      }
+    },
+    {
+      "id": "lblA",
+      "type": "component",
+      "position": {
+        "x": 256,
+        "y": 176
+      },
+      "data": {
+        "kind": "WIRELABEL",
+        "refdes": "",
+        "params": {
+          "name": "A"
+        },
+        "rotation": 0
+      }
+    },
+    {
+      "id": "lblB",
+      "type": "component",
+      "position": {
+        "x": 560,
+        "y": 176
+      },
+      "data": {
+        "kind": "WIRELABEL",
+        "refdes": "",
+        "params": {
+          "name": "B"
+        },
+        "rotation": 0
+      }
+    },
+    {
+      "id": "prA",
+      "type": "component",
+      "position": {
+        "x": 288,
+        "y": 128
+      },
+      "data": {
+        "kind": "VPROBE",
+        "refdes": "",
+        "params": {},
+        "rotation": 0
+      }
+    },
+    {
+      "id": "prB",
+      "type": "component",
+      "position": {
+        "x": 592,
+        "y": 128
+      },
+      "data": {
+        "kind": "VPROBE",
+        "refdes": "",
+        "params": {},
+        "rotation": 0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-vin-lbl",
+      "type": "schematic",
+      "source": "lblVin",
+      "sourceHandle": "g",
+      "target": "vin",
+      "targetHandle": "p",
+      "data": {
+        "waypoints": [],
+        "directPath": true
+      }
+    },
+    {
+      "id": "e-vin-q1",
+      "type": "schematic",
+      "source": "vin",
+      "sourceHandle": "p",
+      "target": "q1",
+      "targetHandle": "d",
+      "data": {
+        "waypoints": [
+          {
+            "x": 80,
+            "y": 32
+          },
+          {
+            "x": 240,
+            "y": 32
+          }
+        ],
+        "directPath": true
+      }
+    },
+    {
+      "id": "e-vin-q3",
+      "type": "schematic",
+      "source": "vin",
+      "sourceHandle": "p",
+      "target": "q3",
+      "targetHandle": "d",
+      "data": {
+        "waypoints": [
+          {
+            "x": 80,
+            "y": 32
+          },
+          {
+            "x": 560,
+            "y": 32
+          }
+        ],
+        "directPath": true
+      }
+    },
+    {
+      "id": "e-vin-gnd",
+      "type": "schematic",
+      "source": "vin",
+      "sourceHandle": "n",
+      "target": "gnd",
+      "targetHandle": "g",
+      "data": {
+        "waypoints": [
+          {
+            "x": 80,
+            "y": 496
+          }
+        ],
+        "directPath": true
+      }
+    },
+    {
+      "id": "e-q1s-q4d",
+      "type": "schematic",
+      "source": "q1",
+      "sourceHandle": "s",
+      "target": "q4",
+      "targetHandle": "d",
+      "data": {
+        "waypoints": [],
+        "directPath": true
+      }
+    },
+    {
+      "id": "e-a-lbl",
+      "type": "schematic",
+      "source": "lblA",
+      "sourceHandle": "g",
+      "target": "q1",
+      "targetHandle": "s",
+      "data": {
+        "waypoints": [
+          {
+            "x": 256,
+            "y": 192
+          }
+        ],
+        "directPath": true
+      }
+    },
+    {
+      "id": "e-a-pr",
+      "type": "schematic",
+      "source": "prA",
+      "sourceHandle": "p",
+      "target": "q1",
+      "targetHandle": "s",
+      "data": {
+        "waypoints": [
+          {
+            "x": 288,
+            "y": 192
+          }
+        ],
+        "directPath": true
+      }
+    },
+    {
+      "id": "e-a-l",
+      "type": "schematic",
+      "source": "q1",
+      "sourceHandle": "s",
+      "target": "lout",
+      "targetHandle": "a",
+      "data": {
+        "waypoints": [
+          {
+            "x": 256,
+            "y": 192
+          },
+          {
+            "x": 352,
+            "y": 192
+          }
+        ],
+        "directPath": true
+      }
+    },
+    {
+      "id": "e-l-r",
+      "type": "schematic",
+      "source": "lout",
+      "sourceHandle": "b",
+      "target": "rload",
+      "targetHandle": "a",
+      "data": {
+        "waypoints": [],
+        "directPath": true
+      }
+    },
+    {
+      "id": "e-r-b",
+      "type": "schematic",
+      "source": "rload",
+      "sourceHandle": "b",
+      "target": "q3",
+      "targetHandle": "s",
+      "data": {
+        "waypoints": [
+          {
+            "x": 448,
+            "y": 192
+          },
+          {
+            "x": 560,
+            "y": 192
+          }
+        ],
+        "directPath": true
+      }
+    },
+    {
+      "id": "e-b-lbl",
+      "type": "schematic",
+      "source": "lblB",
+      "sourceHandle": "g",
+      "target": "q3",
+      "targetHandle": "s",
+      "data": {
+        "waypoints": [
+          {
+            "x": 560,
+            "y": 192
+          }
+        ],
+        "directPath": true
+      }
+    },
+    {
+      "id": "e-b-pr",
+      "type": "schematic",
+      "source": "prB",
+      "sourceHandle": "p",
+      "target": "q3",
+      "targetHandle": "s",
+      "data": {
+        "waypoints": [
+          {
+            "x": 592,
+            "y": 192
+          }
+        ],
+        "directPath": true
+      }
+    },
+    {
+      "id": "e-q3s-q2d",
+      "type": "schematic",
+      "source": "q3",
+      "sourceHandle": "s",
+      "target": "q2",
+      "targetHandle": "d",
+      "data": {
+        "waypoints": [],
+        "directPath": true
+      }
+    },
+    {
+      "id": "e-q4s-gnd",
+      "type": "schematic",
+      "source": "q4",
+      "sourceHandle": "s",
+      "target": "gnd",
+      "targetHandle": "g",
+      "data": {
+        "waypoints": [
+          {
+            "x": 240,
+            "y": 496
+          }
+        ],
+        "directPath": true
+      }
+    },
+    {
+      "id": "e-q2s-gnd",
+      "type": "schematic",
+      "source": "q2",
+      "sourceHandle": "s",
+      "target": "gnd",
+      "targetHandle": "g",
+      "data": {
+        "waypoints": [
+          {
+            "x": 560,
+            "y": 496
+          }
+        ],
+        "directPath": true
+      }
+    },
+    {
+      "id": "e-vg1-gnd",
+      "type": "schematic",
+      "source": "vg1",
+      "sourceHandle": "n",
+      "target": "gnd",
+      "targetHandle": "g",
+      "data": {
+        "waypoints": [
+          {
+            "x": -128,
+            "y": 496
+          }
+        ],
+        "directPath": true
+      }
+    },
+    {
+      "id": "e-vg1-rg1",
+      "type": "schematic",
+      "source": "vg1",
+      "sourceHandle": "p",
+      "target": "rg1",
+      "targetHandle": "a",
+      "data": {
+        "waypoints": [
+          {
+            "x": -128,
+            "y": 80
+          }
+        ],
+        "directPath": true
+      }
+    },
+    {
+      "id": "e-rg1-q1",
+      "type": "schematic",
+      "source": "rg1",
+      "sourceHandle": "b",
+      "target": "q1",
+      "targetHandle": "g",
+      "data": {
+        "waypoints": [],
+        "directPath": true
+      }
+    },
+    {
+      "id": "e-vg1-rg2",
+      "type": "schematic",
+      "source": "vg1",
+      "sourceHandle": "p",
+      "target": "rg2",
+      "targetHandle": "a",
+      "data": {
+        "waypoints": [
+          {
+            "x": -128,
+            "y": 80
+          },
+          {
+            "x": -128,
+            "y": 256
+          }
+        ],
+        "directPath": true
+      }
+    },
+    {
+      "id": "e-rg2-q2",
+      "type": "schematic",
+      "source": "rg2",
+      "sourceHandle": "b",
+      "target": "q2",
+      "targetHandle": "g",
+      "data": {
+        "waypoints": [
+          {
+            "x": 80,
+            "y": 256
+          },
+          {
+            "x": 80,
+            "y": 360
+          },
+          {
+            "x": 512,
+            "y": 360
+          }
+        ],
+        "directPath": true
+      }
+    },
+    {
+      "id": "e-vg2-gnd",
+      "type": "schematic",
+      "source": "vg2",
+      "sourceHandle": "n",
+      "target": "gnd",
+      "targetHandle": "g",
+      "data": {
+        "waypoints": [
+          {
+            "x": -128,
+            "y": 496
+          }
+        ],
+        "directPath": true
+      }
+    },
+    {
+      "id": "e-vg2-rg3",
+      "type": "schematic",
+      "source": "vg2",
+      "sourceHandle": "p",
+      "target": "rg3",
+      "targetHandle": "a",
+      "data": {
+        "waypoints": [
+          {
+            "x": -128,
+            "y": 320
+          },
+          {
+            "x": 704,
+            "y": 320
+          },
+          {
+            "x": 704,
+            "y": 80
+          }
+        ],
+        "directPath": true
+      }
+    },
+    {
+      "id": "e-rg3-q3",
+      "type": "schematic",
+      "source": "rg3",
+      "sourceHandle": "b",
+      "target": "q3",
+      "targetHandle": "g",
+      "data": {
+        "waypoints": [],
+        "directPath": true
+      }
+    },
+    {
+      "id": "e-vg2-rg4",
+      "type": "schematic",
+      "source": "vg2",
+      "sourceHandle": "p",
+      "target": "rg4",
+      "targetHandle": "a",
+      "data": {
+        "waypoints": [
+          {
+            "x": -128,
+            "y": 320
+          },
+          {
+            "x": 704,
+            "y": 320
+          }
+        ],
+        "directPath": true
+      }
+    },
+    {
+      "id": "e-rg4-q4",
+      "type": "schematic",
+      "source": "rg4",
+      "sourceHandle": "b",
+      "target": "q4",
+      "targetHandle": "g",
+      "data": {
+        "waypoints": [
+          {
+            "x": 704,
+            "y": 256
+          },
+          {
+            "x": 192,
+            "y": 256
+          }
+        ],
+        "directPath": true
+      }
+    }
+  ],
+  "directives": [
+    ".tran 1u 500u",
+    ".options reltol=1e-3"
+  ]
+}

@@ -6,6 +6,13 @@ import type { Point } from "./orthogonal";
 import { computeEdgePolyline, polylineToStoredWaypoints } from "./wireGeometry";
 import { collapseMicroBends } from "./wireMove";
 
+function polyLen(poly: Point[]): number {
+  let n = 0;
+  for (let i = 0; i < poly.length - 1; i++) {
+    n += Math.hypot(poly[i + 1]!.x - poly[i]!.x, poly[i + 1]!.y - poly[i]!.y);
+  }
+  return n;
+}
 /**
  * Remove TIP nodes that have no edges, and strip tip-edges attached to a
  * specific real pin so a new direct wire can replace the dangling stub.
@@ -272,7 +279,11 @@ function orientPolyFromTip<T>(poly: T[], tipAtStart: boolean): T[] {
 /**
  * After deleting a branch off a mid-wire join, the rail is often left as
  * leftHalf—TIP—rightHalf (degree 2). That still draws a junction square.
- * Merge every degree-2 TIP into a single continuous edge so the mark goes away.
+ * Merge only *straight* pass-through tips (colinear H or V through the tip).
+ *
+ * Do NOT merge L-corners of free tip↔tip wires (deg 2 at a bend) — those are
+ * intentional geometry. Collapsing them used to cascade into self-loop drops
+ * and wipe almost an entire free-wire drawing on one scissors click.
  */
 export function collapsePassThroughTips(
   nodes: Node<ComponentData>[],
@@ -282,40 +293,66 @@ export function collapsePassThroughTips(
   let nextEdges = edges;
   let merged = 0;
   let guard = 0;
+  const skipTips = new Set<string>();
 
   while (guard++ < 64) {
     const deg = tipDegree(nextEdges);
     const tip = nextNodes.find(
-      (n) => n.data.kind === "TIP" && (deg.get(n.id) ?? 0) === 2,
+      (n) =>
+        n.data.kind === "TIP" &&
+        (deg.get(n.id) ?? 0) === 2 &&
+        !skipTips.has(n.id),
     );
     if (!tip) break;
 
     const pair = nextEdges.filter((e) => e.source === tip.id || e.target === tip.id);
-    if (pair.length !== 2) break;
+    if (pair.length !== 2) {
+      skipTips.add(tip.id);
+      continue;
+    }
     const e1 = pair[0]!;
     const e2 = pair[1]!;
     const a = otherEnd(e1, tip.id);
     const b = otherEnd(e2, tip.id);
-    if (!a || !b || a.nodeId === tip.id || b.nodeId === tip.id) break;
+    if (!a || !b || a.nodeId === tip.id || b.nodeId === tip.id) {
+      skipTips.add(tip.id);
+      continue;
+    }
 
-    // Degenerate self-loop through tip — drop both edges + tip.
+    // Digon (two edges tip↔same end): keep the longer path, drop the shorter.
+    // Never drop both — that wiped wires after tip-extend onto the same rail.
     if (a.nodeId === b.nodeId && a.handle === b.handle) {
-      nextEdges = nextEdges.filter((e) => e.id !== e1.id && e.id !== e2.id);
-      nextNodes = nextNodes.filter((n) => n.id !== tip.id);
+      const p1 = computeEdgePolyline(nextNodes, e1);
+      const p2 = computeEdgePolyline(nextNodes, e2);
+      const dropId = polyLen(p1) >= polyLen(p2) ? e2.id : e1.id;
+      nextEdges = nextEdges.filter((e) => e.id !== dropId);
+      skipTips.add(tip.id);
       merged++;
       continue;
     }
 
     const poly1raw = computeEdgePolyline(nextNodes, e1);
     const poly2raw = computeEdgePolyline(nextNodes, e2);
-    if (poly1raw.length < 2 || poly2raw.length < 2) break;
+    if (poly1raw.length < 2 || poly2raw.length < 2) {
+      skipTips.add(tip.id);
+      continue;
+    }
 
     const poly1 = orientPolyTowardTip(poly1raw, e1.source === tip.id);
     const poly2 = orientPolyFromTip(poly2raw, e2.source === tip.id);
 
+    // L-bend / tee corner: keep the tip. Only collapse a straight through-run.
+    if (!isStraightPassThrough(poly1, poly2)) {
+      skipTips.add(tip.id);
+      continue;
+    }
+
     // A → … → tip → … → B (drop duplicate tip point at the join).
     const mergedPoly = collapseMicroBends([...poly1.slice(0, -1), ...poly2]);
-    if (mergedPoly.length < 2) break;
+    if (mergedPoly.length < 2) {
+      skipTips.add(tip.id);
+      continue;
+    }
 
     const newEdge: Edge = {
       id: `${a.nodeId}${a.handle}-${b.nodeId}${b.handle}`,
@@ -344,4 +381,94 @@ export function collapsePassThroughTips(
 
   const pruned = pruneOrphanTips(nextNodes, nextEdges);
   return { nodes: pruned.nodes, edges: pruned.edges, merged };
+}
+
+/** True when poly1 ends at tip and poly2 starts at tip on one straight H/V run. */
+function isStraightPassThrough(poly1: Point[], poly2: Point[]): boolean {
+  if (poly1.length < 2 || poly2.length < 2) return false;
+  const tip = poly1[poly1.length - 1]!;
+  const before = poly1[poly1.length - 2]!;
+  const after = poly2[1]!;
+  const h =
+    Math.abs(before.y - tip.y) < 0.6 && Math.abs(after.y - tip.y) < 0.6;
+  const v =
+    Math.abs(before.x - tip.x) < 0.6 && Math.abs(after.x - tip.x) < 0.6;
+  return h || v;
+}
+
+/**
+ * Merge one tip only, and only if it is a straight pass-through.
+ * Used after wire-draw partial/extend so we never scan the whole mesh.
+ */
+export function collapseOnePassThroughTip(
+  nodes: Node<ComponentData>[],
+  edges: Edge[],
+  tipId: string,
+): { nodes: Node<ComponentData>[]; edges: Edge[]; merged: number } {
+  const tip = nodes.find((n) => n.id === tipId);
+  if (!tip || tip.data.kind !== "TIP") {
+    return { nodes, edges, merged: 0 };
+  }
+  const deg = tipDegree(edges);
+  if ((deg.get(tipId) ?? 0) !== 2) {
+    return { nodes, edges, merged: 0 };
+  }
+
+  const pair = edges.filter((e) => e.source === tipId || e.target === tipId);
+  if (pair.length !== 2) return { nodes, edges, merged: 0 };
+  const e1 = pair[0]!;
+  const e2 = pair[1]!;
+  const a = otherEnd(e1, tipId);
+  const b = otherEnd(e2, tipId);
+  if (!a || !b || a.nodeId === tipId || b.nodeId === tipId) {
+    return { nodes, edges, merged: 0 };
+  }
+
+  if (a.nodeId === b.nodeId && a.handle === b.handle) {
+    // Digon: keep longer edge, never wipe both.
+    const p1 = computeEdgePolyline(nodes, e1);
+    const p2 = computeEdgePolyline(nodes, e2);
+    const dropId = polyLen(p1) >= polyLen(p2) ? e2.id : e1.id;
+    const nextEdges = edges.filter((e) => e.id !== dropId);
+    return { nodes, edges: nextEdges, merged: 1 };
+  }
+
+  const poly1raw = computeEdgePolyline(nodes, e1);
+  const poly2raw = computeEdgePolyline(nodes, e2);
+  if (poly1raw.length < 2 || poly2raw.length < 2) {
+    return { nodes, edges, merged: 0 };
+  }
+
+  const poly1 = orientPolyTowardTip(poly1raw, e1.source === tipId);
+  const poly2 = orientPolyFromTip(poly2raw, e2.source === tipId);
+  if (!isStraightPassThrough(poly1, poly2)) {
+    return { nodes, edges, merged: 0 };
+  }
+
+  const mergedPoly = collapseMicroBends([...poly1.slice(0, -1), ...poly2]);
+  if (mergedPoly.length < 2) return { nodes, edges, merged: 0 };
+
+  const newEdge: Edge = {
+    id: `${a.nodeId}${a.handle}-${b.nodeId}${b.handle}`,
+    type: "schematic",
+    source: a.nodeId,
+    sourceHandle: a.handle,
+    target: b.nodeId,
+    targetHandle: b.handle,
+    data: { waypoints: [] },
+    selected: Boolean(e1.selected || e2.selected),
+  };
+  const waypoints = polylineToStoredWaypoints(nodes, newEdge, mergedPoly);
+  newEdge.data = { waypoints };
+  if (edges.some((e) => e.id === newEdge.id && e.id !== e1.id && e.id !== e2.id)) {
+    newEdge.id = `${newEdge.id}-m1`;
+  }
+
+  const nextEdges = [
+    ...edges.filter((e) => e.id !== e1.id && e.id !== e2.id),
+    newEdge,
+  ];
+  const nextNodes = nodes.filter((n) => n.id !== tipId);
+  const pruned = pruneOrphanTips(nextNodes, nextEdges);
+  return { nodes: pruned.nodes, edges: pruned.edges, merged: 1 };
 }

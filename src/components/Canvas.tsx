@@ -215,17 +215,35 @@ function preferShortStubHit(
   cursor: Point,
   base: { edgeId: string; point: Point; dist: number } | null,
 ): { edgeId: string; point: Point; dist: number } | null {
-  let bestStub: { edgeId: string; dist: number } | null = null;
+  let bestStub: { edgeId: string; dist: number; len: number } | null = null;
   for (const edge of edges) {
-    const leftover =
-      isFullyDanglingLeftover(nodes, edges, edge) ||
-      isShortDanglingStub(nodes, edges, edge, 96);
-    if (!leftover) continue;
     const poly = computeEdgePolyline(nodes, edge);
     if (poly.length < 2) continue;
+    let len = 0;
+    for (let i = 0; i < poly.length - 1; i++) {
+      len += Math.hypot(poly[i + 1]!.x - poly[i]!.x, poly[i + 1]!.y - poly[i]!.y);
+    }
+    // Short free run (tip↔tip scrap or free-tip spur), including micro stubs
+    // that sit on hops over long rails.
+    const leftover =
+      len <= 96 &&
+      (isFullyDanglingLeftover(nodes, edges, edge, 96) ||
+        isShortDanglingStub(nodes, edges, edge, 96) ||
+        // Length-only fallback: free tip↔tip under the hop often failed the
+        // dangling check after tip-degree noise, leaving the stub undeletable.
+        (len <= 64 &&
+          nodes.find((n) => n.id === edge.source)?.data.kind === "TIP" &&
+          nodes.find((n) => n.id === edge.target)?.data.kind === "TIP"));
+    if (!leftover) continue;
     const d = distToPolyline(poly, cursor);
-    if (d > WIRE_HIT_RADIUS + 4) continue;
-    if (!bestStub || d < bestStub.dist) bestStub = { edgeId: edge.id, dist: d };
+    if (d > WIRE_HIT_RADIUS + 8) continue;
+    if (
+      !bestStub ||
+      d < bestStub.dist - 0.5 ||
+      (Math.abs(d - bestStub.dist) <= 0.5 && len < bestStub.len)
+    ) {
+      bestStub = { edgeId: edge.id, dist: d, len };
+    }
   }
   if (bestStub) {
     return { edgeId: bestStub.edgeId, point: cursor, dist: bestStub.dist };
@@ -601,7 +619,8 @@ function JunctionOverlay({
           top: 0,
           overflow: "visible",
           pointerEvents: interactive ? "auto" : "none",
-          zIndex: 5,
+          /* Portal layer is z-index 4 (above edges); keep marks on top inside it. */
+          zIndex: 1,
         }}
       >
         {junctions.map((p) => (
@@ -776,8 +795,12 @@ export type CanvasProps = {
   /** Crossing rings the user hid in Delete mode (wires unchanged). */
   hiddenCrossingKeys?: readonly string[];
   onStraightenEdge: (edgeId: string, clickPoint?: Point) => void;
-  /** Select exactly one edge; clear all node selection. */
-  onSelectEdge: (edgeId: string) => void;
+  /** Select one segment (or whole edge when additive / marquee). Clear node selection on plain select. */
+  onSelectEdge: (
+    edgeId: string,
+    clickPoint?: Point,
+    opts?: { additive?: boolean },
+  ) => void;
   /** Right-click a real part → open LTspice-style properties dialog. */
   onOpenComponentProps: (nodeId: string, clientX: number, clientY: number) => void;
   onMoveDisconnect: (
@@ -1234,10 +1257,8 @@ export function Canvas({
       const draft = wiringRef.current;
       if (!draft) return false;
       const exclude = sourceExclude(draft);
-      const from = lastLocked(draft);
-      // WYSIWYG: never finish off-axis from a body hover — that made the
-      // rubber-band miss the pin while the click still snapped a connection.
-      // Explicit pin-handle clicks still go through applyPinHit directly.
+      // Finish may be off-axis; waypointsClosingTo adds one auto corner.
+      // Body-hover step-draw (lock bend without finish) stays in onNodeClick.
 
       // Prefer joining an existing wire when it's as close as any pin — rails
       // under parts would otherwise never receive the click (node steals it).
@@ -1267,7 +1288,7 @@ export function Canvas({
       }
 
       if (wireHit && (!pinHit || wireHit.dist <= dist(cursor, pinHit.point) - 2)) {
-        if (!isAxisAligned(from, wireHit.point)) return false;
+        // Off-axis finish inserts one auto corner via waypointsClosingTo.
         return finishDraftOnWire(wireHit.edgeId, cursor);
       }
 
@@ -1287,17 +1308,14 @@ export function Canvas({
           ) &&
           nodesRef.current.find((n) => n.id === under.nodeId)?.data.kind !== "TIP";
         if (underOk && under) {
-          if (!isAxisAligned(from, under.point)) return false;
           applyPinHit(under.nodeId, under.pinId);
           return true;
         }
-        if (!isAxisAligned(from, tipPt)) return false;
         applyPinHit(hoverNode.id, "t");
         return true;
       }
 
       if (!pinHit) return false;
-      if (!isAxisAligned(from, pinHit.point)) return false;
       applyPinHit(pinHit.nodeId, pinHit.pinId);
       return true;
     },
@@ -1655,7 +1673,12 @@ export function Canvas({
    * Move: slide one H/V segment or bend (pins stay attached).
    * Drag: cut that section free (tip↔tip) and translate it alone.
    */
-  const beginWireSegmentDrag = useCallback((edgeId: string, clientX: number, clientY: number) => {
+  const beginWireSegmentDrag = useCallback((
+    edgeId: string,
+    clientX: number,
+    clientY: number,
+    additive = false,
+  ) => {
     const modeNow = modeRef.current;
     if (modeNow !== "move" && modeNow !== "drag") return;
     if (moveDragRef.current) return;
@@ -1678,7 +1701,7 @@ export function Canvas({
       const onUpSelect = () => {
         window.removeEventListener("pointermove", onMoveProbe);
         window.removeEventListener("pointerup", onUpSelect);
-        onSelectEdgeRef.current(edgeId);
+        onSelectEdgeRef.current(edgeId, grabPoint, { additive });
       };
       const onMoveProbe = (ev: PointerEvent) => {
         if (Math.hypot(ev.clientX - startClient.x, ev.clientY - startClient.y) >= MOVE_DRAG_THRESHOLD) {
@@ -1688,6 +1711,12 @@ export function Canvas({
       };
       window.addEventListener("pointermove", onMoveProbe);
       window.addEventListener("pointerup", onUpSelect);
+      return;
+    }
+
+    // Ctrl/⌘+click: toggle whole-wire multi-select — do not start a drag.
+    if (additive) {
+      onSelectEdgeRef.current(edgeId, grabPoint, { additive: true });
       return;
     }
 
@@ -1765,7 +1794,8 @@ export function Canvas({
         const drag = moveDragRef.current;
         moveDragRef.current = null;
         if (!armed || !drag) {
-          onSelectEdgeRef.current(edgeId);
+          // Always pass grabPoint so we highlight one H/V run, not the whole snake.
+          onSelectEdgeRef.current(edgeId, grabPoint);
           return;
         }
         onNodesChangeRef.current(
@@ -1797,7 +1827,7 @@ export function Canvas({
         onPushHistoryRef.current();
         historyPushed = true;
       }
-      onSelectEdgeRef.current(edgeId);
+      onSelectEdgeRef.current(edgeId, grabPoint);
       setMoveHint(
         dragKind === "corner" ? "Dragging wire bend…" : "Sliding wire segment…",
       );
@@ -1832,15 +1862,20 @@ export function Canvas({
 
       const first = nextPoly[0]!;
       const last = nextPoly[nextPoly.length - 1]!;
+      // Only slide exclusive free tips. Shared junction tips stay put so
+      // reshaping one rail cannot warp sibling wires at the same T.
+      const tipDeg = (id: string) =>
+        edgesRef.current.filter((e) => e.source === id || e.target === id)
+          .length;
       const tipMoves: { id: string; x: number; y: number }[] = [];
-      if (src?.data.kind === "TIP") {
+      if (src?.data.kind === "TIP" && tipDeg(src.id) <= 1) {
         tipMoves.push({
           id: src.id,
           x: first.x,
           y: first.y - ((src.style?.height as number | undefined) ?? 8) / 2,
         });
       }
-      if (tgt?.data.kind === "TIP") {
+      if (tgt?.data.kind === "TIP" && tipDeg(tgt.id) <= 1) {
         tipMoves.push({
           id: tgt.id,
           x: last.x,
@@ -1864,7 +1899,7 @@ export function Canvas({
       window.removeEventListener("pointerup", onUp);
       setMoveHint(null);
       if (!armed) {
-        onSelectEdgeRef.current(edgeId);
+        onSelectEdgeRef.current(edgeId, grabPoint);
         return;
       }
       const tipIds = [src, tgt]
@@ -1938,7 +1973,7 @@ export function Canvas({
 
       e.preventDefault();
       e.stopPropagation();
-      beginWireSegmentDrag(edgeId, e.clientX, e.clientY);
+      beginWireSegmentDrag(edgeId, e.clientX, e.clientY, isMultiSelectModifier(e));
     };
 
     root.addEventListener("pointerdown", onDown, true);
@@ -2386,7 +2421,7 @@ export function Canvas({
           event.preventDefault();
           event.stopPropagation();
           event.stopImmediatePropagation();
-          onSelectEdgeRef.current(edge.id);
+          onSelectEdgeRef.current(edge.id, cursor);
           return;
         }
         return;
@@ -2426,7 +2461,7 @@ export function Canvas({
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
-      onSelectEdgeRef.current(hit.edgeId);
+      onSelectEdgeRef.current(hit.edgeId, cursor);
     };
 
     root.addEventListener("click", onClick, true);
@@ -2594,8 +2629,10 @@ export function Canvas({
                 edgesRef.current,
                 nodeId,
               );
-              if (edge) onDeleteEdgeRef.current(edge.id);
-              else onDeleteNodeRef.current(nodeId);
+              if (edge) {
+                const tipPt = pinWorldPoint(node, "t");
+                onDeleteEdgeRef.current(edge.id, tipPt ?? undefined);
+              } else onDeleteNodeRef.current(nodeId);
               return;
             }
             if (
@@ -2607,7 +2644,10 @@ export function Canvas({
                 edgesRef.current,
                 nodeId,
               );
-              if (edge) onSelectEdgeRef.current(edge.id);
+              if (edge) {
+                const tipPt = pinWorldPoint(node, "t");
+                onSelectEdgeRef.current(edge.id, tipPt ?? undefined);
+              }
               return;
             }
             // Scissors on a pin: cut the wire attached here (e.g. C↔GND).
@@ -2618,7 +2658,8 @@ export function Canvas({
                   (e.target === nodeId && e.targetHandle === pinId),
               );
               if (onPin.length >= 1) {
-                onDeleteEdgeRef.current(onPin[0]!.id);
+                const pinPt = pinWorldPoint(node, pinId);
+                onDeleteEdgeRef.current(onPin[0]!.id, pinPt ?? undefined);
                 return;
               }
             }
@@ -2735,6 +2776,7 @@ export function Canvas({
         finishOrKeepPartial();
       }
 
+      // Esc always leaves the current tool for Explore (matches mode guide).
       if (modeRef.current !== "explore") {
         onModeChangeRef.current("explore");
         return;
@@ -2878,9 +2920,13 @@ export function Canvas({
     setProbeTip(null);
   }, []);
 
-  const selectOnlyEdge = useCallback((edgeId: string) => {
+  const selectOnlyEdge = useCallback((
+    edgeId: string,
+    clickPoint?: Point,
+    opts?: { additive?: boolean },
+  ) => {
     // Direct setState — RF applyEdgeChanges batches can leave extra edges selected.
-    onSelectEdgeRef.current(edgeId);
+    onSelectEdgeRef.current(edgeId, clickPoint, opts);
   }, []);
 
   const beginBranchFromEdge = useCallback(
@@ -2958,7 +3004,13 @@ export function Canvas({
       if (modeRef.current !== "wire") {
         if (modeRef.current === "move" || modeRef.current === "drag" || modeRef.current === "explore") {
           e.stopPropagation();
-          selectOnlyEdge(edge.id);
+          const cursor = rfRef.current?.screenToFlowPosition({
+            x: e.clientX,
+            y: e.clientY,
+          });
+          selectOnlyEdge(edge.id, cursor, {
+            additive: isMultiSelectModifier(e),
+          });
         }
         return;
       }
@@ -2976,9 +3028,10 @@ export function Canvas({
         return;
       }
 
-      // Idle: Alt+click = select. Plain click = branch from that point on this wire.
+      // Idle: Alt+click = select one segment. Plain click = branch from that point.
       if (e.altKey) {
-        selectOnlyEdge(edge.id);
+        const cursor = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+        selectOnlyEdge(edge.id, cursor);
         return;
       }
       beginBranchFromEdge(edge, e.clientX, e.clientY);
@@ -3059,7 +3112,7 @@ export function Canvas({
 
     if (tryMagneticComplete(cursor)) return;
 
-    // Click near a rail (even with no edge event): join it only when coplanar.
+    // Click near a rail (even with no edge event): join; auto-L if off-axis.
     {
       const wireHit = findNearestWireHit(
         nodesRef.current,
@@ -3068,11 +3121,7 @@ export function Canvas({
         WIRE_JOIN_RADIUS,
         SCHEMATIC_GRID,
       );
-      if (
-        wireHit &&
-        isAxisAligned(lastLocked(draft), wireHit.point) &&
-        finishDraftOnWire(wireHit.edgeId, cursor)
-      ) {
+      if (wireHit && finishDraftOnWire(wireHit.edgeId, cursor)) {
         return;
       }
     }

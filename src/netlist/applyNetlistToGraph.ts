@@ -9,6 +9,7 @@ import {
   spicePinOrder,
 } from "./parseDeviceParams";
 import { extractNets } from "./nets";
+import { classifyNetlistText } from "./netlistFormat";
 
 export interface ApplyNetlistResult {
   nodes: Node<ComponentData>[];
@@ -20,6 +21,11 @@ export interface ApplyNetlistResult {
   rewired: boolean;
   /** Device lines we could not map to a known kind. */
   skippedUnknown: string[];
+  /**
+   * When set, Apply must not change the graph (foreign format / unsafe wipe).
+   * nodes/edges are the inputs unchanged.
+   */
+  rejected?: string;
 }
 
 type Endpoint = { nodeId: string; pinId: string };
@@ -93,6 +99,21 @@ export function applyNetlistToGraph(
   edges: Edge[],
   netlistText: string,
 ): ApplyNetlistResult {
+  const empty = (): ApplyNetlistResult => ({
+    nodes,
+    edges,
+    updated: [],
+    added: [],
+    deleted: [],
+    rewired: false,
+    skippedUnknown: [],
+  });
+
+  const format = classifyNetlistText(netlistText);
+  if (format.kind !== "spice") {
+    return { ...empty(), rejected: format.message ?? "Unsupported netlist format." };
+  }
+
   const devices = parseDeviceLines(netlistText);
   const updated: string[] = [];
   const added: string[] = [];
@@ -104,8 +125,37 @@ export function applyNetlistToGraph(
     if (n.data.refdes) byRefdes.set(n.data.refdes, n);
   }
 
-  // --- Phase C: delete emitting nodes missing from text -------------------
+  // Count devices we can actually map before deleting anything.
+  let recognizable = 0;
+  for (const device of devices) {
+    const existing = byRefdes.get(device.refdes);
+    const kind = inferKindFromRefdes(device.refdes, existing?.data.kind);
+    if (!kind) continue;
+    if (splitNetsAndParams(kind, device.rest)) recognizable++;
+  }
+
   const textRefdes = new Set(devices.map((d) => d.refdes));
+  let wouldDelete = 0;
+  for (const n of nodes) {
+    const spec = COMPONENT_SPECS[n.data.kind];
+    if (spec.emits && n.data.refdes && !textRefdes.has(n.data.refdes)) {
+      wouldDelete++;
+    }
+  }
+
+  // Foreign / garbage paste: zero SPICE devices but would wipe the schematic.
+  if (recognizable === 0 && wouldDelete > 0) {
+    return {
+      ...empty(),
+      skippedUnknown: devices.map((d) => d.refdes).slice(0, 40),
+      rejected:
+        "No recognizable SPICE devices in the text, but Apply would remove " +
+        `existing parts (${wouldDelete}). Paste a SPICE deck (V1/R1/M1…). ` +
+        "Your schematic was not changed.",
+    };
+  }
+
+  // --- Phase C: delete emitting nodes missing from text -------------------
   const kept: Node<ComponentData>[] = [];
   for (const n of nodes) {
     const spec = COMPONENT_SPECS[n.data.kind];
