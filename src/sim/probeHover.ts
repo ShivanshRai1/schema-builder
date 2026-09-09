@@ -22,6 +22,14 @@ function seriesByName(series: readonly SimSeries[], name: string): SimSeries | u
   return series.find((s) => cleanSignalName(s.name).toUpperCase() === want);
 }
 
+/** Public lookup used by click-to-probe chart resolution. */
+export function seriesByNameLoose(
+  series: readonly SimSeries[],
+  name: string,
+): SimSeries | undefined {
+  return seriesByName(series, name);
+}
+
 /** Match V(net) / v(net) in sim results. */
 export function voltageAtNet(
   series: readonly SimSeries[],

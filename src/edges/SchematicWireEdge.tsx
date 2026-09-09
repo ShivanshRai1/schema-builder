@@ -46,7 +46,7 @@ export function SchematicWireEdge({
     if (!n) return undefined;
     return {
       node: n,
-      key: `${n.position.x},${n.position.y},${n.measured?.width ?? 0},${n.measured?.height ?? 0},${n.data.rotation ?? 0}`,
+      key: `${n.position.x},${n.position.y},${n.measured?.width ?? 0},${n.measured?.height ?? 0},${n.data.rotation ?? 0},${n.data.kind}`,
     };
   }, (a, b) => a?.key === b?.key);
   const targetNode = useStore((s) => {
@@ -54,9 +54,17 @@ export function SchematicWireEdge({
     if (!n) return undefined;
     return {
       node: n,
-      key: `${n.position.x},${n.position.y},${n.measured?.width ?? 0},${n.measured?.height ?? 0},${n.data.rotation ?? 0}`,
+      key: `${n.position.x},${n.position.y},${n.measured?.width ?? 0},${n.measured?.height ?? 0},${n.data.rotation ?? 0},${n.data.kind}`,
     };
   }, (a, b) => a?.key === b?.key);
+
+  // Net-name stamps sit on the net — no visible lead (LTspice Label Net).
+  if (
+    sourceNode?.node.data.kind === "WIRELABEL" ||
+    targetNode?.node.data.kind === "WIRELABEL"
+  ) {
+    return null;
+  }
 
   const points =
     sourceNode && targetNode

@@ -18,8 +18,9 @@ import {
 import { NetlistPanel } from "./components/NetlistPanel";
 import { ChatPanel } from "./components/ChatPanel";
 import { SimPanel, type SimControlApi, type SimRunState } from "./components/SimPanel";
-import type { SimResult } from "./sim/runSimulation";
 import { SimResultContext } from "./sim/SimResultContext";
+import { ClearProbesOnSimChange, ProbeProvider } from "./sim/ProbeContext";
+import type { SimResult } from "./sim/runSimulation";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { FloatingWindow } from "./components/FloatingWindow";
 import { COMPONENT_SPECS, defaultParams, getComponentPins, isGroundKind } from "./model/componentSpecs";
@@ -103,7 +104,7 @@ function cleanReconnectPath(
   return cleaned.slice(1, -1);
 }
 
-// --- seed circuit: V1 - R1 - C1 to ground ----------------------------------
+// --- seed circuit: examples/demo-circuit.json (Restore starter uses the same) ---
 const mk = (
   id: string,
   kind: ComponentKind,
@@ -122,27 +123,9 @@ const mk = (
   },
 });
 
-const INITIAL_NODES: Node<ComponentData>[] = [
-  mk("n1", "BATTERY", "V1", 40, 180, 0),
-  mk("n2", "R", "R1", 280, 90),
-  mk("n3", "C", "C1", 540, 180),
-  mk("n4", "GND", "", 280, 360),
-];
-const wire = (s: string, sh: string, t: string, th: string): Edge => ({
-  id: `${s}${sh}-${t}${th}`,
-  type: "schematic",
-  source: s,
-  sourceHandle: sh,
-  target: t,
-  targetHandle: th,
-  data: { waypoints: [] },
-});
-const INITIAL_EDGES: Edge[] = [
-  wire("n1", "p", "n2", "a"),
-  wire("n2", "b", "n3", "a"),
-  wire("n3", "b", "n4", "g"),
-  wire("n1", "n", "n4", "g"),
-];
+const STARTER = parseCircuitFile(starterCircuit);
+const INITIAL_NODES: Node<ComponentData>[] = STARTER.nodes;
+const INITIAL_EDGES: Edge[] = STARTER.edges;
 
 function makeAllocator(nodes: Node<ComponentData>[]) {
   const counts = new Map<string, number>();
@@ -249,8 +232,10 @@ export default function App() {
   const [draftNetlist, setDraftNetlist] = useState("");
   const [netlistStatus, setNetlistStatus] = useState<string | null>(null);
   const [netlistStatusError, setNetlistStatusError] = useState(false);
-  const [directives, setDirectives] = useState<string[] | undefined>(undefined);
-  const [library, setLibrary] = useState("");
+  const [directives, setDirectives] = useState<string[] | undefined>(
+    () => STARTER.directives,
+  );
+  const [library, setLibrary] = useState(() => STARTER.library ?? "");
   const [showLibrary, setShowLibrary] = useState(false);
   const [netlistFloating, setNetlistFloating] = useState(false);
   const [simFloating, setSimFloating] = useState(false);
@@ -1248,6 +1233,58 @@ export default function App() {
     );
     noteCommonlyUsed(kind);
   }, [setNodes, setEdges, pushHistory, noteCommonlyUsed]);
+
+  /**
+   * DC voltage ↔ Pulse generator in place: same node id, refdes, wires, rotation.
+   * Properties dialog Mode radio — does not mint a new Vn.
+   */
+  const convertVoltageSourceMode = useCallback(
+    (
+      nodeId: string,
+      mode: "DC" | "Pulse",
+      draft?: { params?: Record<string, string>; refdes?: string },
+    ) => {
+      const nextKind: ComponentKind = mode === "Pulse" ? "VPULSE" : "BATTERY";
+      const target = nodesRef.current.find((n) => n.id === nodeId);
+      if (!target) return;
+      if (target.data.kind === nextKind) return;
+      if (target.data.kind !== "BATTERY" && target.data.kind !== "VPULSE") return;
+      pushHistory();
+      const prev = { ...target.data.params, ...(draft?.params ?? {}) };
+      const params = { ...defaultParams(nextKind) };
+      if (nextKind === "VPULSE") {
+        const dc = (prev.dc ?? "").trim();
+        params.vinitial = (prev.vinitial ?? "").trim() || "0";
+        params.von = (prev.von ?? "").trim() || dc || params.von || "V";
+        for (const k of ["tdelay", "trise", "tfall", "ton", "tperiod"] as const) {
+          if ((prev[k] ?? "").trim()) params[k] = prev[k]!;
+        }
+      } else {
+        const von = (prev.von ?? "").trim();
+        params.dc = (prev.dc ?? "").trim() || von || params.dc || "V";
+        if ((prev.rser ?? "").trim()) params.rser = prev.rser!;
+      }
+      const refdes =
+        (draft?.refdes ?? "").trim() || target.data.refdes;
+      setNodes((ns) =>
+        ns.map((n) =>
+          n.id !== nodeId
+            ? n
+            : {
+                ...n,
+                data: {
+                  ...n.data,
+                  kind: nextKind,
+                  refdes,
+                  params,
+                },
+              },
+        ),
+      );
+      noteCommonlyUsed(nextKind);
+    },
+    [setNodes, pushHistory, noteCommonlyUsed],
+  );
 
   const openComponentProps = useCallback(
     (nodeId: string, x: number, y: number) => {
@@ -2809,13 +2846,13 @@ export default function App() {
   }, [nodes, edges, netlist]);
 
   return (
+    <ProbeProvider>
     <SimResultContext.Provider value={simResult}>
+    <ClearProbesOnSimChange result={simResult} />
     <div className="app">
       <header className="app-header">
         <span className="app-title">SimulAI · Schematic Editor</span>
         <div className="app-actions">
-          <button type="button" className="ghost-btn" disabled={histTick < 0 || !history.current.canUndo()} onClick={undo} title="Undo (Ctrl+Z)">Undo</button>
-          <button type="button" className="ghost-btn" disabled={histTick < 0 || !history.current.canRedo()} onClick={redo} title="Redo (Ctrl+Y)">Redo</button>
           <button type="button" className="ghost-btn" onClick={onSave} title="Save circuit JSON (Ctrl+S)">Save</button>
           <button type="button" className="ghost-btn" onClick={onLoadClick} title="Open circuit JSON (Ctrl+O)">Open</button>
           <button type="button" className="ghost-btn" onClick={onRestoreStarter} title="Reload the starter schematic">
@@ -2880,6 +2917,7 @@ export default function App() {
                 <li><kbd>Ctrl</kbd>+C copy mode · click a part/wire or drag a box (≥70%) to copy · paste ghost follows · <kbd>Esc</kbd> exits</li>
                 <li>Palette <strong>Net label</strong> is the older flag symbol (still names nets when connected)</li>
                 <li><kbd>Click</kbd> a part or wire to select · <kbd>Ctrl</kbd>+click toggles multi-select</li>
+                <li>After a successful <strong>Run</strong>, <strong>Probe ON</strong>: click a wire for the <em>red</em> pin, then another wire for the <em>black</em> pin → <code>V(a,b)</code> · right-click removes black then red · <kbd>Shift</kbd>+click a part for current · <kbd>Ctrl</kbd>+click selects</li>
                 <li><kbd>Right-click</kbd> a part to edit properties (OK / Cancel)</li>
                 <li><kbd>Click</kbd> empty canvas to deselect · hollow square = free wire end</li>
                 <li><kbd>E</kbd> Explore · <kbd>W</kbd> Wire · <kbd>M</kbd> Move · <kbd>D</kbd> Drag</li>
@@ -2977,6 +3015,10 @@ export default function App() {
             onCut={cutSelection}
             onCopy={triggerCopy}
             copyActive={copyMarquee}
+            onUndo={undo}
+            onRedo={redo}
+            canUndo={histTick >= 0 && history.current.canUndo()}
+            canRedo={histTick >= 0 && history.current.canRedo()}
           />
           <Canvas
             viewApiRef={canvasViewApiRef}
@@ -3118,6 +3160,7 @@ export default function App() {
           onApply={applyComponentProps}
           onCancel={() => setPropsDialog(null)}
           onRotateLive={rotateNodeLive}
+          onConvertVoltageMode={convertVoltageSourceMode}
           onDelete={(id) => {
             setPropsDialog(null);
             deleteNodes([id]);
@@ -3162,5 +3205,6 @@ export default function App() {
       )}
     </div>
     </SimResultContext.Provider>
+    </ProbeProvider>
   );
 }

@@ -179,6 +179,11 @@ export function findWireJunctions(
     }
   }
   for (const e of edges) {
+    // Net-name stamps share a pin electrically but are not a second wire for
+    // junction counting (otherwise V+ gets a false filled square).
+    const srcKind = nodes.find((n) => n.id === e.source)?.data.kind;
+    const tgtKind = nodes.find((n) => n.id === e.target)?.data.kind;
+    if (srcKind === "WIRELABEL" || tgtKind === "WIRELABEL") continue;
     const sk = `${e.source}:${e.sourceHandle}`;
     const tk = `${e.target}:${e.targetHandle}`;
     if (pinWireCount.has(sk)) pinWireCount.set(sk, pinWireCount.get(sk)! + 1);
@@ -204,13 +209,16 @@ export function findWireJunctions(
   const junctions: JunctionMark[] = [];
   const crossings: CrossingMark[] = [];
 
-  const addJ = (p: Point, tipId?: string) => {
+  const addJ = (p: Point, tipId?: string, opts?: { allowPin?: boolean }) => {
     const k = keyOf(p);
     if (seenJ.has(k)) return;
     // Never put a filled junction on a component pin — that reads as a pin
-    // square. Multi-wire pins get their mark at the branch (below).
-    for (const pt of pinPoints.values()) {
-      if (near(p, pt)) return;
+    // square. Exception: multi-wire tee that sits exactly on the pin (GND on a
+    // rail) — pin-connected hides the hollow pin, so we must draw the join.
+    if (!opts?.allowPin) {
+      for (const pt of pinPoints.values()) {
+        if (near(p, pt)) return;
+      }
     }
     seenJ.add(k);
     seenC.add(k);
@@ -250,11 +258,16 @@ export function findWireJunctions(
 
   // Multi-wire pin: mark the visual T where the shared stub splits into the
   // rail — not the pin itself (both edges end on the pin in the graph).
+  // If wires diverge immediately at the pin (typical GND on a rail), the tee
+  // IS the pin — draw the filled square there (pin hollow is already hidden).
   for (const [key, count] of pinWireCount) {
     if (count < 2) continue;
     const pin = pinPoints.get(key);
     if (!pin) continue;
     const [nodeId, pinId] = key.split(":");
+    const node = nodes.find((n) => n.id === nodeId);
+    // Net-name stamps are not electrical tees — never mark them as junctions.
+    if (node?.data.kind === "WIRELABEL") continue;
     const related = edgePolys
       .filter(
         ({ edge: e }) =>
@@ -264,7 +277,12 @@ export function findWireJunctions(
       .map((x) => x.pts);
     const branch = branchPointFromPin(pin, related);
     if (branch) addJ(branch);
+    else addJ(pin, undefined, { allowPin: true });
   }
+
+  const labelNodeIds = new Set(
+    nodes.filter((n) => n.data.kind === "WIRELABEL").map((n) => n.id),
+  );
 
   // Wire-pair comparisons.
   for (let i = 0; i < edgePolys.length; i++) {
@@ -273,26 +291,50 @@ export function findWireJunctions(
       const B = edgePolys[j]!;
       const sameNet = A.net === B.net;
       const pair: [string, string] = [A.edge.id, B.edge.id];
+      // Label stubs T onto a rail for naming only — not a real wire join.
+      const aIsLabel =
+        labelNodeIds.has(A.edge.source) || labelNodeIds.has(A.edge.target);
+      const bIsLabel =
+        labelNodeIds.has(B.edge.source) || labelNodeIds.has(B.edge.target);
 
       const aEnds = [A.pts[0]!, A.pts[A.pts.length - 1]!];
       const bEnds = [B.pts[0]!, B.pts[B.pts.length - 1]!];
 
       // T-style: endpoint of one wire sits on the interior of the other.
       // Same net → connected junction; different net → passing (not connected).
-      for (const end of aEnds) {
-        if (onPolylineInterior(end, B.pts)) {
-          if (sameNet) addJ(end);
-          else addC(end, pair);
+      if (!aIsLabel) {
+        for (const end of aEnds) {
+          if (onPolylineInterior(end, B.pts)) {
+            if (sameNet) addJ(end);
+            else addC(end, pair);
+          }
         }
       }
-      for (const end of bEnds) {
-        if (onPolylineInterior(end, A.pts)) {
-          if (sameNet) addJ(end);
-          else addC(end, pair);
+      if (!bIsLabel) {
+        for (const end of bEnds) {
+          if (onPolylineInterior(end, A.pts)) {
+            if (sameNet) addJ(end);
+            else addC(end, pair);
+          }
+        }
+      }
+
+      // Same-net elbow on a rail: e.g. M1 source drops to the ground bus then
+      // runs to GND — the corner is a visual T but not a polyline endpoint.
+      if (sameNet && !aIsLabel && !bIsLabel) {
+        for (let vi = 1; vi < A.pts.length - 1; vi++) {
+          const v = A.pts[vi]!;
+          if (onPolylineInterior(v, B.pts)) addJ(v);
+        }
+        for (let vi = 1; vi < B.pts.length - 1; vi++) {
+          const v = B.pts[vi]!;
+          if (onPolylineInterior(v, A.pts)) addJ(v);
         }
       }
 
       // Geometric segment crossings (true mid-segment X).
+      // Skip pairs where either edge is only a net-name stub.
+      if (aIsLabel || bIsLabel) continue;
       for (let s = 0; s < A.pts.length - 1; s++) {
         for (let t = 0; t < B.pts.length - 1; t++) {
           const a1 = A.pts[s]!;

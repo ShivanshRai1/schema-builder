@@ -1,105 +1,256 @@
 {
   "format": "simulai-schematic",
   "version": 1,
-  "savedAt": "2026-08-03T12:00:00.000Z",
+  "savedAt": "2026-09-09T08:21:16.289Z",
   "nodes": [
     {
       "id": "n1",
       "type": "component",
-      "position": { "x": 40, "y": 180 },
+      "position": { "x": -80, "y": 352 },
       "data": {
-        "kind": "BATTERY",
+        "kind": "VPULSE",
         "refdes": "V1",
-        "params": { "dc": "V", "rser": "" }
+        "params": {
+          "vinitial": "0",
+          "von": "10",
+          "tdelay": "0",
+          "trise": "10e-9",
+          "tfall": "10e-9",
+          "ton": "0.05e-3",
+          "tperiod": "0.1e-3"
+        },
+        "rotation": 0
       }
     },
     {
       "id": "n2",
       "type": "component",
-      "position": { "x": 260, "y": 80 },
+      "position": { "x": 80, "y": 240 },
       "data": {
         "kind": "R",
         "refdes": "R1",
-        "params": { "value": "2.2k" }
+        "params": { "value": "2" },
+        "rotation": 0
       }
     },
     {
       "id": "n3",
       "type": "component",
-      "position": { "x": 480, "y": 80 },
+      "position": { "x": 272, "y": 156 },
       "data": {
-        "kind": "SICMOS",
-        "refdes": "XM1",
-        "params": { "model": "SIC_MOS" }
-      }
-    },
-    {
-      "id": "n4",
-      "type": "component",
-      "position": { "x": 480, "y": 280 },
-      "data": {
-        "kind": "R",
-        "refdes": "R2",
-        "params": { "value": "10" }
+        "kind": "NMOS",
+        "refdes": "M1",
+        "params": { "model": "NMOS_GEN", "bulk": "source" },
+        "rotation": 0
       }
     },
     {
       "id": "n5",
       "type": "component",
-      "position": { "x": 260, "y": 360 },
+      "position": { "x": 240, "y": 0 },
+      "data": {
+        "kind": "D",
+        "refdes": "D1",
+        "params": { "model": "DGEN" },
+        "rotation": 270
+      }
+    },
+    {
+      "id": "n4",
+      "type": "component",
+      "position": { "x": 304, "y": 0 },
+      "data": {
+        "kind": "L",
+        "refdes": "L1",
+        "params": { "value": "1e-3", "ic": "" },
+        "rotation": 90
+      }
+    },
+    {
+      "id": "n6",
+      "type": "component",
+      "position": { "x": 480, "y": 352 },
+      "data": {
+        "kind": "BATTERY",
+        "refdes": "V2",
+        "params": { "dc": "48", "rser": "" },
+        "rotation": 0
+      }
+    },
+    {
+      "id": "n7",
+      "type": "component",
+      "position": { "x": 208, "y": 592 },
       "data": {
         "kind": "GND",
         "refdes": "",
-        "params": {}
+        "params": {},
+        "rotation": 0
       }
+    },
+    {
+      "id": "n8",
+      "type": "component",
+      "position": { "x": -40, "y": 240 },
+      "data": {
+        "kind": "WIRELABEL",
+        "refdes": "",
+        "params": { "name": "vin", "_lb": "2" },
+        "rotation": 0
+      }
+    },
+    {
+      "id": "n25",
+      "type": "component",
+      "position": { "x": 320, "y": 76 },
+      "data": { "kind": "TIP", "refdes": "", "params": {} },
+      "style": { "width": 8, "height": 8 },
+      "draggable": false
+    },
+    {
+      "id": "n27",
+      "type": "component",
+      "position": { "x": 368, "y": -84 },
+      "data": { "kind": "TIP", "refdes": "", "params": {} },
+      "style": { "width": 8, "height": 8 },
+      "draggable": false
     }
   ],
   "edges": [
     {
-      "id": "n1p-n2a",
+      "id": "xy-edge__n1p-n2a",
+      "type": "schematic",
       "source": "n1",
       "sourceHandle": "p",
       "target": "n2",
-      "targetHandle": "a"
+      "targetHandle": "a",
+      "data": {
+        "waypoints": [{ "x": -48, "y": 256 }],
+        "directPath": true
+      }
     },
     {
-      "id": "n2b-n3g",
+      "id": "xy-edge__n2b-n3g",
+      "type": "schematic",
       "source": "n2",
       "sourceHandle": "b",
       "target": "n3",
-      "targetHandle": "g"
+      "targetHandle": "g",
+      "data": { "waypoints": [], "directPath": true }
     },
     {
-      "id": "n1p-n3d",
-      "source": "n1",
-      "sourceHandle": "p",
-      "target": "n3",
-      "targetHandle": "d"
+      "id": "xy-edge__n6n-n7g",
+      "type": "schematic",
+      "source": "n6",
+      "sourceHandle": "n",
+      "target": "n7",
+      "targetHandle": "g",
+      "data": { "waypoints": [], "directPath": true }
     },
     {
-      "id": "n3s-n4a",
-      "source": "n3",
-      "sourceHandle": "s",
-      "target": "n4",
-      "targetHandle": "a"
-    },
-    {
-      "id": "n4b-n5g",
-      "source": "n4",
-      "sourceHandle": "b",
-      "target": "n5",
-      "targetHandle": "g"
-    },
-    {
-      "id": "n1n-n5g",
+      "id": "xy-edge__n1n-n7g",
+      "type": "schematic",
       "source": "n1",
       "sourceHandle": "n",
+      "target": "n7",
+      "targetHandle": "g",
+      "data": {
+        "waypoints": [{ "x": -48, "y": 592 }],
+        "directPath": true
+      }
+    },
+    {
+      "id": "xy-edge__n3s-n7g",
+      "type": "schematic",
+      "source": "n3",
+      "sourceHandle": "s",
+      "target": "n7",
+      "targetHandle": "g",
+      "data": {
+        "waypoints": [{ "x": 320, "y": 592 }],
+        "directPath": true
+      }
+    },
+    {
+      "id": "n3d-n25t",
+      "type": "schematic",
+      "source": "n3",
+      "sourceHandle": "d",
+      "target": "n25",
+      "targetHandle": "t",
+      "data": { "waypoints": [], "directPath": true }
+    },
+    {
+      "id": "n25t-n4b",
+      "type": "schematic",
+      "source": "n25",
+      "sourceHandle": "t",
+      "target": "n4",
+      "targetHandle": "b",
+      "data": { "waypoints": [], "directPath": true }
+    },
+    {
+      "id": "xy-edge__n25t-n5a",
+      "type": "schematic",
+      "source": "n25",
+      "sourceHandle": "t",
       "target": "n5",
-      "targetHandle": "g"
+      "targetHandle": "a",
+      "data": {
+        "waypoints": [{ "x": 256, "y": 80 }],
+        "directPath": true
+      }
+    },
+    {
+      "id": "n4a-n27t",
+      "type": "schematic",
+      "source": "n4",
+      "sourceHandle": "a",
+      "target": "n27",
+      "targetHandle": "t",
+      "data": {
+        "waypoints": [{ "x": 320, "y": -80 }],
+        "directPath": true
+      }
+    },
+    {
+      "id": "n27t-n6p",
+      "type": "schematic",
+      "source": "n27",
+      "sourceHandle": "t",
+      "target": "n6",
+      "targetHandle": "p",
+      "data": {
+        "waypoints": [{ "x": 512, "y": -80 }],
+        "directPath": true
+      }
+    },
+    {
+      "id": "xy-edge__n5k-n27t",
+      "type": "schematic",
+      "source": "n5",
+      "sourceHandle": "k",
+      "target": "n27",
+      "targetHandle": "t",
+      "data": {
+        "waypoints": [
+          { "x": 256, "y": -144 },
+          { "x": 368, "y": -144 }
+        ],
+        "directPath": true
+      }
+    },
+    {
+      "id": "e-vin",
+      "type": "schematic",
+      "source": "n8",
+      "sourceHandle": "g",
+      "target": "n1",
+      "targetHandle": "p",
+      "data": { "waypoints": [], "directPath": true }
     }
   ],
   "directives": [
-    ".model NMOS_GEN NMOS (level=1 Vto=2 Kp=20u)",
     ".tran 1u 1m",
     ".options reltol=1e-3"
   ],

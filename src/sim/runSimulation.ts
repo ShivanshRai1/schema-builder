@@ -186,8 +186,195 @@ function subcktInstanceCurrentAlias(raw: string): string | null {
   return m ? `I(${m[1]})` : null;
 }
 
+/** Device line from a schematic netlist: refdes + pin net names (order preserved). */
+export type NetlistDevice = { refdes: string; pins: string[] };
+
+/** Typical pin arity from the leading refdes letter (SPICE convention). */
+function typicalPinCount(refdes: string): number {
+  const c = refdes.charAt(0).toUpperCase();
+  if (c === "M") return 4;
+  if (c === "Q" || c === "J" || c === "Z") return 3;
+  if (c === "X") return 99; // subckt — keep reading until a value-like token
+  if (c === "T") return 4;
+  return 2; // R C L V I D E F G H …
+}
+
+function isSpiceKeyword(t: string): boolean {
+  return /^(DC|AC|PULSE|SIN|EXP|PWL|SFFM|AM|TRNOISE|TRRANDOM|DAY|POLY|TABLE)$/i.test(t);
+}
+
+function isValueLikeToken(t: string): boolean {
+  if (isSpiceKeyword(t)) return true;
+  if (t.includes("=")) return true;
+  // 10k, 1n, 2.2u, 1Meg — engineering suffix
+  if (/^[+\-]?\d*\.?\d+[a-zA-ZµμΩ]+/.test(t)) return true;
+  // 1e-6 / 1E3
+  if (/^[+\-]?\d+\.?\d*[eE][+\-]?\d+/.test(t)) return true;
+  return false;
+}
+
+/**
+ * Parse top-level element lines (R1 / C1 / V1 / XM1 …) from a SPICE netlist.
+ * Skips comments, dot-commands, and blank lines.
+ */
+export function parseNetlistDevices(netlist: string): NetlistDevice[] {
+  const out: NetlistDevice[] = [];
+  for (const raw of netlist.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("*") || line.startsWith(".")) continue;
+    const toks = line.split(/\s+/);
+    const refdes = toks[0];
+    if (!refdes || !/^[A-Za-z][A-Za-z0-9_]*$/.test(refdes)) continue;
+    const need = typicalPinCount(refdes);
+    const pins: string[] = [];
+    for (let i = 1; i < toks.length; i++) {
+      const t = toks[i]!;
+      if (isValueLikeToken(t)) break;
+      // Plain number after enough pins → device value (e.g. R1 1 2 100)
+      if (pins.length >= need && /^[+\-]?\d+\.?\d*$/.test(t)) break;
+      // Model / subckt name after enough pins (e.g. M1 d g s b NMOS)
+      if (pins.length >= need && /^[A-Za-z_]/.test(t)) break;
+      pins.push(t);
+    }
+    if (pins.length >= 1) out.push({ refdes, pins });
+  }
+  return out;
+}
+
+/**
+ * Map anonymous SPICE net numbers → schematic symbol names (R1, C1, V1…).
+ * Named nets (non-numeric) keep their own name.
+ */
+export function netSymbolAliases(devices: NetlistDevice[]): Map<string, string> {
+  const byNet = new Map<string, NetlistDevice[]>();
+  for (const d of devices) {
+    for (const p of d.pins) {
+      if (!p || p === "0") continue;
+      const list = byNet.get(p) ?? [];
+      list.push(d);
+      byNet.set(p, list);
+    }
+  }
+
+  const score = (d: NetlistDevice, net: string): number => {
+    const r = d.refdes.toUpperCase();
+    const letter = r.charAt(0);
+    const pins = d.pins;
+    const onGnd = pins.some((p) => p === "0");
+    // Voltage source positive pin (first net) is the usual “V1” node people mean.
+    if ((letter === "V" || letter === "E") && pins[0] === net) return 100;
+    if ((letter === "I" || letter === "G") && pins[0] === net) return 90;
+    // Two-terminal to ground → node is “the” device node (C1, R1…).
+    if (onGnd && pins.length >= 2 && pins.includes(net)) return 80;
+    if (letter === "C" || letter === "L" || letter === "R") return 60;
+    if (letter === "D" || letter === "Q" || letter === "M" || letter === "X") return 40;
+    return 20;
+  };
+
+  const aliases = new Map<string, string>();
+  for (const [net, list] of byNet) {
+    if (!/^\d+$/.test(net)) {
+      // Already a named net from the schematic — use as-is (preserve case from netlist).
+      aliases.set(net, net);
+      aliases.set(net.toUpperCase(), net);
+      continue;
+    }
+    let best: NetlistDevice | null = null;
+    let bestScore = -1;
+    for (const d of list) {
+      const s = score(d, net);
+      if (s > bestScore) {
+        bestScore = s;
+        best = d;
+      } else if (s === bestScore && best && d.refdes.localeCompare(best.refdes) < 0) {
+        best = d;
+      }
+    }
+    if (best) {
+      aliases.set(net, best.refdes);
+      aliases.set(net.toUpperCase(), best.refdes);
+    }
+  }
+  return aliases;
+}
+
+/** Canonical refdes casing from the netlist (R1 not r1). */
+function refdesCaseMap(devices: NetlistDevice[]): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const d of devices) m.set(d.refdes.toUpperCase(), d.refdes);
+  return m;
+}
+
+/**
+ * Chart legend labels aligned 1:1 with `series` order.
+ * Maps V(1)/I(v1) onto netlist symbols (R1, C1, V1…) without changing series names
+ * (probe hover still matches V(net) / I(refdes)).
+ */
+export function legendLabelsForSeries(series: SimSeries[], netlist?: string): string[] {
+  if (!series.length) return [];
+  if (!netlist?.trim()) return series.map((s) => cleanSignalName(s.name));
+
+  const devices = parseNetlistDevices(netlist);
+  if (!devices.length) return series.map((s) => cleanSignalName(s.name));
+
+  const netAlias = netSymbolAliases(devices);
+  const refCase = refdesCaseMap(devices);
+
+  const meta = series.map((s) => {
+    const cleaned = cleanSignalName(s.name);
+    const fn = /^([VI])\((.+)\)$/i.exec(cleaned);
+    if (!fn) return { cleaned, kind: "other" as const, arg: "" };
+    return {
+      cleaned,
+      kind: fn[1]!.toUpperCase() as "V" | "I",
+      arg: fn[2]!,
+    };
+  });
+
+  const labels = meta.map((m) => m.cleaned);
+  const used = new Set<string>();
+
+  const assign = (i: number, preferred: string, fallback: string) => {
+    let name = preferred;
+    if (used.has(name)) name = fallback;
+    if (used.has(name)) name = meta[i]!.cleaned;
+    let n = name;
+    let k = 2;
+    while (used.has(n)) {
+      n = `${name}#${k++}`;
+    }
+    used.add(n);
+    labels[i] = n;
+  };
+
+  for (let i = 0; i < meta.length; i++) {
+    const m = meta[i]!;
+    if (m.kind !== "V") continue;
+    const sym = netAlias.get(m.arg) ?? netAlias.get(m.arg.toUpperCase()) ?? m.arg;
+    assign(i, sym, m.cleaned);
+  }
+  for (let i = 0; i < meta.length; i++) {
+    const m = meta[i]!;
+    if (m.kind !== "I") continue;
+    const ref = refCase.get(m.arg.toUpperCase()) ?? m.arg.toUpperCase();
+    assign(i, ref, `I(${ref})`);
+  }
+  for (let i = 0; i < meta.length; i++) {
+    const m = meta[i]!;
+    if (m.kind === "V" || m.kind === "I") continue;
+    assign(i, m.cleaned, m.cleaned);
+  }
+  return labels;
+}
+
+/** @deprecated Prefer legendLabelsForSeries — kept for tests/callers of the mutate path. */
+export function applyNetlistLegendNames(series: SimSeries[], netlist: string): SimSeries[] {
+  const labels = legendLabelsForSeries(series, netlist);
+  return series.map((s, i) => ({ ...s, name: labels[i] ?? s.name }));
+}
+
 /** Clean labels, map subckt source current to I(XM1), hide internal Mos legs. */
-export function formatSeriesForChart(series: SimSeries[]): SimSeries[] {
+export function formatSeriesForChart(series: SimSeries[], _netlist?: string): SimSeries[] {
   const aliases: SimSeries[] = [];
   for (const s of series) {
     const alias = subcktInstanceCurrentAlias(s.name);
@@ -199,6 +386,8 @@ export function formatSeriesForChart(series: SimSeries[]): SimSeries[] {
   for (const a of aliases) {
     if (!filtered.some((f) => f.name === a.name)) filtered.push(a);
   }
+  // Keep V(net)/I(refdes) names so canvas probe hover still matches.
+  // Legend display remapping happens in SimPanel via legendLabelsForSeries.
   return filtered;
 }
 
@@ -291,7 +480,7 @@ export async function runSimulation(
       engine,
     };
   }
-  const series = formatSeriesForChart(normalizeSeries(job.data));
+  const series = formatSeriesForChart(normalizeSeries(job.data), netlist);
   if (!series.length) {
     return {
       ok: false,

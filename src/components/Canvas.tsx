@@ -26,6 +26,8 @@ import {
   voltageAtNet,
 } from "../sim/probeHover";
 import { useSimResult } from "../sim/SimResultContext";
+import { useProbeSelectionOptional } from "../sim/ProbeContext";
+import { probeAvailable } from "../sim/probeSelection";
 import {
   SchematicWireEdge,
   type SchematicWireData,
@@ -668,6 +670,41 @@ function JunctionOverlay({
   );
 }
 
+function ProbePinMarkers({
+  red,
+  black,
+}: {
+  red: { x: number; y: number; net: string } | null;
+  black: { x: number; y: number; net: string } | null;
+}) {
+  if (!red && !black) return null;
+  const pin = (
+    color: "red" | "black",
+    p: { x: number; y: number; net: string },
+  ) => (
+    <div
+      key={color}
+      className={`probe-pin-marker probe-pin-marker-${color}`}
+      style={{ left: p.x, top: p.y }}
+      title={`${color === "red" ? "Red" : "Black"} pin · V(${p.net})`}
+    >
+      <img
+        src={color === "red" ? "/icons/probe-red.png" : "/icons/probe-black.png"}
+        alt=""
+        draggable={false}
+      />
+    </div>
+  );
+  return (
+    <ViewportPortal>
+      <div className="probe-pin-layer" aria-hidden>
+        {red ? pin("red", red) : null}
+        {black ? pin("black", black) : null}
+      </div>
+    </ViewportPortal>
+  );
+}
+
 /** Public Canvas props (named so JSX typings stay in sync with App). */
 export type CanvasProps = {
   nodes: Node<ComponentData>[];
@@ -804,6 +841,7 @@ export function Canvas({
   uiTheme = "dark",
 }: CanvasProps) {
   const simResult = useSimResult();
+  const probeSel = useProbeSelectionOptional();
   const canvasElRef = useRef<HTMLDivElement | null>(null);
   const rfRef = useRef<ReactFlowInstance<Node<ComponentData>> | null>(null);
   const [viewLocked, setViewLocked] = useState(false);
@@ -834,6 +872,18 @@ export function Canvas({
     !placeKind &&
     !pasteClip &&
     !wiring;
+  const probesLiveRef = useRef(probesLive);
+  probesLiveRef.current = probesLive;
+  const probeSelRef = useRef(probeSel);
+  probeSelRef.current = probeSel;
+  const simResultRef = useRef(simResult);
+  simResultRef.current = simResult;
+  /** Explore + Probe mode + live results — plain click adds V/I to the plot. */
+  const canClickProbe = () =>
+    modeRef.current === "explore" &&
+    probesLiveRef.current &&
+    Boolean(probeSelRef.current?.probeMode) &&
+    Boolean(simResultRef.current?.series.length);
   const modeRef = useRef(mode);
   modeRef.current = mode;
   const placeKindRef = useRef(placeKind);
@@ -2287,11 +2337,24 @@ export function Canvas({
   }, [mode]);
 
   // Explore / Move / Drag: generous hit-test so tiny wire stubs still select (then Delete removes them).
-  // Free tip squares cover stubs — clicking a tip selects its attached wire.
+  // Probe mode: click wire → red pin, then black pin (voltage / differential).
   useEffect(() => {
     if (mode !== "move" && mode !== "drag" && mode !== "explore") return;
     const root = canvasElRef.current;
     if (!root) return;
+
+    const placeV = (net: string, flow: { x: number; y: number }, event: MouseEvent) => {
+      if (!canClickProbe() || event.ctrlKey || event.metaKey || event.shiftKey) return false;
+      const sel = probeSelRef.current;
+      const series = simResultRef.current?.series;
+      if (!sel || !series?.length) return false;
+      if (!probeAvailable(series, { kind: "V", net })) {
+        sel.reportMissing(`V(${net})`);
+        return true; // consumed (show error), don't select
+      }
+      sel.placeVoltagePin(net, flow.x, flow.y);
+      return true;
+    };
 
     const onClick = (event: MouseEvent) => {
       if (placingRef.current || copyMarqueeRef.current) return;
@@ -2310,6 +2373,16 @@ export function Canvas({
         if (node?.data.kind === "TIP") {
           const edge = preferredEdgeForTip(nodes, edges, node.id);
           if (!edge) return;
+          if (edge.sourceHandle) {
+            const nets = extractNets(nodes, edges);
+            const net = nets.netOf(edge.source, edge.sourceHandle);
+            if (placeV(net, cursor, event)) {
+              event.preventDefault();
+              event.stopPropagation();
+              event.stopImmediatePropagation();
+              return;
+            }
+          }
           event.preventDefault();
           event.stopPropagation();
           event.stopImmediatePropagation();
@@ -2318,10 +2391,38 @@ export function Canvas({
         }
         return;
       }
-      if (target?.closest?.(".react-flow__edge")) return;
+      if (target?.closest?.(".react-flow__edge")) {
+        const edgeEl = target.closest(".react-flow__edge") as HTMLElement | null;
+        const edgeId = edgeEl?.getAttribute("data-id") ?? edgeEl?.dataset?.id;
+        const edge = edgeId ? edges.find((e) => e.id === edgeId) : null;
+        if (edge?.sourceHandle) {
+          const nets = extractNets(nodes, edges);
+          const net = nets.netOf(edge.source, edge.sourceHandle);
+          if (placeV(net, cursor, event)) {
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+            return;
+          }
+        }
+        return;
+      }
 
       let hit = wireHitAtCursor(nodes, edges, cursor);
       if (!hit) return;
+
+      const edge = edges.find((e) => e.id === hit!.edgeId);
+      if (edge?.sourceHandle) {
+        const nets = extractNets(nodes, edges);
+        const net = nets.netOf(edge.source, edge.sourceHandle);
+        if (placeV(net, cursor, event)) {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          return;
+        }
+      }
+
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
@@ -2333,6 +2434,7 @@ export function Canvas({
   }, [mode]);
 
   // Explore / Move / Drag: capture part clicks before React Flow can single-select.
+  // Probe mode: Shift+click part → I(refdes); plain click still selects.
   useEffect(() => {
     if (mode !== "move" && mode !== "drag" && mode !== "explore") return;
     const root = canvasElRef.current;
@@ -2352,6 +2454,35 @@ export function Canvas({
       const node = nodesRef.current.find((n) => n.id === nodeId);
       if (!node || node.data.kind === "TIP") return;
 
+      if (
+        canClickProbe() &&
+        event.shiftKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        probeSelRef.current &&
+        simResultRef.current?.series.length
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        const refdes = node.data.refdes?.trim();
+        if (!refdes) {
+          probeSelRef.current.reportMissing("I(?)");
+          return;
+        }
+        if (
+          !probeAvailable(simResultRef.current.series, {
+            kind: "I",
+            refdes,
+          })
+        ) {
+          probeSelRef.current.reportMissing(`I(${refdes})`);
+          return;
+        }
+        probeSelRef.current.toggleCurrent(refdes);
+        return;
+      }
+
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
@@ -2367,6 +2498,23 @@ export function Canvas({
 
     root.addEventListener("click", onClick, true);
     return () => root.removeEventListener("click", onClick, true);
+  }, [mode]);
+
+  // Probe mode: right-click removes black pin, then red pin.
+  useEffect(() => {
+    if (mode !== "explore") return;
+    const root = canvasElRef.current;
+    if (!root) return;
+    const onContextMenu = (e: MouseEvent) => {
+      if (!canClickProbe() || !probeSelRef.current) return;
+      if (probeSelRef.current.popProbePin()) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+      }
+    };
+    root.addEventListener("contextmenu", onContextMenu, true);
+    return () => root.removeEventListener("contextmenu", onContextMenu, true);
   }, [mode]);
 
   // Explore: block React Flow mousedown selection (Move uses beginMoveDrag below).
@@ -3061,7 +3209,7 @@ export function Canvas({
   return (
     <div
       ref={canvasElRef}
-      className={`canvas${mode === "explore" ? " canvas-explore" : ""}${mode === "wire" ? " canvas-wire" : ""}${wiring ? " canvas-wiring" : ""}${mode === "move" ? " canvas-move" : ""}${mode === "drag" ? " canvas-drag" : ""}${mode === "delete" ? " canvas-delete" : ""}${marquee ? " canvas-marquee" : ""}${placeKind || pasteClip ? " canvas-placing" : ""}${copyMarquee ? " canvas-copy-marquee" : ""}`}
+      className={`canvas${mode === "explore" ? " canvas-explore" : ""}${mode === "wire" ? " canvas-wire" : ""}${wiring ? " canvas-wiring" : ""}${mode === "move" ? " canvas-move" : ""}${mode === "drag" ? " canvas-drag" : ""}${mode === "delete" ? " canvas-delete" : ""}${marquee ? " canvas-marquee" : ""}${placeKind || pasteClip ? " canvas-placing" : ""}${copyMarquee ? " canvas-copy-marquee" : ""}${mode === "explore" && probesLive && probeSel?.probeMode ? ` canvas-probe canvas-probe-${probeSel.nextPin === "done" ? "black" : probeSel.nextPin}` : ""}`}
     >
       <ReactFlow
         nodes={nodes}
@@ -3198,6 +3346,7 @@ export function Canvas({
           crossings={wireMarks.crossings}
           interactive={mode === "delete"}
         />
+        <ProbePinMarkers red={probeSel?.redPin ?? null} black={probeSel?.blackPin ?? null} />
         {placeKind ? (
           <PlaceGhostOverlay
             kind={placeKind}
@@ -3208,6 +3357,35 @@ export function Canvas({
         ) : null}
         {pasteClip ? <PasteGhostOverlay clip={pasteClip} origin={placeGhost} /> : null}
       </ReactFlow>
+      {mode === "explore" && probesLive && probeSel?.probeMode ? (
+        <div className="probe-mode-banner" role="status">
+          <img
+            className="probe-mode-banner-icon"
+            src={
+              probeSel.nextPin === "black" || probeSel.nextPin === "done"
+                ? "/icons/probe-black.png"
+                : "/icons/probe-red.png"
+            }
+            alt=""
+            width={14}
+            height={28}
+          />
+          <strong>Probe ON</strong>
+          <span>
+            {probeSel.nextPin === "red" && (
+              <>Click a <em>wire</em> to place the <strong style={{ color: "#c62828" }}>red</strong> pin</>
+            )}
+            {probeSel.nextPin === "black" && (
+              <>Click another <em>wire</em> for the <strong>black</strong> pin (reference)</>
+            )}
+            {probeSel.nextPin === "done" && (
+              <>V({probeSel.redPin?.net},{probeSel.blackPin?.net}) · click moves black · right-click removes pins</>
+            )}
+            {" · "}
+            <kbd>Shift</kbd>+click part = current · <kbd>Ctrl</kbd>+click = select
+          </span>
+        </div>
+      ) : null}
       {probeTip && (
         <div
           className="sim-probe-tip"

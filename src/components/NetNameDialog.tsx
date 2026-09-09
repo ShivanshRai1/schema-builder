@@ -54,19 +54,6 @@ export function NetNameDialog({
       >
         <div className="comp-props-titlebar">
           <span className="comp-props-title">Net name</span>
-          <div className="comp-props-actions">
-            <button
-              type="button"
-              className="comp-props-btn primary"
-              disabled={!name.trim()}
-              onClick={submit}
-            >
-              OK
-            </button>
-            <button type="button" className="comp-props-btn" onClick={onCancel}>
-              Cancel
-            </button>
-          </div>
         </div>
         <div className="comp-props-body">
           <p className="comp-props-sub">
@@ -84,6 +71,22 @@ export function NetNameDialog({
               autoComplete="off"
             />
           </label>
+        </div>
+        <div className="comp-props-footer">
+          <div className="comp-props-footer-left" />
+          <div className="comp-props-actions">
+            <button
+              type="button"
+              className="comp-props-btn primary"
+              disabled={!name.trim()}
+              onClick={submit}
+            >
+              OK
+            </button>
+            <button type="button" className="comp-props-btn" onClick={onCancel}>
+              Cancel
+            </button>
+          </div>
         </div>
       </div>
     </div>

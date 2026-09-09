@@ -8,7 +8,7 @@ import {
   Legend,
   Title,
 } from "chart.js";
-import { formatSeriesForChart, normalizeSeries, runFleetJob, type SimEngine } from "../sim/runSimulation";
+import { formatSeriesForChart, legendLabelsForSeries, normalizeSeries, runFleetJob, type SimEngine } from "../sim/runSimulation";
 import { analyseRR, fmt } from "../sim/sicCompare";
 
 Chart.register(LineController, LineElement, PointElement, LinearScale, Legend, Title);
@@ -54,39 +54,45 @@ export function SicComparePanel({ netlist }: { netlist: string }) {
       return;
     }
     waveChart.current?.destroy();
+    const labels = legendLabelsForSeries(series, netlist);
     waveChart.current = new Chart(waveRef.current, {
       type: "line",
       data: {
         datasets: series.map((s, i) => ({
-          label: s.name,
+          label: labels[i] ?? s.name,
           data: s.x.map((x, j) => ({ x, y: s.y[j] ?? 0 })),
           borderColor: COLORS[i % COLORS.length],
           backgroundColor: "transparent",
           pointRadius: 0,
-          borderWidth: 1.5,
-          tension: 0.15,
+          borderWidth: 3.25,
+          borderCapStyle: "round",
+          tension: 0.05,
         })),
       },
       options: {
         animation: false,
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { labels: { color: "#8b98a5", boxWidth: 10, font: { size: 10 } } } },
+        plugins: {
+          legend: {
+            labels: { color: "#c8d4e0", boxWidth: 14, font: { size: 12, weight: 700 } },
+          },
+        },
         scales: {
           x: {
             type: "linear",
-            title: { display: true, text: "t (s)", color: "#8b98a5" },
-            ticks: { color: "#8b98a5", maxTicksLimit: 5 },
-            grid: { color: "#2a323d" },
+            title: { display: true, text: "t (s)", color: "#c8d4e0", font: { size: 12, weight: 700 } },
+            ticks: { color: "#8b98a5", maxTicksLimit: 5, font: { weight: 600 } },
+            grid: { color: "#3a4553", lineWidth: 1.25 },
           },
           y: {
-            ticks: { color: "#8b98a5" },
-            grid: { color: "#2a323d" },
+            ticks: { color: "#8b98a5", font: { weight: 600 } },
+            grid: { color: "#3a4553", lineWidth: 1.25 },
           },
         },
       },
     });
-  }, [series]);
+  }, [series, netlist]);
 
   useEffect(() => {
     if (!rr?.wave.length || !rrRef.current) {
@@ -149,7 +155,7 @@ export function SicComparePanel({ netlist }: { netlist: string }) {
         setStatus(job.error);
         return;
       }
-      const traces = formatSeriesForChart(normalizeSeries(job.data));
+      const traces = formatSeriesForChart(normalizeSeries(job.data), netlist);
       setSeries(traces);
       setSentNl(text);
       let rrNext: ReturnType<typeof analyseRR> | null = null;

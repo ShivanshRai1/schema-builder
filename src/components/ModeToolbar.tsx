@@ -1,6 +1,8 @@
 import { useState, type MutableRefObject } from "react";
 import type { CanvasMode, CanvasViewApi } from "./Canvas";
 import type { SimControlApi, SimRunState } from "./SimPanel";
+import { useSimResult } from "../sim/SimResultContext";
+import { useProbeSelectionOptional } from "../sim/ProbeContext";
 
 const MODES: {
   id: CanvasMode;
@@ -195,6 +197,21 @@ function StopIcon({ enabled }: { enabled: boolean }) {
   );
 }
 
+/** LTspice-style voltage probe needle (toolbar) — uses shipped red pin art. */
+function ProbeNeedleIcon({ active }: { active: boolean }) {
+  return (
+    <img
+      className={`mode-toolbar-probe-img${active ? " is-on" : ""}`}
+      src="/icons/probe-red.png"
+      alt=""
+      width={14}
+      height={28}
+      draggable={false}
+      aria-hidden
+    />
+  );
+}
+
 function CutIcon() {
   return (
     <svg className="mode-toolbar-edit-icon" width="20" height="20" viewBox="0 0 24 24" aria-hidden>
@@ -249,6 +266,10 @@ export function ModeToolbar({
   onCut,
   onCopy,
   copyActive = false,
+  onUndo,
+  onRedo,
+  canUndo = false,
+  canRedo = false,
 }: {
   mode: CanvasMode;
   onModeChange: (mode: CanvasMode) => void;
@@ -265,15 +286,68 @@ export function ModeToolbar({
   onCopy?: () => void;
   /** True while Ctrl+C copy-marquee / copy tool is active. */
   copyActive?: boolean;
+  onUndo?: () => void;
+  onRedo?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
 }) {
   const [viewLocked, setViewLocked] = useState(false);
   // Explore stays a real mode (E / Esc) but has no toolbar button.
   const toolbarModes = MODES.filter((m) => m.id !== "explore");
   const simRunning = simRunState === "running";
   const stopEnabled = simRunState === "running" || simRunState === "paused";
+  const simResult = useSimResult();
+  const probeSel = useProbeSelectionOptional();
+  const probeAvailable = Boolean(simResult?.ok && simResult.series.length && probeSel);
+  const probeOn = Boolean(probeSel?.probeMode);
 
   return (
     <div className="mode-toolbar" role="toolbar" aria-label="Canvas tools">
+      {(onUndo || onRedo) && (
+        <>
+          <div className="mode-toolbar-history" role="group" aria-label="History">
+            {onUndo && (
+              <button
+                type="button"
+                className="mode-toolbar-view-btn mode-toolbar-undo"
+                title="Undo (Ctrl+Z)"
+                aria-label="Undo (Ctrl+Z)"
+                disabled={!canUndo}
+                onClick={onUndo}
+              >
+                <img
+                  className="mode-toolbar-history-icon"
+                  src="/icons/history-undo.png"
+                  alt=""
+                  width={22}
+                  height={18}
+                  draggable={false}
+                />
+              </button>
+            )}
+            {onRedo && (
+              <button
+                type="button"
+                className="mode-toolbar-view-btn mode-toolbar-redo"
+                title="Redo (Ctrl+Y)"
+                aria-label="Redo (Ctrl+Y)"
+                disabled={!canRedo}
+                onClick={onRedo}
+              >
+                <img
+                  className="mode-toolbar-history-icon"
+                  src="/icons/history-redo.png"
+                  alt=""
+                  width={22}
+                  height={18}
+                  draggable={false}
+                />
+              </button>
+            )}
+          </div>
+          <div className="mode-toolbar-sep" aria-hidden />
+        </>
+      )}
       {toolbarModes.map((m) => {
         const active = mode === m.id;
         return (
@@ -425,6 +499,22 @@ export function ModeToolbar({
             >
               <StopIcon enabled={stopEnabled} />
             </button>
+            {probeAvailable && (
+              <button
+                type="button"
+                className={`mode-toolbar-view-btn mode-toolbar-probe${probeOn ? " is-active" : ""}`}
+                title={
+                  probeOn
+                    ? "Probe ON — click a wire for voltage, a part for current (click again to turn off)"
+                    : "Probe — click to plot voltages/currents on the schematic"
+                }
+                aria-label={probeOn ? "Probe on" : "Probe"}
+                aria-pressed={probeOn}
+                onClick={() => probeSel?.setProbeMode(!probeOn)}
+              >
+                <ProbeNeedleIcon active={probeOn} />
+              </button>
+            )}
           </div>
         </>
       )}

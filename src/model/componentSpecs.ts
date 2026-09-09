@@ -246,9 +246,17 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
       A("rser", "Series Resistance", "text", "", { unit: "Ω" }),
     ],
     toSpice: (r, n, p) => {
-      const dc = (p.dc ?? "V").trim() || "V";
       const rser = (p.rser ?? "").trim();
       const ser = rser ? ` Rser=${rser}` : "";
+      // Legacy: older circuits stored PULSE fields on BATTERY before DC/Pulse radio swap.
+      const pulse =
+        [p.vinitial, p.von, p.tdelay, p.trise, p.tfall, p.ton, p.tperiod].some(
+          (x) => (x ?? "").trim().length > 0,
+        );
+      if (pulse) {
+        return `${r} ${n("p")} ${n("n")} PULSE(${p.vinitial || "0"} ${p.von || "V"} ${p.tdelay || "0"} ${p.trise || "0"} ${p.tfall || "0"} ${p.ton || "0"} ${p.tperiod || "0"})${ser}`;
+      }
+      const dc = (p.dc ?? "V").trim() || "V";
       return `${r} ${n("p")} ${n("n")} DC ${dc}${ser}`;
     },
   },

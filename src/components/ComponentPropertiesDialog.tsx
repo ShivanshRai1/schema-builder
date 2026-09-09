@@ -186,6 +186,7 @@ export function ComponentPropertiesDialog({
   onApply,
   onCancel,
   onRotateLive,
+  onConvertVoltageMode,
   onDelete,
 }: {
   node: Node<ComponentData>;
@@ -195,6 +196,12 @@ export function ComponentPropertiesDialog({
   onCancel: () => void;
   /** Immediate 90° rotate on the live node (LTspice-like); also updates draft. */
   onRotateLive?: (nodeId: string) => void;
+  /** DC voltage ↔ Pulse generator in place (keeps refdes / wires). */
+  onConvertVoltageMode?: (
+    nodeId: string,
+    mode: "DC" | "Pulse",
+    draft?: { params?: Record<string, string>; refdes?: string },
+  ) => void;
   onDelete?: (nodeId: string) => void;
 }) {
   const spec = COMPONENT_SPECS[node.data.kind];
@@ -295,18 +302,6 @@ export function ComponentPropertiesDialog({
           onPointerDown={startDrag}
         >
           <span className="comp-props-title">{title}</span>
-          <div className="comp-props-actions">
-            <button
-              type="button"
-              className="comp-props-btn primary"
-              onClick={() => onApply(node.id, draft)}
-            >
-              OK
-            </button>
-            <button type="button" className="comp-props-btn" onClick={onCancel}>
-              Cancel
-            </button>
-          </div>
         </div>
 
         <div className="comp-props-body">
@@ -321,6 +316,48 @@ export function ComponentPropertiesDialog({
               />
             </label>
           )}
+
+          {(node.data.kind === "BATTERY" || node.data.kind === "VPULSE") &&
+            onConvertVoltageMode && (
+              <fieldset className="prop-field prop-mode-radios">
+                <legend className="prop-label">Mode</legend>
+                <div className="prop-radio-row" role="radiogroup" aria-label="Voltage source mode">
+                  <label className="prop-radio">
+                    <input
+                      type="radio"
+                      name={`vsrc-mode-${node.id}`}
+                      checked={node.data.kind === "BATTERY"}
+                      onChange={() => {
+                        if (node.data.kind === "BATTERY") return;
+                        onConvertVoltageMode(node.id, "DC", {
+                          params: draft.params,
+                          refdes: draft.refdes,
+                        });
+                      }}
+                    />
+                    <span>DC</span>
+                  </label>
+                  <label className="prop-radio">
+                    <input
+                      type="radio"
+                      name={`vsrc-mode-${node.id}`}
+                      checked={node.data.kind === "VPULSE"}
+                      onChange={() => {
+                        if (node.data.kind === "VPULSE") return;
+                        onConvertVoltageMode(node.id, "Pulse", {
+                          params: draft.params,
+                          refdes: draft.refdes,
+                        });
+                      }}
+                    />
+                    <span>Pulse</span>
+                  </label>
+                </div>
+                <span className="prop-hint">
+                  Pulse swaps to the pulse-generator symbol in place (same name and wires).
+                </span>
+              </fieldset>
+            )}
 
           {spec.attributes.map((attr, i) => {
             const value = draft.params[attr.key] ?? attr.default;
@@ -450,8 +487,10 @@ export function ComponentPropertiesDialog({
           {spec.attributes.length === 0 && !showRefdes && !showLabelPos && (
             <div className="props-empty">This element has no editable attributes.</div>
           )}
+        </div>
 
-          <div className="comp-props-extra">
+        <div className="comp-props-footer">
+          <div className="comp-props-footer-left">
             {onRotateLive && (
               <button
                 type="button"
@@ -480,6 +519,18 @@ export function ComponentPropertiesDialog({
                 Delete
               </button>
             )}
+          </div>
+          <div className="comp-props-actions">
+            <button
+              type="button"
+              className="comp-props-btn primary"
+              onClick={() => onApply(node.id, draft)}
+            >
+              OK
+            </button>
+            <button type="button" className="comp-props-btn" onClick={onCancel}>
+              Cancel
+            </button>
           </div>
         </div>
       </div>
