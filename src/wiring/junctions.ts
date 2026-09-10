@@ -266,19 +266,37 @@ export function findWireJunctions(
     crossings.push(edgeIds ? { ...p, edgeIds, hop } : { ...p, hop });
   };
 
-  // Shared TIP with 2+ edges → junction mark (not on a component pin).
-  const tipDegree = new Map<string, number>();
+  // Shared TIP with 3+ *wire* edges → junction mark (not on a component pin).
+  // Degree 2 is an L-bend / through-splice — no filled square. Net-name stamps
+  // must not count (same as pinWireCount): otherwise label+L looks like a T.
+  const tipWireDegree = new Map<string, number>();
   for (const e of edges) {
-    const bump = (id: string) => tipDegree.set(id, (tipDegree.get(id) ?? 0) + 1);
+    const srcKind = nodes.find((n) => n.id === e.source)?.data.kind;
+    const tgtKind = nodes.find((n) => n.id === e.target)?.data.kind;
+    if (srcKind === "WIRELABEL" || tgtKind === "WIRELABEL") continue;
+    const bump = (id: string) =>
+      tipWireDegree.set(id, (tipWireDegree.get(id) ?? 0) + 1);
     bump(e.source);
     bump(e.target);
   }
+  const tipJunctionPts: Point[] = [];
   for (const n of nodes) {
     if (n.data.kind !== "TIP") continue;
-    if ((tipDegree.get(n.id) ?? 0) < 2) continue;
+    if ((tipWireDegree.get(n.id) ?? 0) < 3) continue;
     const pt = pinWorldPoint(n, "t");
-    if (pt) addJ(pt, n.id);
+    if (pt) {
+      addJ(pt, n.id);
+      tipJunctionPts.push(pt);
+    }
   }
+  // Geometric T detection can also fire on a short nub into the tip (draft
+  // finished a few px off the rail). One square at the tip is enough.
+  const nearTipJunction = (p: Point) =>
+    tipJunctionPts.some((t) => near(p, t, TOL + 6));
+  const addJGeom = (p: Point) => {
+    if (nearTipJunction(p)) return;
+    addJ(p);
+  };
 
   // Multi-wire pin: mark the visual T where the shared stub splits into the
   // rail — not the pin itself (both edges end on the pin in the graph).
@@ -300,8 +318,9 @@ export function findWireJunctions(
       )
       .map((x) => x.pts);
     const branch = branchPointFromPin(pin, related);
-    if (branch) addJ(branch);
-    else addJ(pin, undefined, { allowPin: true });
+    if (branch) {
+      if (!nearTipJunction(branch)) addJ(branch);
+    } else addJ(pin, undefined, { allowPin: true });
   }
 
   const labelNodeIds = new Set(
@@ -314,7 +333,7 @@ export function findWireJunctions(
   for (const { edge, pts } of edgePolys) {
     if (labelNodeIds.has(edge.source) || labelNodeIds.has(edge.target)) continue;
     const join = selfJoinOnOwnRail(pts);
-    if (join) addJ(join);
+    if (join) addJGeom(join);
   }
 
   // Wire-pair comparisons.
@@ -338,7 +357,7 @@ export function findWireJunctions(
       if (!aIsLabel) {
         for (const end of aEnds) {
           if (onPolylineInterior(end, B.pts)) {
-            if (sameNet) addJ(end);
+            if (sameNet) addJGeom(end);
             else addC(end, pair);
           }
         }
@@ -346,7 +365,7 @@ export function findWireJunctions(
       if (!bIsLabel) {
         for (const end of bEnds) {
           if (onPolylineInterior(end, A.pts)) {
-            if (sameNet) addJ(end);
+            if (sameNet) addJGeom(end);
             else addC(end, pair);
           }
         }
@@ -357,11 +376,11 @@ export function findWireJunctions(
       if (sameNet && !aIsLabel && !bIsLabel) {
         for (let vi = 1; vi < A.pts.length - 1; vi++) {
           const v = A.pts[vi]!;
-          if (onPolylineInterior(v, B.pts)) addJ(v);
+          if (onPolylineInterior(v, B.pts)) addJGeom(v);
         }
         for (let vi = 1; vi < B.pts.length - 1; vi++) {
           const v = B.pts[vi]!;
-          if (onPolylineInterior(v, A.pts)) addJ(v);
+          if (onPolylineInterior(v, A.pts)) addJGeom(v);
         }
       }
 
@@ -394,10 +413,10 @@ export function findWireJunctions(
           // Endpoint of one on interior of the other (caught above too, but
           // orthoCross can also hit exactly at the tip).
           if (onAEnd && onInterior(hit, b1, b2)) {
-            if (sameNet) addJ(hit);
+            if (sameNet) addJGeom(hit);
             else addC(hit, pair, hop);
           } else if (onBEnd && onInterior(hit, a1, a2)) {
-            if (sameNet) addJ(hit);
+            if (sameNet) addJGeom(hit);
             else addC(hit, pair, hop);
           }
         }

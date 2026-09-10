@@ -75,6 +75,12 @@ function nearestSegmentAxis(poly: Point[], cursor: Point): "h" | "v" | null {
 /**
  * Point on `edgeId` where a rung should start: cursor column on H bus Y,
  * or cursor row on V bus X. Extends the bus if the column/row is past an end.
+ *
+ * `align` (optional): when finishing a draft onto this rail, pass the draft's
+ * last locked point so a horizontal run meets a V bus on its own Y (and a
+ * vertical run meets an H bus on its own X). Using only the click Y/X often
+ * parks the tip a few pixels off the run and leaves a nub + double junction
+ * square.
  */
 export function resolveBranchOnEdge(
   nodes: Node<ComponentData>[],
@@ -82,6 +88,7 @@ export function resolveBranchOnEdge(
   edgeId: string,
   cursor: Point,
   grid: number,
+  opts?: { align?: Point },
 ): EdgeBranchTarget | null {
   const edge = edges.find((e) => e.id === edgeId);
   if (!edge) return null;
@@ -94,6 +101,7 @@ export function resolveBranchOnEdge(
   const axis = nearestSegmentAxis(poly, cursor) ?? edgeDominantAxis(poly, grid);
   if (!axis) return null;
 
+  const align = opts?.align;
   let point: Point;
   if (axis === "h") {
     let bestY = poly[0]!.y;
@@ -108,7 +116,8 @@ export function resolveBranchOnEdge(
         bestY = a.y;
       }
     }
-    point = { x: snapCoord(cursor.x, grid), y: bestY };
+    const col = align ? align.x : cursor.x;
+    point = { x: snapCoord(col, grid), y: bestY };
   } else {
     let bestX = poly[0]!.x;
     let bestDx = Infinity;
@@ -122,7 +131,8 @@ export function resolveBranchOnEdge(
         bestX = a.x;
       }
     }
-    point = { x: bestX, y: snapCoord(cursor.y, grid) };
+    const row = align ? align.y : cursor.y;
+    point = { x: bestX, y: snapCoord(row, grid) };
   }
 
   // Keep the attach point on the rail. Column/row snap can land inside the

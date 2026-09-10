@@ -10,7 +10,7 @@ import {
   polylinePath,
   type Point,
 } from "../wiring/orthogonal";
-import { computeEdgePolyline } from "../wiring/wireGeometry";
+import { computeEdgePolyline, collinearRunBounds } from "../wiring/wireGeometry";
 import type { ComponentData } from "../model/types";
 
 export type SchematicWireData = {
@@ -96,9 +96,11 @@ export function SchematicWireEdge({
     segIdx < points.length - 1;
 
   if (segmentOnly) {
-    const a = points[segIdx]!;
-    const b = points[segIdx + 1]!;
-    const segPath = polylinePath([a, b]);
+    // Highlight the whole straight H/V run (not one micro-segment).
+    const run = collinearRunBounds(points, segIdx);
+    const lo = run?.lo ?? segIdx;
+    const hi = run?.hi ?? segIdx + 1;
+    const segPath = polylinePath(points.slice(lo, hi + 1));
     return (
       <>
         <BaseEdge

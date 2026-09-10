@@ -4,7 +4,6 @@ import type { AssistantContext } from "../llm/assistantTypes";
 import { assistantApiUrl } from "../llm/assistantApi";
 import { runAssistant } from "../llm/runAssistant";
 import { AssistantProposeForm } from "./AssistantProposeForm";
-import { DeviceTable } from "./DeviceTable";
 
 interface Message {
   role: "user" | "assistant";
@@ -16,8 +15,7 @@ interface Message {
  * Default: rule-based interpret via runAssistant (no env).
  * With VITE_ASSISTANT_API_URL: calls your backend stub / future LLM.
  *
- * Ops never hit the graph until the user confirms in AssistantProposeForm
- * (chat) or clicks Apply on a DeviceTable row.
+ * Ops never hit the graph until the user confirms in AssistantProposeForm.
  */
 export function ChatPanel({
   onApplyOps,
@@ -31,19 +29,15 @@ export function ChatPanel({
     {
       role: "assistant",
       text: usingApi
-        ? "Hi — ask me to add parts, change values, or connect wires. I'll show a form first. Or edit values in the Devices table."
-        : "Hi — try “add 10k resistor”, “set R1 value 4.7k”, “connect R1 to C1”. Confirm in the form, or edit Devices below.",
+        ? "Hi — ask me to add parts, change values, or connect wires. I'll show a form first for you to confirm."
+        : "Hi — try “add 10k resistor”, “set R1 value 4.7k”, or “connect R1 to C1”. Confirm changes in the form before they apply.",
     },
   ]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [pendingOps, setPendingOps] = useState<Op[] | null>(null);
   const [pendingContext, setPendingContext] = useState<AssistantContext | null>(null);
-  const [tableTick, setTableTick] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
-
-  const liveContext = getContext();
-  void tableTick;
 
   async function send() {
     const text = input.trim();
@@ -82,7 +76,6 @@ export function ChatPanel({
     ]);
     setPendingOps(null);
     setPendingContext(null);
-    setTableTick((t) => t + 1);
   }
 
   function cancelPending() {
@@ -99,14 +92,6 @@ export function ChatPanel({
       <div className="panel-header">
         <span>assistant</span>
       </div>
-
-      <DeviceTable
-        context={liveContext}
-        onApplyOps={(ops) => {
-          onApplyOps(ops);
-          setTableTick((t) => t + 1);
-        }}
-      />
 
       <div className="chat-log">
         {messages.map((m, i) => (

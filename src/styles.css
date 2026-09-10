@@ -1032,6 +1032,7 @@ body { background: var(--bg); color: var(--text); }
   width: 0;
   height: 0;
   transform-origin: 0 0;
+  /* Allow the text chip to receive clicks; empty spin box stays pass-through. */
   pointer-events: none;
   z-index: 3;
 }
@@ -1052,8 +1053,9 @@ body { background: var(--bg); color: var(--text); }
   border: 1px solid var(--label-chip-border);
   padding: var(--label-chip-pad);
   border-radius: 2px;
+  /* Label chip must receive clicks — body is pointer-events:none so wires show through. */
   pointer-events: auto;
-  cursor: inherit;
+  cursor: pointer;
 }
 .component-node.kind-WIRELABEL .symbol-body {
   display: none;
@@ -1407,23 +1409,46 @@ body { background: var(--bg); color: var(--text); }
 .canvas-wiring .component-node {
   cursor: crosshair !important;
 }
-.canvas-move .react-flow__pane { cursor: crosshair; }
-.canvas-move .react-flow__node { cursor: grab; }
-.canvas-move .react-flow__edge { cursor: grab; }
-.canvas-move .react-flow__edge:active { cursor: grabbing; }
-.canvas-move .react-flow__node.dragging { cursor: grabbing; }
-.canvas-drag .react-flow__pane { cursor: crosshair; }
-.canvas-drag .react-flow__node { cursor: move; }
-.canvas-drag .react-flow__edge { cursor: pointer; }
-.canvas-drag .react-flow__node.dragging { cursor: grabbing; }
-.canvas-delete,
-.canvas-delete * {
+/* Move / Drag: default arrow on empty canvas; grab on parts & wires.
+   Crosshair only while an active selection box is being drawn. */
+.canvas-move .react-flow__pane,
+.canvas-drag .react-flow__pane {
+  cursor: default;
+}
+.canvas-move.canvas-marquee .react-flow__pane,
+.canvas-drag.canvas-marquee .react-flow__pane {
+  cursor: crosshair;
+}
+.canvas-move .react-flow__node,
+.canvas-drag .react-flow__node {
+  cursor: grab;
+}
+.canvas-move .react-flow__edge,
+.canvas-drag .react-flow__edge {
+  cursor: grab;
+}
+.canvas-move .react-flow__edge:active,
+.canvas-drag .react-flow__edge:active,
+.canvas-move .react-flow__node.dragging,
+.canvas-drag .react-flow__node.dragging {
+  cursor: grabbing;
+}
+/* Delete: scissors on targets; normal arrow on empty canvas. */
+.canvas-delete .react-flow__pane {
+  cursor: default;
+}
+.canvas-delete .react-flow__node,
+.canvas-delete .react-flow__edge,
+.canvas-delete .react-flow__edge-path,
+.canvas-delete .react-flow__connectionline,
+.canvas-delete .component-node,
+.canvas-delete .component-pin {
   /*
    * Standard scissors silhouette (handles left, blades right) —
    * same orientation as common cut icons so it reads at cursor size.
    * Hotspot ≈ blade tips.
    */
-  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='6' cy='6' r='3' stroke='%230b1220' stroke-width='3.2'/%3E%3Ccircle cx='6' cy='18' r='3' stroke='%230b1220' stroke-width='3.2'/%3E%3Cpath d='M8.12 8.12 L12 12 M14.47 14.48 L20 20 M8.12 15.88 L20 4' stroke='%230b1220' stroke-width='3.2'/%3E%3Ccircle cx='6' cy='6' r='3' stroke='%23f2f6fb' stroke-width='1.7'/%3E%3Ccircle cx='6' cy='18' r='3' stroke='%23f2f6fb' stroke-width='1.7'/%3E%3Cpath d='M8.12 8.12 L12 12 M14.47 14.48 L20 20 M8.12 15.88 L20 4' stroke='%23f2f6fb' stroke-width='1.7'/%3E%3C/g%3E%3C/svg%3E") 20 4, not-allowed !important;
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='6' cy='6' r='3' stroke='%230b1220' stroke-width='3.2'/%3E%3Ccircle cx='6' cy='18' r='3' stroke='%230b1220' stroke-width='3.2'/%3E%3Cpath d='M8.12 8.12 L12 12 M14.47 14.48 L20 20 M8.12 15.88 L20 4' stroke='%230b1220' stroke-width='3.2'/%3E%3Ccircle cx='6' cy='6' r='3' stroke='%23f2f6fb' stroke-width='1.7'/%3E%3Ccircle cx='6' cy='18' r='3' stroke='%23f2f6fb' stroke-width='1.7'/%3E%3Cpath d='M8.12 8.12 L12 12 M14.47 14.48 L20 20 M8.12 15.88 L20 4' stroke='%23f2f6fb' stroke-width='1.7'/%3E%3C/g%3E%3C/svg%3E") 20 4, pointer !important;
 }
 
 /* Bend handles (HTML via EdgeLabelRenderer): faint until hover. */
@@ -2620,6 +2645,14 @@ body { background: var(--bg); color: var(--text); }
 .chat-log { flex: 1; overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
 .chat-msg { display: flex; }
 .chat-msg.user { justify-content: flex-end; }
+.chat-msg.assistant .chat-bubble {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.45;
+  color: var(--text);
+  background: var(--panel-2, var(--panel));
+  border-color: var(--border);
+}
 .chat-bubble {
   max-width: 82%; padding: 7px 10px; border-radius: 10px; font-size: 12.5px; line-height: 1.4;
   background: var(--panel-2); border: 1px solid var(--border);

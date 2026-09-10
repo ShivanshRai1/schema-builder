@@ -159,13 +159,13 @@ export function absorbTipsOntoPins(
                 ...e,
                 source: best!.partId,
                 sourceHandle: best!.pinId,
-                data: { ...(e.data as object), waypoints: [], directPath: false },
+                data: { ...(e.data as object), waypoints: [], directPath: true },
               }
             : {
                 ...e,
                 target: best!.partId,
                 targetHandle: best!.pinId,
-                data: { ...(e.data as object), waypoints: [], directPath: false },
+                data: { ...(e.data as object), waypoints: [], directPath: true },
               }
           : e,
       );

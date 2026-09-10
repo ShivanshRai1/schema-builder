@@ -100,9 +100,9 @@ export function spicePinOrder(kind: ComponentKind): string[] {
 export function indexDeviceLines(text: string): Map<string, string[]> {
   const map = new Map<string, string[]>();
   for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
+    const line = raw.replace(/;.*$/, "").trim();
     if (!line || line.startsWith("*") || line.startsWith(".")) continue;
-    const tokens = line.split(/\s+/);
+    const tokens = sanitizeDeviceTokens(line.split(/\s+/));
     if (tokens.length < 2) continue;
     const [refdes, ...rest] = tokens;
     map.set(refdes, rest);
@@ -116,11 +116,22 @@ export interface ParsedDevice {
   rest: string[];
 }
 
+/** Drop `; …` comments and lone `?` placeholders (draft / unknown-value marks). */
+function sanitizeDeviceTokens(tokens: string[]): string[] {
+  const out: string[] = [];
+  for (const t of tokens) {
+    if (t.startsWith(";")) break;
+    if (t === "?") continue;
+    out.push(t);
+  }
+  return out;
+}
+
 export function parseDeviceLines(text: string): ParsedDevice[] {
   const out: ParsedDevice[] = [];
   let inSubckt = false;
   for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
+    const line = raw.replace(/;.*$/, "").trim();
     if (!line || line.startsWith("*")) continue;
     // Library blocks belong in Models — never invent schematic parts from them.
     if (/^\.subckt\b/i.test(line)) {
@@ -133,7 +144,7 @@ export function parseDeviceLines(text: string): ParsedDevice[] {
     }
     if (inSubckt) continue;
     if (line.startsWith(".") || line.startsWith("+")) continue;
-    const tokens = line.split(/\s+/);
+    const tokens = sanitizeDeviceTokens(line.split(/\s+/));
     if (tokens.length < 2) continue;
     const [refdes, ...rest] = tokens;
     out.push({ refdes, rest });
@@ -174,6 +185,29 @@ export function inferKindFromRefdes(
  * (e.g. `X1 vs mid XFD11K33CA`).
  * Voltage sources: prefer PULSE/SINE/PWL/DC in the line over a stale canvas hint.
  */
+/** Classic series ammeter: `Vsense n1 n2 0` / `Vxxx n1 n2 DC 0`. */
+export function isZeroVoltSeriesSource(rest: string[]): boolean {
+  if (rest.length < 3) return false;
+  const a = rest[2]!;
+  if (/^0(\.0*)?([eE][+\-]?\d+)?$/.test(a)) return true;
+  if (/^DC$/i.test(a) && rest[3] != null && /^0(\.0*)?([eE][+\-]?\d+)?$/i.test(rest[3]!)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Named 0 V sources used only as SPICE ammeters (e.g. `Vsense vout vs 0`).
+ * Not drawn on the schematic — the original circuit shorts through them.
+ * Explicit palette probes (`Vpr1`) still get a symbol.
+ */
+export function isSchematicHiddenAmmeter(refdes: string, rest: string[]): boolean {
+  if (!isZeroVoltSeriesSource(rest)) return false;
+  if (/^Vpr\d+$/i.test(refdes)) return false;
+  // Named V… (Vsense, Vammeter, …) — not bare V1/V2
+  return /^V/i.test(refdes) && !/^V\d+$/i.test(refdes);
+}
+
 export function inferKindFromDevice(
   refdes: string,
   rest: string[],
@@ -187,6 +221,8 @@ export function inferKindFromDevice(
     if (/\bSINE\s*\(/i.test(joined)) return "VAC";
     // PWL / EXP (e.g. ISO load dump) → AC-source glyph; stimulus kept as raw SPICE
     if (/\bPWL\s*\(/i.test(joined) || /\bEXP\s*\(/i.test(joined)) return "VAC";
+    // Bare `V1 n1 n2 0` is an ammeter, not a battery
+    if (isZeroVoltSeriesSource(rest)) return "IPROBE";
     if (/\bDC\b/i.test(joined)) return "BATTERY";
     // Bare `V1 n1 n2 12` numeric DC
     if (rest.length >= 3 && /^[+\-]?\d/.test(rest[2]!) && !/[A-Za-z(]/.test(rest[2]!)) {

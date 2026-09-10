@@ -4,6 +4,7 @@ import { COMPONENT_SPECS, defaultParams, isGroundKind } from "../model/component
 import {
   extractParamsFromRest,
   inferKindFromDevice,
+  isSchematicHiddenAmmeter,
   parseDeviceLines,
   splitNetsAndParams,
   spicePinOrder,
@@ -335,6 +336,28 @@ export function applyNetlistToGraph(
   const deleted: string[] = [];
   const skippedUnknown: string[] = [];
 
+  /** Named 0 V ammeters (Vsense…) — keep in SPICE text, omit from schematic. */
+  const hiddenAmmeterRefdes = new Set<string>();
+  /** Short sense nets onto the upstream node (vs → vout) for wiring. */
+  const netAlias = new Map<string, string>();
+  for (const d of devices) {
+    if (!isSchematicHiddenAmmeter(d.refdes, d.rest)) continue;
+    if (d.rest.length < 2) continue;
+    hiddenAmmeterRefdes.add(d.refdes);
+    const a = d.rest[0]!;
+    const b = d.rest[1]!;
+    if (a !== b) netAlias.set(b, a);
+  }
+  const resolveNet = (n: string): string => {
+    let cur = n;
+    const seen = new Set<string>();
+    while (netAlias.has(cur) && !seen.has(cur)) {
+      seen.add(cur);
+      cur = netAlias.get(cur)!;
+    }
+    return cur;
+  };
+
   const byRefdes = new Map<string, Node<ComponentData>>();
   for (const n of nodes) {
     if (n.data.refdes) byRefdes.set(n.data.refdes, n);
@@ -343,6 +366,10 @@ export function applyNetlistToGraph(
   // Count devices we can actually map before deleting anything.
   let recognizable = 0;
   for (const device of devices) {
+    if (hiddenAmmeterRefdes.has(device.refdes)) {
+      recognizable++;
+      continue;
+    }
     const existing = byRefdes.get(device.refdes);
     const kind = inferKindFromDevice(device.refdes, device.rest, existing?.data.kind);
     if (!kind) continue;
@@ -370,10 +397,14 @@ export function applyNetlistToGraph(
     };
   }
 
-  // --- Phase C: delete emitting nodes missing from text -------------------
+  // --- Phase C: delete emitting nodes missing from text (or SPICE-only ammeters)
   const kept: Node<ComponentData>[] = [];
   for (const n of nodes) {
     const spec = COMPONENT_SPECS[n.data.kind];
+    if (spec.emits && n.data.refdes && hiddenAmmeterRefdes.has(n.data.refdes)) {
+      deleted.push(n.data.refdes);
+      continue;
+    }
     if (spec.emits && n.data.refdes && !textRefdes.has(n.data.refdes)) {
       deleted.push(n.data.refdes);
       continue;
@@ -407,6 +438,8 @@ export function applyNetlistToGraph(
   const deviceNets = new Map<string, { kind: ComponentKind; nets: string[] }>();
 
   for (const device of devices) {
+    if (hiddenAmmeterRefdes.has(device.refdes)) continue;
+
     const existing = byRefdes.get(device.refdes);
     const kind = inferKindFromDevice(device.refdes, device.rest, existing?.data.kind);
     if (!kind) {
@@ -420,7 +453,8 @@ export function applyNetlistToGraph(
       continue;
     }
 
-    deviceNets.set(device.refdes, { kind, nets: split.nets });
+    const nets = split.nets.map(resolveNet);
+    deviceNets.set(device.refdes, { kind, nets });
 
     if (existing) {
       const { params, changed } = mergeParams(

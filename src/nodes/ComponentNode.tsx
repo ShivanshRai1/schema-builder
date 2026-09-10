@@ -97,7 +97,7 @@ export function ComponentNode({
   });
   const tipJunction = isTip && tipDegree >= 2;
   const tipFree = isTip && tipDegree <= 1;
-  /** Tip parked on a component pin — hide its square (looks like an open pin). */
+  /** Tip parked on a pin or another wire mid-rail — hide its square. */
   const tipOnPin = useStore((s) => {
     if (!isTip) return false;
     const tip = s.nodes.find((n) => n.id === id);
@@ -112,6 +112,35 @@ export function ComponentNode({
       for (const pin of getComponentPins(kind, (part.data as ComponentData).params)) {
         const pt = pinWorldPoint(part as Node<ComponentData>, pin.id);
         if (pt && Math.hypot(pt.x - t.x, pt.y - t.y) <= 8) return true;
+      }
+    }
+    // After unjoining a T, a free tip can sit on the restored rail — hide it
+    // so only the hop (or clean join) is visible.
+    for (const e of s.edges) {
+      if (e.source === id || e.target === id) continue;
+      const src = s.nodes.find((n) => n.id === e.source) as Node<ComponentData> | undefined;
+      const tgt = s.nodes.find((n) => n.id === e.target) as Node<ComponentData> | undefined;
+      if (!src || !tgt || !e.sourceHandle || !e.targetHandle) continue;
+      const a = pinWorldPoint(src, e.sourceHandle);
+      const b = pinWorldPoint(tgt, e.targetHandle);
+      if (!a || !b) continue;
+      const wps =
+        ((e.data as { waypoints?: { x: number; y: number }[] } | undefined)?.waypoints) ??
+        [];
+      const pts = [a, ...wps, b];
+      for (let i = 0; i < pts.length - 1; i++) {
+        const p0 = pts[i]!;
+        const p1 = pts[i + 1]!;
+        const dx = p1.x - p0.x;
+        const dy = p1.y - p0.y;
+        const lenSq = dx * dx + dy * dy;
+        if (lenSq < 0.01) continue;
+        let u = ((t.x - p0.x) * dx + (t.y - p0.y) * dy) / lenSq;
+        if (u < 0.02 || u > 0.98) continue;
+        u = Math.max(0, Math.min(1, u));
+        const px = p0.x + u * dx;
+        const py = p0.y + u * dy;
+        if (Math.hypot(t.x - px, t.y - py) <= 5) return true;
       }
     }
     return false;

@@ -130,10 +130,7 @@ export function LibraryPanel({
         <textarea
           className="library-textarea"
           spellCheck={false}
-          placeholder={
-            "Vendor models appear here after you add files.\n" +
-            "Example: XFD11K33CA.sub + SM8S18A.sub"
-          }
+          placeholder={"Vendor models appear here after you add files."}
           value={library}
           onChange={(e) => onChange(e.target.value)}
         />

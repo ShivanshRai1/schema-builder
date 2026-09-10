@@ -65,6 +65,27 @@ const A = (
 const modelAttr = (def: string) =>
   A("model", ".subckt / model", "text", def, { hint: "Vendor or generated SPICE model/.subckt name" });
 
+/** Placeholder "L" (or empty) is not a legal inductance — SPICE fatal. */
+function spiceHenry(raw: string | undefined, fallback = "1m"): string {
+  const t = (raw ?? "").trim();
+  if (!t || /^L$/i.test(t)) return fallback;
+  return t;
+}
+
+/** Placeholder "R" is not a legal resistance. */
+function spiceOhm(raw: string | undefined, fallback = "1k"): string {
+  const t = (raw ?? "").trim();
+  if (!t || /^R$/i.test(t)) return fallback;
+  return t;
+}
+
+/** Placeholder "C" is not a legal capacitance. */
+function spiceFarad(raw: string | undefined, fallback = "1u"): string {
+  const t = (raw ?? "").trim();
+  if (!t || /^C$/i.test(t)) return fallback;
+  return t;
+}
+
 /** Emit `X<refdes> <ordered nodes> <MODEL>`. */
 const subckt =
   (order: string[]) =>
@@ -82,64 +103,64 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
   // ---- Resistors ---------------------------------------------------------
   R: {
     kind: "R", category: "Resistor", refdesPrefix: "R", label: "Fixed resistor", glyph: "∿", emits: true,
-    pins: LR, attributes: [A("value", "Resistance", "text", "R", { unit: "Ω" })],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "R"}`,
+    pins: LR, attributes: [A("value", "Resistance", "text", "1k", { unit: "Ω" })],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${spiceOhm(p.value)}`,
   },
   RBOX: {
     kind: "RBOX", category: "Resistor", refdesPrefix: "R", label: "Fixed resistor (box)", glyph: "▭", emits: true,
-    pins: LR, attributes: [A("value", "Resistance", "text", "R", { unit: "Ω" })],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "R"}`,
+    pins: LR, attributes: [A("value", "Resistance", "text", "1k", { unit: "Ω" })],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${spiceOhm(p.value)}`,
   },
   RVAR: {
     kind: "RVAR", category: "Resistor", refdesPrefix: "R", label: "Variable / rheostat", glyph: "∿↗", emits: true,
-    pins: LR, attributes: [A("value", "Resistance", "text", "R", { unit: "Ω" })],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "R"}`,
+    pins: LR, attributes: [A("value", "Resistance", "text", "1k", { unit: "Ω" })],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${spiceOhm(p.value)}`,
   },
   RVARBOX: {
     kind: "RVARBOX", category: "Resistor", refdesPrefix: "R", label: "Variable (box)", glyph: "▭↗", emits: true,
-    pins: LR, attributes: [A("value", "Resistance", "text", "R", { unit: "Ω" })],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "R"}`,
+    pins: LR, attributes: [A("value", "Resistance", "text", "1k", { unit: "Ω" })],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${spiceOhm(p.value)}`,
   },
   POT: {
     kind: "POT", category: "Resistor", refdesPrefix: "R", label: "Potentiometer", glyph: "∿⊥", emits: true,
     pins: [pin("a", "a", "left"), pin("w", "w", "top"), pin("b", "b", "right")],
-    attributes: [A("value", "Total resistance", "text", "R", { unit: "Ω" })],
+    attributes: [A("value", "Total resistance", "text", "10k", { unit: "Ω" })],
     // Two series halves sharing the wiper (standard schematic→SPICE mapping).
     toSpice: (r, n, p) => {
-      const v = p.value ?? "R";
+      const v = spiceOhm(p.value, "10k");
       return `${r}A ${n("a")} ${n("w")} {${v}/2}\n${r}B ${n("w")} ${n("b")} {${v}/2}`;
     },
   },
   POTBOX: {
     kind: "POTBOX", category: "Resistor", refdesPrefix: "R", label: "Potentiometer (box)", glyph: "▭⊥", emits: true,
     pins: [pin("a", "a", "left"), pin("w", "w", "top"), pin("b", "b", "right")],
-    attributes: [A("value", "Total resistance", "text", "R", { unit: "Ω" })],
+    attributes: [A("value", "Total resistance", "text", "10k", { unit: "Ω" })],
     toSpice: (r, n, p) => {
-      const v = p.value ?? "R";
+      const v = spiceOhm(p.value, "10k");
       return `${r}A ${n("a")} ${n("w")} {${v}/2}\n${r}B ${n("w")} ${n("b")} {${v}/2}`;
     },
   },
   THERM: {
     kind: "THERM", category: "Resistor", refdesPrefix: "R", label: "Thermistor", glyph: "θ", emits: true,
-    pins: LR, attributes: [A("value", "Resistance", "text", "R", { unit: "Ω" })],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "R"}`,
+    pins: LR, attributes: [A("value", "Resistance", "text", "10k", { unit: "Ω" })],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${spiceOhm(p.value, "10k")}`,
   },
   LDR: {
     kind: "LDR", category: "Resistor", refdesPrefix: "R", label: "LDR", glyph: "LDR", emits: true,
-    pins: LR, attributes: [A("value", "Resistance", "text", "R", { unit: "Ω" })],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "R"}`,
+    pins: LR, attributes: [A("value", "Resistance", "text", "10k", { unit: "Ω" })],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${spiceOhm(p.value, "10k")}`,
   },
 
   // ---- Inductors ---------------------------------------------------------
   L: {
     kind: "L", category: "Inductor", refdesPrefix: "L", label: "Air core inductor", glyph: "◠◠", emits: true,
-    pins: LR, attributes: [A("value", "Inductance", "text", "L", { unit: "H" }), A("ic", "Initial current", "text", "", { unit: "A" })],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "L"}${p.ic ? ` ic=${p.ic}` : ""}`,
+    pins: LR, attributes: [A("value", "Inductance", "text", "1m", { unit: "H" }), A("ic", "Initial current", "text", "", { unit: "A" })],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${spiceHenry(p.value)}${p.ic ? ` ic=${p.ic}` : ""}`,
   },
   LVAR: {
     kind: "LVAR", category: "Inductor", refdesPrefix: "L", label: "Variable inductor", glyph: "◠↗", emits: true,
-    pins: LR, attributes: [A("value", "Inductance", "text", "L", { unit: "H" }), A("ic", "Initial current", "text", "", { unit: "A" })],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "L"}${p.ic ? ` ic=${p.ic}` : ""}`,
+    pins: LR, attributes: [A("value", "Inductance", "text", "1m", { unit: "H" }), A("ic", "Initial current", "text", "", { unit: "A" })],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${spiceHenry(p.value)}${p.ic ? ` ic=${p.ic}` : ""}`,
   },
   CMMC: {
     kind: "CMMC", category: "Passive", refdesPrefix: "L", label: "Common-mode choke", glyph: "CMC", emits: true,
@@ -150,12 +171,12 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
       pin("b2", "4", "right", 0.72),
     ],
     attributes: [
-      A("value", "Inductance", "text", "L", { unit: "H" }),
-      A("k", "Coupling k", "text", ""),
+      A("value", "Inductance", "text", "1m", { unit: "H" }),
+      A("k", "Coupling k", "text", "1"),
     ],
     toSpice: (r, n, p) => {
-      const v = p.value || "L";
-      const k = p.k || "1";
+      const v = spiceHenry(p.value);
+      const k = (p.k || "").trim() || "1";
       return (
         `${r}A ${n("a1")} ${n("a2")} ${v}\n` +
         `${r}B ${n("b1")} ${n("b2")} ${v}\n` +
@@ -173,14 +194,14 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
       pin("s2", "4", "right", 0.72),
     ],
     attributes: [
-      A("lp", "Primary L", "text", "L", { unit: "H" }),
-      A("ls", "Secondary L", "text", "L", { unit: "H" }),
-      A("k", "Coupling k", "text", ""),
+      A("lp", "Primary L", "text", "1m", { unit: "H" }),
+      A("ls", "Secondary L", "text", "1m", { unit: "H" }),
+      A("k", "Coupling k", "text", "1"),
     ],
     toSpice: (r, n, p) => {
-      const lp = p.lp || "L";
-      const ls = p.ls || "L";
-      const k = p.k || "1";
+      const lp = spiceHenry(p.lp);
+      const ls = spiceHenry(p.ls);
+      const k = (p.k || "").trim() || "1";
       return (
         `${r}P ${n("p1")} ${n("p2")} ${lp}\n` +
         `${r}S ${n("s1")} ${n("s2")} ${ls}\n` +
@@ -190,8 +211,8 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
   },
   FBEAD: {
     kind: "FBEAD", category: "Passive", refdesPrefix: "L", label: "Ferrite bead", glyph: "FB", emits: true,
-    pins: LR, attributes: [A("value", "Inductance / Z", "text", "L", { unit: "H" })],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value || "L"}`,
+    pins: LR, attributes: [A("value", "Inductance / Z", "text", "1u", { unit: "H" })],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${spiceHenry(p.value, "1u")}`,
   },
   ANT: {
     kind: "ANT", category: "Passive", refdesPrefix: "", label: "Antenna", glyph: "Y", emits: false,
@@ -209,24 +230,24 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
   // ---- Capacitors --------------------------------------------------------
   C: {
     kind: "C", category: "Capacitor", refdesPrefix: "C", label: "Non-polarized", glyph: "||", emits: true,
-    pins: LR, attributes: [A("value", "Capacitance", "text", "C", { unit: "F" }), A("ic", "Initial voltage", "text", "", { unit: "V" })],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "C"}${p.ic ? ` ic=${p.ic}` : ""}`,
+    pins: LR, attributes: [A("value", "Capacitance", "text", "1u", { unit: "F" }), A("ic", "Initial voltage", "text", "", { unit: "V" })],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${spiceFarad(p.value)}${p.ic ? ` ic=${p.ic}` : ""}`,
   },
   CPOL: {
     kind: "CPOL", category: "Capacitor", refdesPrefix: "C", label: "Polarized", glyph: "|)", emits: true,
     pins: [pin("a", "+", "left"), pin("b", "−", "right")],
-    attributes: [A("value", "Capacitance", "text", "C", { unit: "F" }), A("ic", "Initial voltage", "text", "", { unit: "V" })],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "C"}${p.ic ? ` ic=${p.ic}` : ""}`,
+    attributes: [A("value", "Capacitance", "text", "1u", { unit: "F" }), A("ic", "Initial voltage", "text", "", { unit: "V" })],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${spiceFarad(p.value)}${p.ic ? ` ic=${p.ic}` : ""}`,
   },
   CFIXED: {
     kind: "CFIXED", category: "Capacitor", refdesPrefix: "C", label: "Fixed capacitor", glyph: "|)", emits: true,
-    pins: LR, attributes: [A("value", "Capacitance", "text", "C", { unit: "F" }), A("ic", "Initial voltage", "text", "", { unit: "V" })],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "C"}${p.ic ? ` ic=${p.ic}` : ""}`,
+    pins: LR, attributes: [A("value", "Capacitance", "text", "1u", { unit: "F" }), A("ic", "Initial voltage", "text", "", { unit: "V" })],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${spiceFarad(p.value)}${p.ic ? ` ic=${p.ic}` : ""}`,
   },
   CVAR: {
     kind: "CVAR", category: "Capacitor", refdesPrefix: "C", label: "Variable capacitor", glyph: "|)↗", emits: true,
-    pins: LR, attributes: [A("value", "Capacitance", "text", "C", { unit: "F" }), A("ic", "Initial voltage", "text", "", { unit: "V" })],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "C"}${p.ic ? ` ic=${p.ic}` : ""}`,
+    pins: LR, attributes: [A("value", "Capacitance", "text", "1u", { unit: "F" }), A("ic", "Initial voltage", "text", "", { unit: "V" })],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${spiceFarad(p.value)}${p.ic ? ` ic=${p.ic}` : ""}`,
   },
 
   // ---- Sources -----------------------------------------------------------
@@ -742,8 +763,8 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
   // ---- Sense / Probe -----------------------------------------------------
   CSENSE: {
     kind: "CSENSE", category: "Sense / Probe", refdesPrefix: "Rs", label: "Current sense (shunt)", glyph: "Ω→", emits: true,
-    pins: LR, attributes: [A("value", "Shunt", "text", "R", { unit: "Ω" })],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${p.value ?? "R"}`,
+    pins: LR, attributes: [A("value", "Shunt", "text", "10m", { unit: "Ω" })],
+    toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${spiceOhm(p.value, "10m")}`,
     toProbes: (r) => [`I(${r})`],
   },
   VSENSE: {

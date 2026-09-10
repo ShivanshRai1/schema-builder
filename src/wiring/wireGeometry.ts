@@ -213,34 +213,90 @@ function isHorizontal(a: Point, b: Point): boolean {
   return Math.abs(a.y - b.y) < 0.5;
 }
 
-/** Drag an interior corner to a grid-snapped cursor. */
+/** Drag an interior corner to a grid-snapped cursor; wire ends stay fixed. */
 export function dragWireCorner(
   polyline: Point[],
   polyIndex: number,
   cursor: Point,
   grid = STUB,
 ): Point[] {
+  if (polyIndex <= 0 || polyIndex >= polyline.length - 1) return polyline;
   const next = polyline.map((p) => ({ ...p }));
   next[polyIndex] = snapPoint(cursor, grid);
-  return orthogonalPolyline(next);
+  // Rebuild ortho only between the fixed neighbors so distant geometry is untouched.
+  const prev = next[polyIndex - 1]!;
+  const cur = next[polyIndex]!;
+  const nxt = next[polyIndex + 1]!;
+  const local = orthogonalPolyline([prev, cur, nxt]);
+  if (local.length < 2) return polyline;
+  return orthogonalPolyline([
+    ...next.slice(0, polyIndex - 1),
+    ...local,
+    ...next.slice(polyIndex + 2),
+  ]);
 }
 
-/** LTspice-style segment drag: shift a H or V run perpendicular (adds dogleg). */
+/**
+ * Indices of the maximal H or V run containing `segIndex` (inclusive end vertex).
+ * Sliding the whole run avoids chewing only one stub of a long rail.
+ */
+export function collinearRunBounds(
+  polyline: Point[],
+  segIndex: number,
+): { lo: number; hi: number; horiz: boolean } | null {
+  const p = polyline[segIndex];
+  const q = polyline[segIndex + 1];
+  if (!p || !q) return null;
+  const horiz = isHorizontal(p, q);
+  const axis = horiz ? p.y : p.x;
+  let lo = segIndex;
+  let hi = segIndex + 1;
+  while (lo > 0) {
+    const a = polyline[lo - 1]!;
+    const b = polyline[lo]!;
+    if (horiz) {
+      if (!isHorizontal(a, b) || Math.abs(a.y - axis) > 0.5 || Math.abs(b.y - axis) > 0.5) break;
+    } else if (isHorizontal(a, b) || Math.abs(a.x - axis) > 0.5 || Math.abs(b.x - axis) > 0.5) {
+      break;
+    }
+    lo--;
+  }
+  while (hi < polyline.length - 1) {
+    const a = polyline[hi]!;
+    const b = polyline[hi + 1]!;
+    if (horiz) {
+      if (!isHorizontal(a, b) || Math.abs(a.y - axis) > 0.5 || Math.abs(b.y - axis) > 0.5) break;
+    } else if (isHorizontal(a, b) || Math.abs(a.x - axis) > 0.5 || Math.abs(b.x - axis) > 0.5) {
+      break;
+    }
+    hi++;
+  }
+  return { lo, hi, horiz };
+}
+
+/**
+ * LTspice-style segment drag: shift a maximal H/V run perpendicular.
+ * Wire endpoints stay fixed — doglegs appear only at the run’s ends so
+ * shared junction tips / pins (and sibling wires on them) are not yanked.
+ */
 export function dragWireSegment(
   polyline: Point[],
   segIndex: number,
   cursor: Point,
   grid = STUB,
 ): Point[] {
-  const p = polyline[segIndex]!;
-  const q = polyline[segIndex + 1]!;
-  if (!p || !q) return polyline;
+  const run = collinearRunBounds(polyline, segIndex);
+  if (!run) return polyline;
+  const { lo, hi, horiz } = run;
+  const p = polyline[lo]!;
+  const q = polyline[hi]!;
+  const head = polyline.slice(0, lo);
+  const tail = polyline.slice(hi + 1);
 
-  if (isHorizontal(p, q)) {
+  if (horiz) {
     const y = snapCoord(cursor.y, grid);
     if (Math.abs(y - p.y) < 0.5) return polyline;
-    const head = polyline.slice(0, segIndex);
-    const tail = polyline.slice(segIndex + 2);
+    // Keep original end vertices of the run; insert the shifted bar between them.
     return orthogonalPolyline([
       ...head,
       p,
@@ -253,8 +309,6 @@ export function dragWireSegment(
 
   const x = snapCoord(cursor.x, grid);
   if (Math.abs(x - p.x) < 0.5) return polyline;
-  const head = polyline.slice(0, segIndex);
-  const tail = polyline.slice(segIndex + 2);
   return orthogonalPolyline([
     ...head,
     p,

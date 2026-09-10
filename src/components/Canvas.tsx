@@ -81,7 +81,7 @@ import {
 export const SCHEMATIC_GRID = WIRE_GRID;
 
 /** Pointer travel (px) before a Move-mode press becomes a drag (vs. a click). */
-const MOVE_DRAG_THRESHOLD = 4;
+const MOVE_DRAG_THRESHOLD = 6;
 
 /** Hit radius for ending a draft on an existing wire (incl. under parts). */
 const WIRE_JOIN_RADIUS = 16;
@@ -106,6 +106,21 @@ function edgeDeselectChanges(edges: Edge[]) {
     .map((ed) => ({ type: "select" as const, id: ed.id, selected: false }));
 }
 
+/** Only emit select changes for nodes whose selected flag actually flips. */
+function selectNodesDiff(
+  nodes: Node<ComponentData>[],
+  wantSelected: (id: string) => boolean,
+): { type: "select"; id: string; selected: boolean }[] {
+  const out: { type: "select"; id: string; selected: boolean }[] = [];
+  for (const n of nodes) {
+    const want = wantSelected(n.id);
+    if (Boolean(n.selected) !== want) {
+      out.push({ type: "select", id: n.id, selected: want });
+    }
+  }
+  return out;
+}
+
 /** Part click selection — graph-owned, not React Flow's built-in single-select. */
 function applyPartSelectClick(
   nodes: Node<ComponentData>[],
@@ -123,12 +138,7 @@ function applyPartSelectClick(
   } else {
     // Clicking one member of a multi-select keeps the group (for dragging).
     if (node.selected && nodes.some((n) => n.selected && n.id !== nodeId)) return;
-    const changes = nodes.flatMap((n) => {
-      if (n.id === nodeId) {
-        return n.selected ? [] : [{ type: "select" as const, id: n.id, selected: true }];
-      }
-      return n.selected ? [{ type: "select" as const, id: n.id, selected: false }] : [];
-    });
+    const changes = selectNodesDiff(nodes, (id) => id === nodeId);
     if (changes.length) onNodesChange(changes);
   }
   const edgeClears = edgeDeselectChanges(edges);
@@ -202,6 +212,30 @@ function wireHitAtCursor(
     cursor,
     findNearestWireHit(nodes, edges, cursor, WIRE_HIT_RADIUS, SCHEMATIC_GRID),
   );
+}
+
+/** Net name / node label near the cursor (text sits above the invisible join). */
+function findNetLabelNear(
+  nodes: Node<ComponentData>[],
+  cursor: Point,
+  radius = 26,
+): string | null {
+  let best: { id: string; d: number } | null = null;
+  for (const n of nodes) {
+    if (n.data.kind !== "WIRELABEL" && n.data.kind !== "NODE") continue;
+    const join = pinWorldPoint(n, "g") ?? {
+      x: n.position.x,
+      y: n.position.y + 8,
+    };
+    // Chip is centered above the join pad.
+    const textAnchor = { x: join.x, y: join.y - 12 };
+    const d = Math.min(
+      Math.hypot(cursor.x - textAnchor.x, cursor.y - textAnchor.y),
+      Math.hypot(cursor.x - join.x, cursor.y - join.y),
+    );
+    if (d <= radius && (!best || d < best.d)) best = { id: n.id, d };
+  }
+  return best?.id ?? null;
 }
 
 /** True when `edge` touches `nodeId` at either end. */
@@ -827,6 +861,12 @@ export type CanvasProps = {
     point: Point,
     meta?: { tipId?: string; edgeIds?: [string, string] },
   ) => void;
+  /** Double-click hop ↔ square to join / unjoin (any mode except Delete). */
+  onToggleWireMark: (
+    kind: "junction" | "crossing",
+    point: Point,
+    meta?: { tipId?: string; edgeIds?: [string, string] },
+  ) => void;
   /** Crossing rings the user hid in Delete mode (wires unchanged). */
   hiddenCrossingKeys?: readonly string[];
   onStraightenEdge: (edgeId: string, clickPoint?: Point) => void;
@@ -896,6 +936,7 @@ export function Canvas({
   onDeleteNode,
   onDeleteEdge,
   onDeleteWireMark,
+  onToggleWireMark,
   hiddenCrossingKeys = [],
   onStraightenEdge,
   onSelectEdge,
@@ -1052,6 +1093,11 @@ export function Canvas({
   onDeleteEdgeRef.current = onDeleteEdge;
   const onDeleteWireMarkRef = useRef(onDeleteWireMark);
   onDeleteWireMarkRef.current = onDeleteWireMark;
+  const onToggleWireMarkRef = useRef(onToggleWireMark);
+  onToggleWireMarkRef.current = onToggleWireMark;
+  const beginExtendFromTipRef = useRef(
+    (_tipId: string, _clientX: number, _clientY: number) => {},
+  );
   const hiddenCrossingRef = useRef(hiddenCrossingKeys);
   hiddenCrossingRef.current = hiddenCrossingKeys;
   const onStraightenEdgeRef = useRef(onStraightenEdge);
@@ -1273,13 +1319,16 @@ export function Canvas({
       const draft = wiringRef.current;
       if (!draft) return false;
 
-      // Prefer column/row attach on the target bus (clean ladder end).
+      // Align tip to the draft's locked run so H→V (or V→H) meets flush —
+      // cursor-only Y/X leaves a short nub and two junction squares.
+      const from = lastLocked(draft);
       const resolved = resolveBranchOnEdge(
         nodesRef.current,
         edgesRef.current,
         edgeId,
         branchPt,
         SCHEMATIC_GRID,
+        { align: from },
       );
       const tipId = resolved
         ? onWireBranchRef.current(resolved.edgeId, resolved.point, {
@@ -1288,14 +1337,18 @@ export function Canvas({
           })
         : onWireBranchRef.current(edgeId, branchPt);
       if (!tipId) return false;
-      const endPt = resolved?.point ?? branchPt;
+      // Prefer the live TIP pin after split (matches beginBranchFromEdge).
+      const tipNode = nodesRef.current.find((n) => n.id === tipId);
+      const endPt = tipNode
+        ? { x: tipNode.position.x, y: tipNode.position.y + 4 }
+        : (resolved?.point ?? branchPt);
       onWireRef.current({
         source: draft.sourceNodeId ?? "",
         sourceHandle: draft.sourceHandle ?? "",
         target: tipId,
         targetHandle: "t",
         waypoints: waypointsClosingTo(
-          lastLocked(draft),
+          from,
           endPt,
           draft.waypoints,
           draftIncomingAxis(draft),
@@ -1445,14 +1498,23 @@ export function Canvas({
       if (rubberRafRef.current != null) cancelAnimationFrame(rubberRafRef.current);
 
       // Step-draw WYSIWYG: same fine-grid + axis align as a lock click.
-      if (preferWire && wireHit && isAxisAligned(from, wireHit.point)) {
+      if (preferWire && wireHit) {
         setSnapHotPin(null);
-        const target = wireHit.point;
+        const resolved = resolveBranchOnEdge(
+          nodesRef.current,
+          edgesRef.current,
+          wireHit.edgeId,
+          cursor,
+          WIRE_DRAW_GRID,
+          { align: from },
+        );
+        const target = resolved?.point ?? wireHit.point;
         draft.preview = target;
         wiringRef.current = draft;
+        const hot = isAxisAligned(from, target);
         rubberRafRef.current = requestAnimationFrame(() => {
           rubberRafRef.current = null;
-          paintRubber(from, target, true);
+          paintRubber(from, target, hot);
         });
         return;
       }
@@ -1628,13 +1690,8 @@ export function Canvas({
       multiToggle ||
       (selectedParts.length > 1 && selectedParts.some((n) => n.id === nodeId));
     if (!keepGroup) {
-      onNodesChangeRef.current(
-        nodesRef.current.map((n) => ({
-          type: "select" as const,
-          id: n.id,
-          selected: n.id === nodeId,
-        })),
-      );
+      const changes = selectNodesDiff(nodesRef.current, (id) => id === nodeId);
+      if (changes.length) onNodesChangeRef.current(changes);
     }
 
     let armed = false;
@@ -1876,6 +1933,8 @@ export function Canvas({
     }
 
     // --- Drag tool: reshape in place (connected) ----------------------------
+    // Keep pins / junction tips fixed — only this edge's interior path moves.
+    // Moving shared tips was yanking every sibling wire at the same T.
     const dragKind = hit.kind;
     const dragIndex = hit.kind === "segment" ? hit.segIndex : hit.polyIndex;
     let armed = false;
@@ -1918,39 +1977,6 @@ export function Canvas({
         nextPoly,
       );
       onWirePathUpdateRef.current(edgeId, waypoints);
-
-      const first = nextPoly[0]!;
-      const last = nextPoly[nextPoly.length - 1]!;
-      // Only slide exclusive free tips. Shared junction tips stay put so
-      // reshaping one rail cannot warp sibling wires at the same T.
-      const tipDeg = (id: string) =>
-        edgesRef.current.filter((e) => e.source === id || e.target === id)
-          .length;
-      const tipMoves: { id: string; x: number; y: number }[] = [];
-      if (src?.data.kind === "TIP" && tipDeg(src.id) <= 1) {
-        tipMoves.push({
-          id: src.id,
-          x: first.x,
-          y: first.y - ((src.style?.height as number | undefined) ?? 8) / 2,
-        });
-      }
-      if (tgt?.data.kind === "TIP" && tipDeg(tgt.id) <= 1) {
-        tipMoves.push({
-          id: tgt.id,
-          x: last.x,
-          y: last.y - ((tgt.style?.height as number | undefined) ?? 8) / 2,
-        });
-      }
-      if (tipMoves.length) {
-        onNodesChangeRef.current(
-          tipMoves.map((o) => ({
-            type: "position" as const,
-            id: o.id,
-            position: { x: o.x, y: o.y },
-            dragging: true,
-          })),
-        );
-      }
     };
 
     const onUp = () => {
@@ -1959,23 +1985,6 @@ export function Canvas({
       setMoveHint(null);
       if (!armed) {
         onSelectEdgeRef.current(edgeId, grabPoint);
-        return;
-      }
-      const tipIds = [src, tgt]
-        .filter((n) => n?.data.kind === "TIP")
-        .map((n) => n!.id);
-      if (tipIds.length) {
-        onNodesChangeRef.current(
-          tipIds.map((id) => {
-            const n = rfRef.current?.getNode(id);
-            return {
-              type: "position" as const,
-              id,
-              position: n?.position ?? { x: 0, y: 0 },
-              dragging: false,
-            };
-          }),
-        );
       }
     };
 
@@ -2083,25 +2092,44 @@ export function Canvas({
       // Cut-move remains Drag-only; Move marquee is select-only.
       const cutMove = mode === "drag" && e.shiftKey;
       const selectAdditive = isMultiSelectModifier(e);
+      const startClient = { x: e.clientX, y: e.clientY };
 
       const start = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
       marqueeRef.current = { start, end: start };
-      setMarquee(marqueeRef.current);
+      // Don't paint / switch to crosshair until the box is real — avoids
+      // flicker and crosshair flash on plain clicks.
+      let painted = false;
+      let raf = 0;
 
       const onMove = (moveEvent: MouseEvent) => {
         const inst = rfRef.current;
         const draft = marqueeRef.current;
         if (!inst || !draft) return;
-        const end = inst.screenToFlowPosition({ x: moveEvent.clientX, y: moveEvent.clientY });
+        const end = inst.screenToFlowPosition({
+          x: moveEvent.clientX,
+          y: moveEvent.clientY,
+        });
         if (pointsEqual(draft.end, end)) return;
         const next = { ...draft, end };
         marqueeRef.current = next;
-        setMarquee(next);
+        const dragged = Math.hypot(
+          moveEvent.clientX - startClient.x,
+          moveEvent.clientY - startClient.y,
+        );
+        if (!painted && dragged < MOVE_DRAG_THRESHOLD) return;
+        painted = true;
+        if (raf) return;
+        raf = window.requestAnimationFrame(() => {
+          raf = 0;
+          const cur = marqueeRef.current;
+          if (cur) setMarquee(cur);
+        });
       };
 
       const onUp = () => {
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
+        if (raf) window.cancelAnimationFrame(raf);
         finishMarquee(selectAdditive, cutMove);
         // RF Pane.onClick always calls resetSelectedElements() after onPaneClick.
         // A trailing click on the empty pane would wipe the selection we just set.
@@ -2174,24 +2202,41 @@ export function Canvas({
       e.stopPropagation();
 
       const additive = isMultiSelectModifier(e);
+      const startClient = { x: e.clientX, y: e.clientY };
       const start = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
       marqueeRef.current = { start, end: start };
-      setMarquee(marqueeRef.current);
+      let painted = false;
+      let raf = 0;
 
       const onMove = (moveEvent: MouseEvent) => {
         const inst = rfRef.current;
         const draft = marqueeRef.current;
         if (!inst || !draft) return;
-        const end = inst.screenToFlowPosition({ x: moveEvent.clientX, y: moveEvent.clientY });
+        const end = inst.screenToFlowPosition({
+          x: moveEvent.clientX,
+          y: moveEvent.clientY,
+        });
         if (pointsEqual(draft.end, end)) return;
         const next = { ...draft, end };
         marqueeRef.current = next;
-        setMarquee(next);
+        const dragged = Math.hypot(
+          moveEvent.clientX - startClient.x,
+          moveEvent.clientY - startClient.y,
+        );
+        if (!painted && dragged < MOVE_DRAG_THRESHOLD) return;
+        painted = true;
+        if (raf) return;
+        raf = window.requestAnimationFrame(() => {
+          raf = 0;
+          const cur = marqueeRef.current;
+          if (cur) setMarquee(cur);
+        });
       };
 
       const onUp = () => {
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
+        if (raf) window.cancelAnimationFrame(raf);
         finishSelect(additive);
         const swallowClick = (ev: MouseEvent) => {
           ev.preventDefault();
@@ -2318,6 +2363,118 @@ export function Canvas({
     return () => root.removeEventListener("click", onClick, true);
   }, [copyMarquee]);
 
+  // Wire mode: click a junction square to extend from that tip (debounced so
+  // double-click can toggle instead). Double-click hop/square anywhere toggles
+  // join ↔ pass (except Delete / mid-draw).
+  useEffect(() => {
+    if (mode === "delete") return;
+    const root = canvasElRef.current;
+    if (!root) return;
+
+    let extendTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const tipNear = (p: { x: number; y: number }, preferred?: string) => {
+      if (preferred && nodesRef.current.some((n) => n.id === preferred)) {
+        return preferred;
+      }
+      let best: { id: string; d: number } | null = null;
+      const deg = new Map<string, number>();
+      for (const e of edgesRef.current) {
+        deg.set(e.source, (deg.get(e.source) ?? 0) + 1);
+        deg.set(e.target, (deg.get(e.target) ?? 0) + 1);
+      }
+      for (const n of nodesRef.current) {
+        if (n.data.kind !== "TIP") continue;
+        if ((deg.get(n.id) ?? 0) < 2) continue;
+        const pt = pinWorldPoint(n, "t");
+        if (!pt) continue;
+        const d = Math.hypot(pt.x - p.x, pt.y - p.y);
+        if (d <= 14 && (!best || d < best.d)) best = { id: n.id, d };
+      }
+      return best?.id ?? null;
+    };
+
+    const marksAt = (cursor: { x: number; y: number }) => {
+      const marks = findWireJunctions(nodesRef.current, edgesRef.current);
+      const hidden = new Set(hiddenCrossingRef.current);
+      if (hidden.size) {
+        marks.crossings = marks.crossings.filter((c) => !hidden.has(wireMarkKey(c)));
+      }
+      return hitTestWireMark(marks, cursor, 14);
+    };
+
+    const onClick = (event: MouseEvent) => {
+      if (placingRef.current || copyMarqueeRef.current) return;
+      if (wiringRef.current) return;
+      if (modeRef.current !== "wire") return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest?.(".react-flow__controls, .react-flow__minimap")) return;
+      const rf = rfRef.current;
+      if (!rf) return;
+      const cursor = rf.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      const markHit = marksAt(cursor);
+      if (!markHit || markHit.kind !== "junction") return;
+      const tipId = tipNear(markHit.mark, markHit.mark.tipId);
+      if (!tipId) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      // Wait out a possible double-click before starting a draft.
+      if (extendTimer != null) clearTimeout(extendTimer);
+      const { clientX, clientY } = event;
+      extendTimer = setTimeout(() => {
+        extendTimer = null;
+        if (wiringRef.current || modeRef.current !== "wire") return;
+        beginExtendFromTipRef.current(tipId, clientX, clientY);
+      }, 280);
+    };
+
+    const onDblClick = (event: MouseEvent) => {
+      if (placingRef.current || copyMarqueeRef.current) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest?.(".react-flow__controls, .react-flow__minimap")) return;
+      const rf = rfRef.current;
+      if (!rf) return;
+      const cursor = rf.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      const markHit = marksAt(cursor);
+      if (!markHit) return;
+
+      if (extendTimer != null) {
+        clearTimeout(extendTimer);
+        extendTimer = null;
+      }
+      // First click of a dblclick may have started a zero-length draft — drop it.
+      const draft = wiringRef.current;
+      if (draft && draft.waypoints.length === 0 && !draft.preview) {
+        wiringRef.current = null;
+        setWiring(null);
+        clearRubberDom();
+      }
+      if (wiringRef.current) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      if (markHit.kind === "junction") {
+        onToggleWireMarkRef.current("junction", markHit.mark, {
+          tipId: markHit.mark.tipId,
+        });
+      } else {
+        onToggleWireMarkRef.current("crossing", markHit.mark, {
+          edgeIds: markHit.mark.edgeIds,
+        });
+      }
+    };
+
+    root.addEventListener("click", onClick, true);
+    root.addEventListener("dblclick", onDblClick, true);
+    return () => {
+      if (extendTimer != null) clearTimeout(extendTimer);
+      root.removeEventListener("click", onClick, true);
+      root.removeEventListener("dblclick", onDblClick, true);
+    };
+  }, [mode, clearRubberDom]);
+
   // Scissors hit-test in capture phase so small wire tails remain deletable.
   // Free tip squares cover micro stubs — treat tip clicks as wire deletes.
   // Junction squares / crossing rings are deletable marks (before wire hit).
@@ -2337,8 +2494,31 @@ export function Canvas({
       const nodes = nodesRef.current;
       const edges = edgesRef.current;
 
-      // Wire under cursor always wins — including near pins / corners (red-mark
-      // clicks). Junction marks only when no wire is in range.
+      // Net name chip (even when sitting on a wire) — never scissors the rail.
+      {
+        const labelFromDom = target?.closest?.(".wire-label-text, .kind-WIRELABEL, .kind-NODE");
+        const labelId =
+          (labelFromDom
+            ? (target?.closest?.(".react-flow__node") as HTMLElement | null)?.getAttribute(
+                "data-id",
+              )
+            : null) ?? findNetLabelNear(nodes, cursor);
+        if (labelId) {
+          const label = nodes.find((n) => n.id === labelId);
+          if (
+            label &&
+            (label.data.kind === "WIRELABEL" || label.data.kind === "NODE")
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+            onDeleteNodeRef.current(labelId);
+            return;
+          }
+        }
+      }
+
+      // Wire under cursor wins over junction marks / parts.
       {
         const wireHit = wireHitAtCursor(nodes, edges, cursor);
         if (wireHit) {
@@ -2504,6 +2684,23 @@ export function Canvas({
 
       let hit = wireHitAtCursor(nodes, edges, cursor);
       if (!hit) return;
+
+      // Net name sitting on the wire: select the label, not the rail.
+      const labelId = findNetLabelNear(nodes, cursor);
+      if (labelId) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        applyPartSelectClick(
+          nodes,
+          labelId,
+          isMultiSelectModifier(event),
+          onNodesChangeRef.current,
+          onEdgesChangeRef.current,
+          edges,
+        );
+        return;
+      }
 
       const edge = edges.find((e) => e.id === hit!.edgeId);
       if (edge?.sourceHandle) {
@@ -2988,11 +3185,60 @@ export function Canvas({
     onSelectEdgeRef.current(edgeId, clickPoint, opts);
   }, []);
 
+  const beginExtendFromTip = useCallback(
+    (tipId: string, clientX: number, clientY: number) => {
+      const tipNode = nodesRef.current.find((n) => n.id === tipId);
+      if (!tipNode || tipNode.data.kind !== "TIP") return;
+      const start = {
+        x: tipNode.position.x,
+        y: tipNode.position.y + 4,
+      };
+      onSelectEdgeRef.current("");
+      // Existing junction tip — do NOT set branchOriginTipId (cancel must not
+      // dissolve a real join the user meant to extend from).
+      const next: WiringDraft = {
+        sourceNodeId: tipId,
+        sourceHandle: "t",
+        start,
+        waypoints: [],
+        preview: null,
+        axisHint: null,
+      };
+      wiringRef.current = next;
+      setWiring(next);
+      updateDraftPreview(clientX, clientY, null);
+    },
+    [updateDraftPreview],
+  );
+  beginExtendFromTipRef.current = beginExtendFromTip;
+
   const beginBranchFromEdge = useCallback(
     (edge: Edge, clientX: number, clientY: number) => {
       const rf = rfRef.current;
       if (!rf) return;
       const cursor = rf.screenToFlowPosition({ x: clientX, y: clientY });
+
+      // Already on a junction tip — extend from it (don't split again).
+      {
+        let best: { id: string; d: number } | null = null;
+        const deg = new Map<string, number>();
+        for (const e of edgesRef.current) {
+          deg.set(e.source, (deg.get(e.source) ?? 0) + 1);
+          deg.set(e.target, (deg.get(e.target) ?? 0) + 1);
+        }
+        for (const n of nodesRef.current) {
+          if (n.data.kind !== "TIP") continue;
+          if ((deg.get(n.id) ?? 0) < 2) continue;
+          const pt = pinWorldPoint(n, "t");
+          if (!pt) continue;
+          const d = Math.hypot(pt.x - cursor.x, pt.y - cursor.y);
+          if (d <= 12 && (!best || d < best.d)) best = { id: n.id, d };
+        }
+        if (best) {
+          beginExtendFromTip(best.id, clientX, clientY);
+          return;
+        }
+      }
 
       // Attach at cursor column on H bus (or row on V) — not nearest junction.
       const resolved = resolveBranchOnEdge(
@@ -3045,7 +3291,7 @@ export function Canvas({
       setWiring(next);
       updateDraftPreview(clientX, clientY, null);
     },
-    [updateDraftPreview],
+    [updateDraftPreview, beginExtendFromTip],
   );
 
   const onEdgeClick = useCallback(
@@ -3101,15 +3347,29 @@ export function Canvas({
   const onEdgeDoubleClick = useCallback(
     (e: React.MouseEvent, edge: Edge) => {
       // Straighten in any mode except delete; wire-mode single-click already
-      // branches, so double-click is free for path cleanup.
+      // branches, so double-click is free for path cleanup — unless the cursor
+      // is on a hop/square (capture dblclick toggles that instead).
       if (modeRef.current === "delete") return;
       if (modeRef.current === "wire" && wiringRef.current) return;
-      e.stopPropagation();
-      e.preventDefault();
       const point = rfRef.current?.screenToFlowPosition({
         x: e.clientX,
         y: e.clientY,
       });
+      if (point) {
+        const marks = findWireJunctions(nodesRef.current, edgesRef.current);
+        const hidden = new Set(hiddenCrossingRef.current);
+        if (hidden.size) {
+          marks.crossings = marks.crossings.filter((c) => !hidden.has(wireMarkKey(c)));
+        }
+        if (hitTestWireMark(marks, point, 14)) {
+          // Capture-phase dblclick on the canvas handles the toggle.
+          e.stopPropagation();
+          e.preventDefault();
+          return;
+        }
+      }
+      e.stopPropagation();
+      e.preventDefault();
       onStraightenEdgeRef.current(edge.id, point);
     },
     [],
@@ -3278,11 +3538,8 @@ export function Canvas({
           return;
         }
         if (node.data.kind === "TIP") {
-          // Junction tips are click-through; free tips extend the wire.
-          const deg = edgesRef.current.filter(
-            (e) => e.source === node.id || e.target === node.id,
-          ).length;
-          if (deg >= 2) return;
+          // Free tips and junction tips both extend — junction overlay is
+          // click-through, but a tip node hit should still start a run.
           applyPinHit(node.id, "t");
           return;
         }

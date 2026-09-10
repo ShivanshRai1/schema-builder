@@ -3,7 +3,7 @@ import type { ComponentData } from "../model/types";
 import type { Point } from "./orthogonal";
 import { dist, pointsEqual } from "./orthogonal";
 import { collapseMicroBends } from "./wireMove";
-import { computeEdgePolyline, polylineToStoredWaypoints, distToPolyline } from "./wireGeometry";
+import { computeEdgePolyline, polylineToStoredWaypoints, distToPolyline, collinearRunBounds } from "./wireGeometry";
 import { pruneOrphanTips, collapsePassThroughTips } from "./tipCleanup";
 import { findWireJunctions } from "./junctions";
 import { pinWorldPoint } from "./pinGeometry";
@@ -276,9 +276,10 @@ function peelUTurnSpurNearClick(
 }
 
 /**
- * Cut out only the polyline segment under the click (LTspice-like scissors on
- * one run). Multi-segment wires leave the other runs as dangling pieces.
- * A short single-segment wire deletes entirely; a long one splits at the click.
+ * Cut out the maximal collinear H/V run under the click (not one micro-seg).
+ * Multi-bend wires leave the other runs as dangling pieces (e.g. delete the
+ * horizontal of an L, keep the vertical).
+ * A run that spans the whole edge deletes the edge.
  * Micro remnants (below minKeep) are dropped so they do not linger.
  *
  * Pass `forcedSegIndex` when the UI already knows which H/V run is selected
@@ -307,39 +308,18 @@ function planCutOpenSegment(
   }
 
   const minKeep = 4;
+  const run = collinearRunBounds(poly, bestSeg);
+  const lo = run?.lo ?? bestSeg;
+  const hi = run?.hi ?? bestSeg + 1;
 
-  // Single H/V run: split at the click into two dangling stubs when both
-  // sides are long enough; otherwise wipe (tiny leftover only).
-  if (poly.length === 2) {
-    const a = poly[0]!;
-    const b = poly[1]!;
-    const len = Math.hypot(b.x - a.x, b.y - a.y);
-    if (len < minKeep * 2) {
-      return { action: "delete", edgeId };
-    }
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    const lenSq = dx * dx + dy * dy;
-    let t =
-      lenSq < 0.01
-        ? 0.5
-        : ((clickPoint.x - a.x) * dx + (clickPoint.y - a.y) * dy) / lenSq;
-    // Keep both remnants above minKeep along the segment.
-    const minT = minKeep / len;
-    const maxT = 1 - minT;
-    t = Math.max(minT, Math.min(maxT, t));
-    const cut = { x: a.x + t * dx, y: a.y + t * dy };
-    return {
-      action: "cutOpen",
-      edgeId,
-      beforePoly: [a, cut],
-      afterPoly: [cut, b],
-    };
+  // Entire edge is one straight run → wipe once (not open-cut into stubs).
+  if (lo === 0 && hi === poly.length - 1) {
+    return { action: "delete", edgeId };
   }
 
-  // Multi-segment: remove the chosen H/V run entirely (leave a gap).
-  const beforeRaw = poly.slice(0, bestSeg + 1);
-  const afterRaw = poly.slice(bestSeg + 1);
+  // Remove the whole collinear run; leave a gap at the elbows.
+  const beforeRaw = poly.slice(0, lo + 1);
+  const afterRaw = poly.slice(hi);
   const before =
     beforeRaw.length >= 2 ? collapseMicroBends(beforeRaw, 10) : null;
   const after = afterRaw.length >= 2 ? collapseMicroBends(afterRaw, 10) : null;
@@ -625,6 +605,23 @@ export function planScissorWireDelete(
   const distToTip = Math.hypot(clickPoint.x - chosen.pt.x, clickPoint.y - chosen.pt.y);
   const segLen = terminalSegmentLen(poly, chosen.atStart);
 
+  // Prefer removing the whole straight run under the tip (not one micro-seg).
+  {
+    const tipSeg = chosen.atStart ? 0 : poly.length - 2;
+    const cut = planCutOpenSegment(targetId, poly, clickPoint, hitRadius * 3, tipSeg);
+    if (cut && cut.action === "delete") return cut;
+    if (cut && cut.action === "cutOpen") {
+      // Only take this when the click is on/near that terminal run.
+      const run = collinearRunBounds(poly, tipSeg);
+      if (run) {
+        const runPoly = poly.slice(run.lo, run.hi + 1);
+        if (distToPolyline(runPoly, clickPoint) <= hitRadius + 8 || distToTip <= maxStubLen + hitRadius) {
+          return cut;
+        }
+      }
+    }
+  }
+
   if (distToTip > maxStubLen + hitRadius && segLen > maxStubLen) {
     const cut = planCutOpenSegment(targetId, poly, clickPoint, hitRadius);
     if (cut) return cut;
@@ -651,32 +648,13 @@ export function planScissorWireDelete(
     return { action: "delete", edgeId: targetId };
   }
 
-  const trimmed = peelTerminal(poly, chosen.atStart);
-  if (!trimmed || trimmed.length < 2) {
-    const cut = planCutOpenSegment(targetId, poly, clickPoint, hitRadius * 3);
+  // Fall through: open-cut the collinear tip run instead of peeling one vertex.
+  {
+    const tipSeg = chosen.atStart ? 0 : poly.length - 2;
+    const cut = planCutOpenSegment(targetId, poly, clickPoint, hitRadius * 3, tipSeg);
     if (cut) return cut;
-    return { action: "delete", edgeId: targetId };
   }
-  const newEnd = chosen.atStart ? trimmed[0]! : trimmed[trimmed.length - 1]!;
-
-  if (chosen.degree === 1) {
-    return {
-      action: "trimTip",
-      edgeId: targetId,
-      tipId: chosen.tipId,
-      trimmedPoly: trimmed,
-      tipPosition: { x: newEnd.x, y: newEnd.y - 4 },
-    };
-  }
-
-  return {
-    action: "peelToNewTip",
-    edgeId: targetId,
-    oldTipId: chosen.tipId,
-    atStart: chosen.atStart,
-    trimmedPoly: trimmed,
-    newTipPosition: { x: newEnd.x, y: newEnd.y - 4 },
-  };
+  return { action: "delete", edgeId: targetId };
 }
 
 /** Distance along polyline from start to the closest point on the poly to `p`. */

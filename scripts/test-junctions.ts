@@ -5,7 +5,7 @@ import { findWireJunctions } from "../src/wiring/junctions";
 
 const mk = (
   id: string,
-  kind: "R" | "C" | "GND" | "V" | "TIP",
+  kind: "R" | "C" | "GND" | "V" | "TIP" | "WIRELABEL",
   x: number,
   y: number,
 ): Node<ComponentData> => ({
@@ -15,11 +15,13 @@ const mk = (
   data:
     kind === "TIP"
       ? { kind: "TIP", refdes: "", params: {} }
-      : {
-          kind,
-          refdes: kind === "GND" ? "" : `${kind}1`,
-          params: { ...defaultParams(kind) },
-        },
+      : kind === "WIRELABEL"
+        ? { kind: "WIRELABEL", refdes: "", params: { name: "vin" } }
+        : {
+            kind,
+            refdes: kind === "GND" ? "" : `${kind}1`,
+            params: { ...defaultParams(kind) },
+          },
   ...(kind === "TIP"
     ? { style: { width: 8, height: 8 }, measured: { width: 8, height: 8 } }
     : {}),
@@ -58,16 +60,96 @@ function assert(cond: unknown, msg: string) {
   }
 }
 
-// Shared TIP junction (degree 2) → filled junction mark.
+// Shared TIP T (3 wire legs) → filled junction mark.
 {
-  const tip = tipAt("tip", 200, 100);
-  const nodes: Node<ComponentData>[] = [mk("r", "R", 40, 88), mk("c", "C", 320, 88), tip];
+  const tip = tipAt("tip", 200, 104);
+  const nodes: Node<ComponentData>[] = [
+    mk("r", "R", 40, 88),
+    mk("c", "C", 320, 88),
+    mk("g", "GND", 192, 200),
+    tip,
+  ];
   const edges: Edge[] = [
     wire("e1", "r", "b", "tip", "t"),
     wire("e2", "tip", "t", "c", "a"),
+    wire("e3", "tip", "t", "g", "a"),
   ];
   const marks = findWireJunctions(nodes, edges);
-  assert(marks.junctions.length >= 1, "shared TIP should mark a junction");
+  assert(marks.junctions.length >= 1, "3-leg TIP should mark a junction");
+}
+
+// Through-splice tip (2 collinear wires, tip on the rail) → no filled square.
+{
+  const tip = tipAt("tip", 200, 104);
+  const nodes: Node<ComponentData>[] = [mk("r", "R", 40, 88), mk("c", "C", 320, 88), tip];
+  const edges: Edge[] = [
+    {
+      id: "e1",
+      type: "schematic",
+      source: "r",
+      sourceHandle: "b",
+      target: "tip",
+      targetHandle: "t",
+      data: { waypoints: [], directPath: true },
+    },
+    {
+      id: "e2",
+      type: "schematic",
+      source: "tip",
+      sourceHandle: "t",
+      target: "c",
+      targetHandle: "a",
+      data: { waypoints: [], directPath: true },
+    },
+  ];
+  const marks = findWireJunctions(nodes, edges);
+  assert(marks.junctions.length === 0, "2-leg TIP bend should not mark a junction");
+}
+
+// L-bend + net label must not look like a T (false square under "vin").
+{
+  const tip = tipAt("tip", 200, 104);
+  const label = mk("lb", "WIRELABEL", 188, 60);
+  const nodes: Node<ComponentData>[] = [
+    mk("r", "R", 40, 88),
+    mk("c", "C", 320, 88),
+    tip,
+    label,
+  ];
+  const edges: Edge[] = [
+    {
+      id: "e1",
+      type: "schematic",
+      source: "r",
+      sourceHandle: "b",
+      target: "tip",
+      targetHandle: "t",
+      data: { waypoints: [], directPath: true },
+    },
+    {
+      id: "e2",
+      type: "schematic",
+      source: "tip",
+      sourceHandle: "t",
+      target: "c",
+      targetHandle: "a",
+      data: { waypoints: [], directPath: true },
+    },
+    {
+      id: "e3",
+      type: "schematic",
+      source: "lb",
+      sourceHandle: "g",
+      target: "tip",
+      targetHandle: "t",
+      data: { waypoints: [], directPath: true },
+    },
+  ];
+  const marks = findWireJunctions(nodes, edges);
+  assert(
+    marks.junctions.length === 0,
+    "WIRELABEL must not inflate tip degree into a junction mark",
+  );
 }
 
 // Single wire → no invented marks.
@@ -165,6 +247,56 @@ function assert(cond: unknown, msg: string) {
   assert(
     marks.junctions.some((p) => Math.abs(p.x - 100) < 2 && Math.abs(p.y - 100) < 2),
     `self-T needs square, got ${JSON.stringify(marks)}`,
+  );
+}
+
+// H→V T with a short nub into the tip → one square only (not tip + elbow).
+{
+  const tip = tipAt("j", 200, 100);
+  const vT = tipAt("vT", 200, 0);
+  const vB = tipAt("vB", 200, 200);
+  const hL = tipAt("hL", 40, 108);
+  const nodes = [tip, vT, vB, hL];
+  const edges: Edge[] = [
+    {
+      id: "vu",
+      type: "schematic",
+      source: "vT",
+      sourceHandle: "t",
+      target: "j",
+      targetHandle: "t",
+      data: { waypoints: [], directPath: true },
+    },
+    {
+      id: "vd",
+      type: "schematic",
+      source: "j",
+      sourceHandle: "t",
+      target: "vB",
+      targetHandle: "t",
+      data: { waypoints: [], directPath: true },
+    },
+    {
+      id: "h",
+      type: "schematic",
+      source: "hL",
+      sourceHandle: "t",
+      target: "j",
+      targetHandle: "t",
+      data: {
+        waypoints: [{ x: 200, y: 108 }],
+        directPath: true,
+      },
+    },
+  ];
+  const marks = findWireJunctions(nodes, edges);
+  assert(
+    marks.junctions.length === 1,
+    `nubbed T should mark once, got ${JSON.stringify(marks.junctions)}`,
+  );
+  assert(
+    Math.abs(marks.junctions[0]!.y - 100) < 2,
+    "single square should sit on the tip, not the elbow",
   );
 }
 

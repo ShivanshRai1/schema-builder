@@ -369,13 +369,14 @@ export function reconnectPartsOnTips(
               ...e,
               source: partId,
               sourceHandle: pinId,
-              data: { ...(e.data as object), waypoints: [], directPath: false },
+              // Clean ortho L — stub routing (directPath:false) jogged Move reconnects.
+              data: { ...(e.data as object), waypoints: [], directPath: true },
             }
           : {
               ...e,
               target: partId,
               targetHandle: pinId,
-              data: { ...(e.data as object), waypoints: [], directPath: false },
+              data: { ...(e.data as object), waypoints: [], directPath: true },
             }
         : e,
     );
@@ -391,6 +392,14 @@ export function reconnectPartsOnTips(
     const singlePin = spec.pins.length === 1;
 
     for (const pin of spec.pins) {
+      // Never stack a second wire on a pin that is already connected.
+      const pinBusy = nextEdges.some(
+        (e) =>
+          (e.source === id && e.sourceHandle === pin.id) ||
+          (e.target === id && e.targetHandle === pin.id),
+      );
+      if (pinBusy) continue;
+
       const pinPt = pinWorldPoint(part0, pin.id);
       if (!pinPt) continue;
 
@@ -482,13 +491,13 @@ export function reconnectTipsOnPins(
               ...e,
               source: best!.partId,
               sourceHandle: best!.pinId,
-              data: { ...(e.data as object), waypoints: [], directPath: false },
+              data: { ...(e.data as object), waypoints: [], directPath: true },
             }
           : {
               ...e,
               target: best!.partId,
               targetHandle: best!.pinId,
-              data: { ...(e.data as object), waypoints: [], directPath: false },
+              data: { ...(e.data as object), waypoints: [], directPath: true },
             }
         : e,
     );

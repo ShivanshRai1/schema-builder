@@ -90,6 +90,10 @@ import {
   absorbTipsOntoPins,
 } from "./wiring/tipCleanup";
 import { dissolveJunctionTip, wireMarkKey } from "./wiring/junctions";
+import {
+  joinWiresAtCrossing,
+  unjoinJunctionToCrossing,
+} from "./wiring/wireMarkToggle";
 import { pinWorldPoint } from "./wiring/pinGeometry";
 import {
   computeEdgePolyline,
@@ -164,6 +168,33 @@ function syncIdCounter(nodes: Node<ComponentData>[], idCounter: { current: numbe
     if (m) max = Math.max(max, Number(m[1]));
   }
   idCounter.current = Math.max(idCounter.current, max);
+}
+
+/**
+ * True when a part still has a live electrical attachment (to another device or
+ * a junction tip). Pure dangling stubs do not count — those parts must still
+ * get reconnect / wire-insert on Drag drop (same as Move).
+ */
+function partHasLiveWire(
+  nodes: Node<ComponentData>[],
+  edges: Edge[],
+  partId: string,
+): boolean {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const deg = new Map<string, number>();
+  for (const e of edges) {
+    deg.set(e.source, (deg.get(e.source) ?? 0) + 1);
+    deg.set(e.target, (deg.get(e.target) ?? 0) + 1);
+  }
+  for (const e of edges) {
+    if (e.source !== partId && e.target !== partId) continue;
+    const otherId = e.source === partId ? e.target : e.source;
+    const other = byId.get(otherId);
+    if (!other) continue;
+    if (other.data.kind !== "TIP") return true;
+    if ((deg.get(otherId) ?? 0) >= 2) return true;
+  }
+  return false;
 }
 
 export default function App() {
@@ -1340,9 +1371,12 @@ export default function App() {
         selectedParts.length > 1 &&
         selectedParts.some((n) => n.id === nodeId)
       ) {
-        connectedMoveRef.current = true;
         const moveIds = selectedParts.map((n) => n.id);
         const idSet = new Set(moveIds);
+        // Only skip reconnect when something in the group is still live-wired.
+        connectedMoveRef.current = moveIds.some((id) =>
+          partHasLiveWire(nodesNow, edgesNow, id),
+        );
         return {
           moveIds,
           origins: nodesNow
@@ -1355,7 +1389,8 @@ export default function App() {
       // Keep wires connected during the drag (TIP re-route / waypoint clear).
       const plan = planConnectedPartMove(nodesNow, edgesNow, nodeId);
       if (plan) {
-        connectedMoveRef.current = true;
+        const stillWired = partHasLiveWire(nodesNow, edgesNow, nodeId);
+        connectedMoveRef.current = stillWired;
         const dropTips = new Set(plan.dropStubTipIds);
         const dropEdges = new Set(plan.dropStubEdgeIds);
         const clearSet = new Set(plan.clearWaypointEdgeIds);
@@ -1415,8 +1450,8 @@ export default function App() {
         };
       }
 
-      // Disconnected / fresh part — Drag still translates without severing.
-      connectedMoveRef.current = true;
+      // Disconnected / fresh part — Drag must reconnect/insert on drop like Move.
+      connectedMoveRef.current = false;
       const partOrigin = nodesNow.find((n) => n.id === nodeId);
       if (!partOrigin) return null;
       return {
@@ -1759,9 +1794,20 @@ export default function App() {
   const deleteNodes = useCallback((ids: string[]) => {
     if (!ids.length) return;
     pushHistory();
+    let ns = nodesRef.current;
+    let es = edgesRef.current;
     const idSet = new Set(ids);
-    const nextNodes = nodesRef.current.filter((n) => !idSet.has(n.id));
-    const nextEdges = edgesRef.current.filter(
+    for (const id of ids) {
+      const n = ns.find((x) => x.id === id);
+      if (!n || n.data.kind === "TIP") continue;
+      if (n.data.kind === "WIRELABEL" || n.data.kind === "NODE") continue;
+      // Leave rails as free tips — don't wipe the whole attached wire.
+      const det = detachPartForMove(ns, es, id, newId);
+      ns = det.nodes;
+      es = det.edges;
+    }
+    const nextNodes = ns.filter((n) => !idSet.has(n.id));
+    const nextEdges = es.filter(
       (e) => !idSet.has(e.source) && !idSet.has(e.target),
     );
     const pruned = pruneOrphanTips(nextNodes, nextEdges);
@@ -1835,10 +1881,22 @@ export default function App() {
     }
 
     pushHistory();
+    const selectedParts = nodesNow.filter(
+      (n) => n.selected && n.data.kind !== "TIP",
+    );
+    let ns = nodesNow;
+    let es = edgesNow;
+    // Detach first so shared rails stay (free tips), same idea as Move.
+    for (const part of selectedParts) {
+      if (part.data.kind === "WIRELABEL" || part.data.kind === "NODE") continue;
+      const det = detachPartForMove(ns, es, part.id, newId);
+      ns = det.nodes;
+      es = det.edges;
+    }
     const dropNodes = new Set(selectedNodeIds);
     const dropEdges = new Set(selectedEdgeIds);
-    const nextNodes = nodesNow.filter((n) => !dropNodes.has(n.id));
-    const nextEdges = edgesNow.filter(
+    const nextNodes = ns.filter((n) => !dropNodes.has(n.id));
+    const nextEdges = es.filter(
       (e) =>
         !dropEdges.has(e.id) &&
         !dropNodes.has(e.source) &&
@@ -1870,9 +1928,24 @@ export default function App() {
       }
     }
 
+    // Net names / node labels: remove only the label, never detach rails.
+    if (node.data.kind === "WIRELABEL" || node.data.kind === "NODE") {
+      pushHistory();
+      const nextNodes = nodesNow.filter((n) => n.id !== nodeId);
+      const nextEdges = edgesRef.current.filter(
+        (edge) => edge.source !== nodeId && edge.target !== nodeId,
+      );
+      const pruned = pruneOrphanTips(nextNodes, nextEdges);
+      const collapsed = collapsePassThroughTips(pruned.nodes, pruned.edges);
+      setNodes(collapsed.nodes);
+      setEdges(collapsed.edges);
+      return;
+    }
+
     pushHistory();
-    const nextNodes = nodesNow.filter((n) => n.id !== nodeId);
-    const nextEdges = edgesRef.current.filter(
+    const det = detachPartForMove(nodesNow, edgesRef.current, nodeId, newId);
+    const nextNodes = det.nodes.filter((n) => n.id !== nodeId);
+    const nextEdges = det.edges.filter(
       (edge) => edge.source !== nodeId && edge.target !== nodeId,
     );
     const pruned = pruneOrphanTips(nextNodes, nextEdges);
@@ -2057,6 +2130,91 @@ export default function App() {
   }, [setNodes, setEdges, pushHistory]);
   deleteEdgeWithToolRef.current = deleteEdgeWithTool;
 
+  /** Resolve a junction tip id under a mark (filled square). */
+  const tipIdNearJunction = useCallback(
+    (point: Point, preferred?: string): string | undefined => {
+      if (preferred) return preferred;
+      const nodesNow = nodesRef.current;
+      const edgesNow = edgesRef.current;
+      let best: { id: string; d: number } | null = null;
+      const deg = new Map<string, number>();
+      for (const e of edgesNow) {
+        deg.set(e.source, (deg.get(e.source) ?? 0) + 1);
+        deg.set(e.target, (deg.get(e.target) ?? 0) + 1);
+      }
+      for (const n of nodesNow) {
+        if (n.data.kind !== "TIP") continue;
+        if ((deg.get(n.id) ?? 0) < 2) continue;
+        const pt = pinWorldPoint(n, "t");
+        if (!pt) continue;
+        const d = Math.hypot(pt.x - point.x, pt.y - point.y);
+        if (d <= 14 && (!best || d < best.d)) best = { id: n.id, d };
+      }
+      return best?.id;
+    },
+    [],
+  );
+
+  /**
+   * Double-click a hop ↔ square to toggle join. (Wire single-click on a
+   * junction extends from that tip instead.)
+   */
+  const toggleWireMark = useCallback(
+    (
+      kind: "junction" | "crossing",
+      point: Point,
+      meta?: { tipId?: string; edgeIds?: [string, string] },
+    ) => {
+      const nodesNow = nodesRef.current;
+      const edgesNow = edgesRef.current;
+
+      if (kind === "crossing") {
+        const ids = meta?.edgeIds;
+        if (!ids || ids[0] === ids[1]) return;
+        const joined = joinWiresAtCrossing(
+          nodesNow,
+          edgesNow,
+          ids[0],
+          ids[1],
+          point,
+          newId,
+        );
+        if (!joined) return;
+        pushHistory();
+        const k = wireMarkKey(point);
+        setHiddenCrossingKeys((prev) => prev.filter((x) => x !== k));
+        const pruned = pruneOrphanTips(joined.nodes, joined.edges);
+        nodesRef.current = pruned.nodes;
+        edgesRef.current = pruned.edges;
+        setNodes(pruned.nodes);
+        setEdges(pruned.edges);
+        return;
+      }
+
+      const tipId = tipIdNearJunction(point, meta?.tipId);
+      if (!tipId) return;
+      // Prefer restoring a hop (merge through-runs). Fall back to hard dissolve.
+      const unjoined = unjoinJunctionToCrossing(nodesNow, edgesNow, tipId);
+      if (unjoined) {
+        pushHistory();
+        nodesRef.current = unjoined.nodes;
+        edgesRef.current = unjoined.edges;
+        setNodes(unjoined.nodes);
+        setEdges(unjoined.edges);
+        return;
+      }
+      const dissolved = dissolveJunctionTip(nodesNow, edgesNow, tipId, newId);
+      if (!dissolved) return;
+      pushHistory();
+      const pruned = pruneOrphanTips(dissolved.nodes, dissolved.edges);
+      nodesRef.current = pruned.nodes;
+      edgesRef.current = pruned.edges;
+      setNodes(pruned.nodes);
+      setEdges(pruned.edges);
+    },
+    [setNodes, setEdges, pushHistory, tipIdNearJunction],
+  );
+
   /** Delete-mode scissors on a junction square or crossing ring. */
   const deleteWireMarkWithTool = useCallback(
     (
@@ -2068,25 +2226,18 @@ export default function App() {
       const edgesNow = edgesRef.current;
 
       if (kind === "junction") {
-        let tipId = meta?.tipId;
-        if (!tipId) {
-          let best: { id: string; d: number } | null = null;
-          const deg = new Map<string, number>();
-          for (const e of edgesNow) {
-            deg.set(e.source, (deg.get(e.source) ?? 0) + 1);
-            deg.set(e.target, (deg.get(e.target) ?? 0) + 1);
-          }
-          for (const n of nodesNow) {
-            if (n.data.kind !== "TIP") continue;
-            if ((deg.get(n.id) ?? 0) < 2) continue;
-            const pt = pinWorldPoint(n, "t");
-            if (!pt) continue;
-            const d = Math.hypot(pt.x - point.x, pt.y - point.y);
-            if (d <= 14 && (!best || d < best.d)) best = { id: n.id, d };
-          }
-          tipId = best?.id;
-        }
+        const tipId = tipIdNearJunction(point, meta?.tipId);
         if (!tipId) return; // Square with no shared tip — don't delete rails.
+        // Same as toggle: restore hop when possible so Delete isn't a dead end.
+        const unjoined = unjoinJunctionToCrossing(nodesNow, edgesNow, tipId);
+        if (unjoined) {
+          pushHistory();
+          nodesRef.current = unjoined.nodes;
+          edgesRef.current = unjoined.edges;
+          setNodes(unjoined.nodes);
+          setEdges(unjoined.edges);
+          return;
+        }
         const dissolved = dissolveJunctionTip(nodesNow, edgesNow, tipId, newId);
         if (!dissolved) return;
         pushHistory();
@@ -2118,7 +2269,7 @@ export default function App() {
         }
       }
     },
-    [setNodes, setEdges, pushHistory],
+    [setNodes, setEdges, pushHistory, tipIdNearJunction],
   );
 
   const straightenEdge = useCallback((edgeId: string, clickPoint?: Point) => {
@@ -2358,12 +2509,15 @@ export default function App() {
           if (!touched.has(e.source) && !touched.has(e.target)) return e;
           const wps =
             ((e.data as { waypoints?: unknown[] } | undefined)?.waypoints) ?? [];
-          if (!wps.length && !(e.data as { directPath?: boolean } | undefined)?.directPath) {
+          if (
+            !wps.length &&
+            (e.data as { directPath?: boolean } | undefined)?.directPath
+          ) {
             return e;
           }
           return {
             ...e,
-            data: { ...(e.data as object), waypoints: [], directPath: false },
+            data: { ...(e.data as object), waypoints: [], directPath: true },
           };
         });
       }
@@ -2708,8 +2862,9 @@ export default function App() {
                 data: {
                   ...(e.data as object),
                   waypoints,
-                  // Authored segment/bend drag — not Move rubber-band.
-                  directPath: false,
+                  // Bake the dragged geometry — re-routing would yank shared tips
+                  // and disturb neighboring wires at the same junction.
+                  directPath: true,
                 },
                 selected: true,
               }
@@ -3228,13 +3383,33 @@ export default function App() {
           edgesRef.current,
           movedParts,
         );
-        const absorbed = absorbTipsOntoPins(finalized.nodes, finalized.edges);
-        // Connected Move already has wires attached — do not T-splice again
-        // onto coplanar rails (that recreated the U-loop on C1).
-        nodesRef.current = absorbed.nodes;
-        edgesRef.current = absorbed.edges;
-        setNodes(absorbed.nodes);
-        setEdges(absorbed.edges);
+        let ns = finalized.nodes;
+        let es = finalized.edges;
+        const absorbed = absorbTipsOntoPins(ns, es);
+        ns = absorbed.nodes;
+        es = absorbed.edges;
+
+        // Free pins that landed on a rail (series insert / T-splice). No-op when
+        // every pin is already wired — safe for keep-connected Drag. Needed when
+        // a part has a free pin or when Drag was used to drop onto a wire.
+        const attached = attachPartsToWires(ns, es, [...movedParts]);
+        if (attached.attached) {
+          ns = attached.nodes;
+          es = attached.edges;
+        }
+
+        const ghosts = pruneGhostTipsOnPins(ns, es);
+        ns = ghosts.nodes;
+        es = ghosts.edges;
+        const collapsed = collapsePassThroughTips(ns, es);
+        const pruned = pruneOrphanTips(collapsed.nodes, collapsed.edges);
+        ns = pruned.nodes;
+        es = pruned.edges;
+
+        nodesRef.current = ns;
+        edgesRef.current = es;
+        setNodes(ns);
+        setEdges(es);
       } else {
         connectedMoveRef.current = false;
         // Sync ref before reconnect — otherwise reconnect reads stale nodes
@@ -3445,6 +3620,7 @@ export default function App() {
                   <li>After a successful <strong>Run</strong>, turn <strong>Probe</strong> on when you want it: click a wire for the <em>red</em> pin, then another for the <em>black</em> pin → <code>V(a,b)</code> · right-click removes black then red · <kbd>Shift</kbd>+click a part for current · <kbd>Ctrl</kbd>+click selects</li>
                   <li><kbd>Right-click</kbd> a part to edit properties (OK / Cancel)</li>
                   <li><kbd>Click</kbd> empty canvas to deselect · hollow square = free wire end</li>
+                  <li><kbd>Double-click</kbd> a junction square or crossing hop to toggle join ↔ pass</li>
                   <li><kbd>E</kbd> Explore · <kbd>W</kbd> Wire · <kbd>M</kbd> Move · <kbd>D</kbd> Drag</li>
                   <li><kbd>Delete</kbd> / <kbd>Backspace</kbd> removes a selection · with nothing selected, enters Delete · <kbd>Esc</kbd> returns to Explore</li>
                 </ul>
@@ -3460,13 +3636,15 @@ export default function App() {
                   <li><kbd>Alt</kbd>+click a wire to select it (turns amber)</li>
                   <li><kbd>Double-click</kbd> a wire to straighten it (pulls the run into the nearer pin)</li>
                   <li>Hollow square = free <strong>wire end</strong> — select it, then <kbd>Delete</kbd> to remove the stub</li>
+                  <li><kbd>Click</kbd> a junction square to extend a new wire from that join</li>
+                  <li><kbd>Double-click</kbd> a square or hop to toggle join ↔ pass</li>
                   <li><kbd>Esc</kbd> = stop drawing (keeps locked bends) and return to Explore</li>
                   <li><kbd>Delete</kbd> / <kbd>Backspace</kbd>: remove selected part/wire · with nothing selected, enter Delete</li>
                 </ul>
                 <div className="mode-guide-legend" aria-label="Wire legend">
                   <span className="wl-item">
                     <svg width="10" height="10" aria-hidden><rect x="1" y="1" width="8" height="8" fill="currentColor" /></svg>
-                    Connected junction
+                    Connected junction · double-click to unjoin
                   </span>
                   <span className="wl-item">
                     <svg width="16" height="12" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.6">
@@ -3474,7 +3652,7 @@ export default function App() {
                       <path d="M8.5 1 V5.2" />
                       <path d="M8.5 9 V11" />
                     </svg>
-                    Crossing hop (not joined)
+                    Crossing hop · double-click to join
                   </span>
                 </div>
               </>
@@ -3483,7 +3661,7 @@ export default function App() {
                 <p className="mode-guide-lead">Click anything to remove it (scissors cursor).</p>
                 <ul className="mode-guide-list">
                   <li><kbd>Click</kbd> a part, wire, or hollow <strong>wire end</strong> square to delete it</li>
-                  <li><kbd>Click</kbd> a filled junction square to break the join (wires stay, ends open)</li>
+                  <li><kbd>Click</kbd> a filled junction square to unjoin (restores a crossing hop when possible)</li>
                   <li><kbd>Click</kbd> a crossing hop to hide it — wires stay as they are</li>
                   <li>Short stubs are easiest to remove by clicking the square at the end</li>
                   <li><kbd>Esc</kbd> Explore · toolbar Delete toggles scissors off · <kbd>E</kbd> <kbd>W</kbd> <kbd>M</kbd> <kbd>D</kbd> switch tools · <kbd>Delete</kbd> / <kbd>Backspace</kbd> removes a selection</li>
@@ -3617,14 +3795,6 @@ export default function App() {
                 >
                   Load H-bridge
                 </button>
-                <button
-                  type="button"
-                  className={`ghost-btn${showLibrary ? " ghost-btn-active" : ""}`}
-                  onClick={() => setShowLibrary((v) => !v)}
-                  title="Show or hide Models (.sub / .lib) panel"
-                >
-                  {showLibrary ? "Hide models" : "Models"}
-                </button>
                 <div className="theme-toggle" role="group" aria-label="Color theme">
                   <button
                     type="button"
@@ -3700,6 +3870,7 @@ export default function App() {
             onDeleteNode={deleteNodeWithTool}
             onDeleteEdge={deleteEdgeWithTool}
             onDeleteWireMark={deleteWireMarkWithTool}
+            onToggleWireMark={toggleWireMark}
             hiddenCrossingKeys={hiddenCrossingKeys}
             onStraightenEdge={straightenEdge}
             onSelectEdge={onSelectEdge}
@@ -3727,6 +3898,8 @@ export default function App() {
                 onCancel={cancelTextEdit}
                 onPopOut={() => setNetlistFloating(true)}
                 editorTheme={uiTheme === "light" ? "light" : "vs-dark"}
+                modelsOpen={showLibrary}
+                onToggleModels={() => setShowLibrary((v) => !v)}
               />
             </div>
           )}
@@ -3834,6 +4007,8 @@ export default function App() {
             onApply={applyTextEdit}
             onCancel={cancelTextEdit}
             editorTheme={uiTheme === "light" ? "light" : "vs-dark"}
+            modelsOpen={showLibrary}
+            onToggleModels={() => setShowLibrary((v) => !v)}
           />
         </FloatingWindow>
       )}

@@ -167,14 +167,59 @@ export function cleanSignalName(raw: string): string {
 }
 
 /**
- * Drop internal MOSFET leg currents (Id/Is/Ig/Ib of devices inside subcircuits).
- * The schematic only has XM1 — not the hidden M1 inside the built-in SIC_MOS model.
+ * Keep schematic-level traces; drop MOSFET leg currents and subcircuit internals
+ * (TVS .sub models dump dozens of nodes like CBVC@X1 that clutter the legend).
  */
-export function shouldShowInChart(name: string): boolean {
+export function shouldShowInChart(
+  name: string,
+  topRefs?: Set<string>,
+  topNets?: Set<string>,
+): boolean {
   const n = cleanSignalName(name);
   if (!n) return false;
+  // Internal MOSFET leg currents (Id/Is/Ig/Ib of devices inside subcircuits).
   if (/^I[dgsb]\(/i.test(n)) return false;
-  return true;
+  if (/@/i.test(n)) return false;
+
+  if (!topRefs?.size || !topNets?.size) return true;
+
+  const fn = /^([VI])\((.+)\)$/i.exec(n);
+  if (fn) {
+    const kind = fn[1]!.toUpperCase();
+    const arg = fn[2]!;
+    if (kind === "I") {
+      const base = arg.replace(/#branch$/i, "").split(/[.:]/)[0]!.toUpperCase();
+      return topRefs.has(base);
+    }
+    // V(net): only nets that appear on top-level device pins.
+    if (arg === "0") return false;
+    return topNets.has(arg) || topNets.has(arg.toUpperCase());
+  }
+
+  // Bare names after fleet quirks — keep only if they are a top-level refdes.
+  if (topRefs.has(n.toUpperCase())) return true;
+  // "90X1" / "CBVCX1" style mashups from bad legend mapping of internals.
+  if (/X\d+$/i.test(n) && !/^X\d+$/i.test(n)) return false;
+  return false;
+}
+
+/** Top-level refdes + pin nets from the schematic netlist (not .sub internals). */
+export function topLevelSignalScope(netlist: string): {
+  refs: Set<string>;
+  nets: Set<string>;
+} {
+  const devices = parseNetlistDevices(netlist);
+  const refs = new Set<string>();
+  const nets = new Set<string>();
+  for (const d of devices) {
+    refs.add(d.refdes.toUpperCase());
+    for (const p of d.pins) {
+      if (!p || p === "0") continue;
+      nets.add(p);
+      nets.add(p.toUpperCase());
+    }
+  }
+  return { refs, nets };
 }
 
 /** Is(M1#XM1) from QSPICE → I(XM1) (schematic refdes, not internal M1). */
@@ -374,16 +419,25 @@ export function applyNetlistLegendNames(series: SimSeries[], netlist: string): S
 }
 
 /** Clean labels, map subckt source current to I(XM1), hide internal Mos legs. */
-export function formatSeriesForChart(series: SimSeries[], _netlist?: string): SimSeries[] {
+export function formatSeriesForChart(series: SimSeries[], netlist?: string): SimSeries[] {
+  const scope = netlist?.trim() ? topLevelSignalScope(netlist) : null;
   const aliases: SimSeries[] = [];
   for (const s of series) {
     const alias = subcktInstanceCurrentAlias(s.name);
     if (alias) aliases.push({ ...s, name: alias });
   }
   const filtered = series
-    .filter((s) => shouldShowInChart(s.name))
+    .filter((s) =>
+      shouldShowInChart(s.name, scope?.refs, scope?.nets),
+    )
     .map((s) => ({ ...s, name: cleanSignalName(s.name) }));
   for (const a of aliases) {
+    if (
+      scope &&
+      !shouldShowInChart(a.name, scope.refs, scope.nets)
+    ) {
+      continue;
+    }
     if (!filtered.some((f) => f.name === a.name)) filtered.push(a);
   }
   // Keep V(net)/I(refdes) names so canvas probe hover still matches.

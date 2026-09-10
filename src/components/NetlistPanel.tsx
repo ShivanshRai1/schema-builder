@@ -20,6 +20,8 @@ export function NetlistPanel({
   onCancel,
   onPopOut,
   editorTheme = "vs-dark",
+  modelsOpen = false,
+  onToggleModels,
 }: {
   netlist: string;
   editing: boolean;
@@ -33,6 +35,9 @@ export function NetlistPanel({
   onCancel: () => void;
   onPopOut?: () => void;
   editorTheme?: "vs-dark" | "light";
+  /** Models (.sub / .lib) panel visibility. */
+  modelsOpen?: boolean;
+  onToggleModels?: () => void;
 }) {
   const onMount: OnMount = (editor, monaco) => {
     monaco.editor.setModelLanguage(editor.getModel()!, spiceLanguageId);
@@ -43,6 +48,16 @@ export function NetlistPanel({
       <div className="panel-header">
         <span>netlist.cir</span>
         <div className="panel-header-right">
+          {onToggleModels && (
+            <button
+              type="button"
+              className={`ghost-btn${modelsOpen ? " ghost-btn-active" : ""}`}
+              onClick={onToggleModels}
+              title="Show or hide Models (.sub / .lib) panel"
+            >
+              {modelsOpen ? "Hide models" : "Models"}
+            </button>
+          )}
           {editing ? (
             <>
               <button type="button" className="ghost-btn" onClick={onCancel}>
