@@ -169,11 +169,6 @@ function terminalSegmentLen(poly: Point[], atStart: boolean): number {
   return Math.hypot(b.x - a.x, b.y - a.y);
 }
 
-function peelTerminal(poly: Point[], atStart: boolean): Point[] | null {
-  if (poly.length < 3) return null;
-  return atStart ? poly.slice(1) : poly.slice(0, -1);
-}
-
 /** Closest segment on a polyline to `p` (flow coords). */
 function closestSegmentOnPoly(
   poly: Point[],
