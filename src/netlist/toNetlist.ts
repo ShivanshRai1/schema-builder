@@ -7,6 +7,7 @@ import {
   collectRequiredModelNames,
   parseDefinedSpiceNames,
 } from "./builtinLibrary";
+import { dedupeAnalysisDirectives } from "./parseDeviceParams";
 
 // ---------------------------------------------------------------------------
 // graph -> SPICE netlist. PURE FUNCTION: (nodes, edges) -> string.
@@ -97,7 +98,15 @@ export function toNetlist(
 
   lines.push("");
   lines.push("* --- directives (pass-through / editable region) ---");
-  for (const d of opts.directives ?? DEFAULT_DIRECTIVES) lines.push(d);
+  let dirs = dedupeAnalysisDirectives(opts.directives ?? DEFAULT_DIRECTIVES).filter(
+    // Fleet rejects .include unless files are uploaded; user Models library is inlined above.
+    (d) => !/^\.(include|inc|lib)\b/i.test(d),
+  );
+  // QSPICE fatals with zero analyses — keep a default .tran if the user deleted all.
+  if (!dirs.some((d) => /^\.tran\b/i.test(d))) {
+    dirs = [...dirs, DEFAULT_DIRECTIVES[0]!];
+  }
+  for (const d of dirs) lines.push(d);
   lines.push(".end");
 
   return lines.join("\n");

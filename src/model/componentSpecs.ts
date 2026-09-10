@@ -260,7 +260,7 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
       return `${r} ${n("p")} ${n("n")} DC ${dc}${ser}`;
     },
   },
-  /** LTspice SINE voltage — Ncycles omitted. */
+  /** LTspice SINE voltage — Ncycles omitted. Also hosts PWL/EXP via `stimulus`. */
   VAC: {
     kind: "VAC", category: "Sources", refdesPrefix: "V", label: "AC voltage source", glyph: "(~)", emits: true,
     pins: PN,
@@ -271,9 +271,15 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
       A("tdelay", "Tdelay", "text", "", { unit: "s" }),
       A("theta", "Theta", "text", "", { unit: "1/s" }),
       A("phi", "Phi", "text", "", { unit: "deg" }),
+      A("stimulus", "Raw stimulus", "text", "", {
+        hint: "If set (e.g. PWL(...)), overrides SINE fields in the netlist",
+      }),
     ],
-    toSpice: (r, n, p) =>
-      `${r} ${n("p")} ${n("n")} SINE(${p.voffset || "0"} ${p.vamp || "V"} ${p.freq || "0"} ${p.tdelay || "0"} ${p.theta || "0"} ${p.phi || "0"})`,
+    toSpice: (r, n, p) => {
+      const raw = (p.stimulus ?? "").trim();
+      if (raw) return `${r} ${n("p")} ${n("n")} ${raw}`;
+      return `${r} ${n("p")} ${n("n")} SINE(${p.voffset || "0"} ${p.vamp || "V"} ${p.freq || "0"} ${p.tdelay || "0"} ${p.theta || "0"} ${p.phi || "0"})`;
+    },
   },
   I: {
     kind: "I", category: "Sources", refdesPrefix: "I", label: "DC current source", glyph: "(→)", emits: true,
@@ -932,10 +938,54 @@ const PALETTE_SECTIONS: { category: Category; kinds: ComponentKind[] }[] = [
 ];
 
 /**
- * Optional palette suppress list. Empty = show every kind in PALETTE_SECTIONS.
- * (TIP / WIRELABEL / legacy EAMP stay out because they are not in sections.)
+ * Still in COMPONENT_SPECS (circuits / load / netlist work) — just not shown
+ * in the left palette until we want them back.
  */
-const PALETTE_HIDDEN = new Set<ComponentKind>([]);
+const PALETTE_HIDDEN = new Set<ComponentKind>([
+  // Passives / RF extras
+  "CMMC",
+  "FBEAD",
+  "ANT",
+  // Inductor
+  "XFMR",
+  // Entire Math section
+  "MATH_CONST",
+  "MATH_SUM",
+  "MATH_PROD",
+  "MATH_GAIN",
+  "MATH_REL",
+  "MATH_LOGIC",
+  // Entire Flipflop section
+  "DFF",
+  "JKFF",
+  "SRFF",
+  "TFF",
+  // Entire Logic section
+  "AND",
+  "NAND",
+  "NOR",
+  "NOT",
+  "OR",
+  "XNOR",
+  "XOR",
+  // Entire Switch section
+  "SPST",
+  "SPDT",
+  "PB",
+  // Entire Sense / Probe section
+  "CSENSE",
+  "IPROBE",
+  "VPROBE",
+  "VSENSE",
+  // Entire Thyristor section
+  "DIAC",
+  "GTO",
+  "SCR",
+  "SCR_PH",
+  "SCS",
+  "SIDAC",
+  "TRIAC",
+]);
 
 export function isPaletteHidden(kind: ComponentKind): boolean {
   return PALETTE_HIDDEN.has(kind);
@@ -943,7 +993,7 @@ export function isPaletteHidden(kind: ComponentKind): boolean {
 
 /**
  * Build the left palette: Commonly used (session) first, then A→Z categories.
- * `commonlyUsed` is ordered most-recent-first; empty → section still shows empty hint via UI.
+ * `commonlyUsed` is ordered most-recent-first (callers may prepend pinned basics).
  */
 export function buildPalette(
   commonlyUsed: readonly ComponentKind[] = [],

@@ -221,19 +221,18 @@ export function ProbeProvider({ children }: { children: ReactNode }) {
   return <ProbeContext.Provider value={value}>{children}</ProbeContext.Provider>;
 }
 
-/** Reset pins when a new sim result arrives; enable Probe after success. */
+/** Reset pins when a new sim result arrives; leave Probe off until the user enables it. */
 export function ClearProbesOnSimChange({ result }: { result: SimResult | null }) {
   const { clearProbes, setProbeMode } = useProbeSelection();
   const prev = useRef<SimResult | null | undefined>(undefined);
   useEffect(() => {
     if (prev.current === undefined) {
       prev.current = result;
-      if (result?.ok && result.series.length) setProbeMode(true);
       return;
     }
     if (prev.current !== result) {
       clearProbes();
-      setProbeMode(Boolean(result?.ok && result.series.length));
+      setProbeMode(false);
       prev.current = result;
     }
   }, [result, clearProbes, setProbeMode]);

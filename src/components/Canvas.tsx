@@ -5,6 +5,7 @@ import {
   ConnectionMode,
   useViewport,
   ViewportPortal,
+  getNodesBounds,
   type Node,
   type Edge,
   type EdgeProps,
@@ -269,6 +270,40 @@ export type CanvasViewApi = {
   toggleLock: () => boolean;
   isLocked: () => boolean;
 };
+
+/**
+ * Node boxes omit refdes labels (above/beside) and slightly scaled glyphs.
+ * Expand measured bounds so fit-to-window does not clip the top/bottom rails.
+ */
+const FIT_LABEL_PAD = { top: 30, right: 56, bottom: 24, left: 40 };
+
+const FIT_VIEW_OPTS = { padding: 0.18, maxZoom: 2.5, duration: 200 } as const;
+
+function fitSchematicView(rf: {
+  getNodes: () => Node[];
+  fitView: (opts?: { padding?: number; maxZoom?: number; duration?: number }) => unknown;
+  fitBounds: (
+    bounds: { x: number; y: number; width: number; height: number },
+    opts?: { padding?: number; maxZoom?: number; duration?: number },
+  ) => unknown;
+} | null | undefined) {
+  if (!rf) return;
+  const nodes = rf.getNodes().filter((n) => !n.hidden);
+  if (nodes.length === 0) {
+    void rf.fitView(FIT_VIEW_OPTS);
+    return;
+  }
+  const b = getNodesBounds(nodes);
+  void rf.fitBounds(
+    {
+      x: b.x - FIT_LABEL_PAD.left,
+      y: b.y - FIT_LABEL_PAD.top,
+      width: b.width + FIT_LABEL_PAD.left + FIT_LABEL_PAD.right,
+      height: b.height + FIT_LABEL_PAD.top + FIT_LABEL_PAD.bottom,
+    },
+    FIT_VIEW_OPTS,
+  );
+}
 
 export type WireCompletePayload = Connection & {
   waypoints: Point[];
@@ -814,6 +849,11 @@ export type CanvasProps = {
   } | null;
   /** Filled by Canvas so the top toolbar can zoom / fit / lock. */
   viewApiRef?: MutableRefObject<CanvasViewApi | null>;
+  /**
+   * Bump to run fit-to-window (e.g. after load / tab switch).
+   * Canvas also fits once on init.
+   */
+  fitViewToken?: number;
   /** Light/dark — drives grid dot contrast on the schematic canvas. */
   uiTheme?: "dark" | "light";
 };
@@ -861,6 +901,7 @@ export function Canvas({
   onSelectEdge,
   onOpenComponentProps,
   viewApiRef,
+  fitViewToken = 0,
   uiTheme = "dark",
 }: CanvasProps) {
   const simResult = useSimResult();
@@ -935,7 +976,7 @@ export function Canvas({
         void rfRef.current?.zoomOut?.({ duration: 200 });
       },
       fitView: () => {
-        void rfRef.current?.fitView({ padding: 0.2, duration: 200 });
+        fitSchematicView(rfRef.current);
       },
       toggleLock: () => {
         const next = !viewLockedRef.current;
@@ -949,6 +990,24 @@ export function Canvas({
       viewApiRef.current = null;
     };
   }, [viewApiRef]);
+
+  /** Initial load + whenever App bumps fitViewToken (open/restore/tab). */
+  useEffect(() => {
+    let cancelled = false;
+    const run = () => {
+      if (cancelled) return;
+      fitSchematicView(rfRef.current);
+    };
+    const t0 = window.setTimeout(run, 0);
+    const t1 = window.setTimeout(run, 80);
+    const t2 = window.setTimeout(run, 220);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t0);
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+    };
+  }, [fitViewToken]);
 
   type MoveDrag = {
     startFlow: Point;
@@ -2755,7 +2814,7 @@ export function Canvas({
         if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
         e.preventDefault();
         e.stopPropagation();
-        void rfRef.current?.fitView({ padding: 0.2, duration: 200 });
+        fitSchematicView(rfRef.current);
         return;
       }
       if (e.key !== "Escape") return;
@@ -3294,15 +3353,21 @@ export function Canvas({
         zoomOnPinch={!viewLocked}
         zoomOnDoubleClick={false}
         preventScrolling={!viewLocked}
+        minZoom={0.15}
+        maxZoom={3}
         deleteKeyCode={null}
         connectionMode={ConnectionMode.Loose}
         defaultEdgeOptions={defaultEdgeOptions}
         snapToGrid
         snapGrid={[SCHEMATIC_GRID, SCHEMATIC_GRID]}
         fitView
+        fitViewOptions={{ padding: 0.18, maxZoom: 2.5 }}
         proOptions={{ hideAttribution: true }}
         onInit={(instance) => {
           rfRef.current = instance;
+          fitSchematicView(instance);
+          window.setTimeout(() => fitSchematicView(instance), 80);
+          window.setTimeout(() => fitSchematicView(instance), 220);
         }}
         onEdgeClick={onEdgeClick}
         onEdgeDoubleClick={onEdgeDoubleClick}

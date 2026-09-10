@@ -1,4 +1,4 @@
-import { useState, type MutableRefObject } from "react";
+import { useState, type MutableRefObject, type ReactNode } from "react";
 import type { CanvasMode, CanvasViewApi } from "./Canvas";
 import type { SimControlApi, SimRunState } from "./SimPanel";
 import { useSimResult } from "../sim/SimResultContext";
@@ -48,17 +48,22 @@ const MODES: {
   },
 ];
 
-function WirePencilIcon() {
+function WireIcon() {
+  // Orthogonal schematic wire (L-bend) — reads as wiring, not eyeglasses.
   return (
-    <img
-      className="mode-toolbar-wire-icon"
-      src="/icons/wire-pencil.png"
-      alt=""
-      width={22}
-      height={22}
-      draggable={false}
-      aria-hidden
-    />
+    <svg className="mode-toolbar-wire-icon" width="26" height="26" viewBox="0 0 24 24" aria-hidden>
+      <g
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.15"
+        strokeLinecap="square"
+        strokeLinejoin="miter"
+      >
+        <path d="M4 17 H13 V7 H20" />
+      </g>
+      <circle cx="4" cy="17" r="1.55" fill="currentColor" />
+      <circle cx="20" cy="7" r="1.55" fill="currentColor" />
+    </svg>
   );
 }
 
@@ -270,6 +275,7 @@ export function ModeToolbar({
   onRedo,
   canUndo = false,
   canRedo = false,
+  trailingActions,
 }: {
   mode: CanvasMode;
   onModeChange: (mode: CanvasMode) => void;
@@ -290,6 +296,8 @@ export function ModeToolbar({
   onRedo?: () => void;
   canUndo?: boolean;
   canRedo?: boolean;
+  /** File / models / theme controls — right of Run/Stop. */
+  trailingActions?: ReactNode;
 }) {
   const [viewLocked, setViewLocked] = useState(false);
   // Explore stays a real mode (E / Esc) but has no toolbar button.
@@ -303,51 +311,6 @@ export function ModeToolbar({
 
   return (
     <div className="mode-toolbar" role="toolbar" aria-label="Canvas tools">
-      {(onUndo || onRedo) && (
-        <>
-          <div className="mode-toolbar-history" role="group" aria-label="History">
-            {onUndo && (
-              <button
-                type="button"
-                className="mode-toolbar-view-btn mode-toolbar-undo"
-                title="Undo (Ctrl+Z)"
-                aria-label="Undo (Ctrl+Z)"
-                disabled={!canUndo}
-                onClick={onUndo}
-              >
-                <img
-                  className="mode-toolbar-history-icon"
-                  src="/icons/history-undo.png"
-                  alt=""
-                  width={22}
-                  height={18}
-                  draggable={false}
-                />
-              </button>
-            )}
-            {onRedo && (
-              <button
-                type="button"
-                className="mode-toolbar-view-btn mode-toolbar-redo"
-                title="Redo (Ctrl+Y)"
-                aria-label="Redo (Ctrl+Y)"
-                disabled={!canRedo}
-                onClick={onRedo}
-              >
-                <img
-                  className="mode-toolbar-history-icon"
-                  src="/icons/history-redo.png"
-                  alt=""
-                  width={22}
-                  height={18}
-                  draggable={false}
-                />
-              </button>
-            )}
-          </div>
-          <div className="mode-toolbar-sep" aria-hidden />
-        </>
-      )}
       {toolbarModes.map((m) => {
         const active = mode === m.id;
         return (
@@ -368,7 +331,7 @@ export function ModeToolbar({
           >
             <span className="mode-toolbar-glyph" aria-hidden>
               {m.id === "wire" ? (
-                <WirePencilIcon />
+                <WireIcon />
               ) : m.id === "delete" ? (
                 <DeleteTrashIcon />
               ) : (
@@ -380,9 +343,7 @@ export function ModeToolbar({
       })}
 
       {(onCut || onCopy) && (
-        <>
-          <div className="mode-toolbar-sep" aria-hidden />
-          <div className="mode-toolbar-edit" role="group" aria-label="Clipboard">
+        <div className="mode-toolbar-edit" role="group" aria-label="Clipboard">
             {onCut && (
               <button
                 type="button"
@@ -407,10 +368,7 @@ export function ModeToolbar({
               </button>
             )}
           </div>
-        </>
       )}
-
-      <div className="mode-toolbar-sep" aria-hidden />
 
       <div className="mode-toolbar-view" role="group" aria-label="View controls">
         <button
@@ -456,9 +414,7 @@ export function ModeToolbar({
       </div>
 
       {onPlaceLabel && (
-        <>
-          <div className="mode-toolbar-sep" aria-hidden />
-          <button
+        <button
             type="button"
             className={`mode-toolbar-btn mode-toolbar-icon-only mode-toolbar-netlabel${labelActive ? " is-active" : ""}`}
             title="Net name (N) — type a name, then click a wire or pin to place"
@@ -470,13 +426,53 @@ export function ModeToolbar({
               <NetLabelIcon />
             </span>
           </button>
-        </>
+      )}
+
+      {(onUndo || onRedo) && (
+        <div className="mode-toolbar-history" role="group" aria-label="History">
+          {onUndo && (
+            <button
+              type="button"
+              className="mode-toolbar-view-btn mode-toolbar-undo"
+              title="Undo (Ctrl+Z)"
+              aria-label="Undo (Ctrl+Z)"
+              disabled={!canUndo}
+              onClick={onUndo}
+            >
+              <img
+                className="mode-toolbar-history-icon"
+                src="/icons/history-undo.png"
+                alt=""
+                width={22}
+                height={18}
+                draggable={false}
+              />
+            </button>
+          )}
+          {onRedo && (
+            <button
+              type="button"
+              className="mode-toolbar-view-btn mode-toolbar-redo"
+              title="Redo (Ctrl+Y)"
+              aria-label="Redo (Ctrl+Y)"
+              disabled={!canRedo}
+              onClick={onRedo}
+            >
+              <img
+                className="mode-toolbar-history-icon"
+                src="/icons/history-redo.png"
+                alt=""
+                width={22}
+                height={18}
+                draggable={false}
+              />
+            </button>
+          )}
+        </div>
       )}
 
       {simControlRef && (
-        <>
-          <div className="mode-toolbar-sep" aria-hidden />
-          <div className="mode-toolbar-sim" role="group" aria-label="Simulation controls">
+        <div className="mode-toolbar-sim" role="group" aria-label="Simulation controls">
             <button
               type="button"
               className={`mode-toolbar-view-btn mode-toolbar-sim-toggle${simRunning ? " is-pause" : " is-play"}`}
@@ -516,7 +512,12 @@ export function ModeToolbar({
               </button>
             )}
           </div>
-        </>
+      )}
+
+      {trailingActions && (
+        <div className="mode-toolbar-actions" role="group" aria-label="File and view">
+          {trailingActions}
+        </div>
       )}
     </div>
   );

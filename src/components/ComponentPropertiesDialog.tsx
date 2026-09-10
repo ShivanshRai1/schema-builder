@@ -215,10 +215,10 @@ export function ComponentPropertiesDialog({
   onCancel: () => void;
   /** Immediate 90° rotate on the live node (LTspice-like); also updates draft. */
   onRotateLive?: (nodeId: string) => void;
-  /** DC voltage ↔ Pulse generator in place (keeps refdes / wires). */
+  /** DC / AC / Pulse voltage source in place (keeps refdes / wires). */
   onConvertVoltageMode?: (
     nodeId: string,
-    mode: "DC" | "Pulse",
+    mode: "DC" | "AC" | "Pulse",
     draft?: { params?: Record<string, string>; refdes?: string },
   ) => void;
   onDelete?: (nodeId: string) => void;
@@ -336,7 +336,9 @@ export function ComponentPropertiesDialog({
             </label>
           )}
 
-          {(node.data.kind === "BATTERY" || node.data.kind === "VPULSE") &&
+          {(node.data.kind === "BATTERY" ||
+            node.data.kind === "VPULSE" ||
+            node.data.kind === "VAC") &&
             onConvertVoltageMode && (
               <fieldset className="prop-field prop-mode-radios">
                 <legend className="prop-label">Mode</legend>
@@ -360,6 +362,21 @@ export function ComponentPropertiesDialog({
                     <input
                       type="radio"
                       name={`vsrc-mode-${node.id}`}
+                      checked={node.data.kind === "VAC"}
+                      onChange={() => {
+                        if (node.data.kind === "VAC") return;
+                        onConvertVoltageMode(node.id, "AC", {
+                          params: draft.params,
+                          refdes: draft.refdes,
+                        });
+                      }}
+                    />
+                    <span>AC</span>
+                  </label>
+                  <label className="prop-radio">
+                    <input
+                      type="radio"
+                      name={`vsrc-mode-${node.id}`}
                       checked={node.data.kind === "VPULSE"}
                       onChange={() => {
                         if (node.data.kind === "VPULSE") return;
@@ -373,7 +390,7 @@ export function ComponentPropertiesDialog({
                   </label>
                 </div>
                 <span className="prop-hint">
-                  Pulse swaps to the pulse-generator symbol in place (same name and wires).
+                  Mode swaps the symbol in place (same name and wires). Cancel restores the original.
                 </span>
               </fieldset>
             )}

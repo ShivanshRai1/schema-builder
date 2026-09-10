@@ -11,6 +11,7 @@ import { Canvas, type CanvasMode, type CanvasViewApi, type WireCompletePayload, 
 import { Palette } from "./components/Palette";
 import { NetNameDialog } from "./components/NetNameDialog";
 import { ModeToolbar } from "./components/ModeToolbar";
+import { SchematicTabBar } from "./components/SchematicTabBar";
 import {
   ComponentPropertiesDialog,
   type ComponentPropsDraft,
@@ -24,14 +25,38 @@ import type { SimResult } from "./sim/runSimulation";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { FloatingWindow } from "./components/FloatingWindow";
 import { COMPONENT_SPECS, defaultParams, getComponentPins, isGroundKind } from "./model/componentSpecs";
-import { readCommonlyUsed, recordCommonlyUsed } from "./model/commonlyUsed";
+import { mergeCommonlyUsed, readCommonlyUsed, recordCommonlyUsed } from "./model/commonlyUsed";
 import type { ComponentData, ComponentKind, ComponentRotation } from "./model/types";
 import { normalizeRotation } from "./model/rotation";
 import { toNetlist } from "./netlist/toNetlist";
 import { extractDirectives } from "./netlist/parseDeviceParams";
 import { applyNetlistToGraph } from "./netlist/applyNetlistToGraph";
-import { createHistory, type CircuitSnapshot } from "./history/circuitHistory";
-import { downloadCircuit, parseCircuitFile, readCircuitFile } from "./persistence/circuitFile";
+import { cloneSnapshot, createHistory, type CircuitSnapshot } from "./history/circuitHistory";
+import { parseCircuitFile } from "./persistence/circuitFile";
+import {
+  buildWorkspaceFile,
+  downloadWorkspace,
+  isWorkspaceFile,
+  parseProjectPayload,
+  parseWorkspaceFile,
+  tabFromSnapshot,
+  type WorkspaceFile,
+} from "./persistence/workspaceFile";
+import {
+  getLocalProject,
+  loadDraftWorkspace,
+  saveDraftWorkspace,
+  saveLocalProject,
+} from "./persistence/localProjects";
+import { tryParseShareFromLocation } from "./persistence/shareLink";
+import {
+  createTabDoc,
+  emptySchematic,
+  maxNodeId,
+  type SchematicTabDoc,
+  type SchematicTabMeta,
+} from "./model/schematicTabs";
+import { ProjectsDialog } from "./components/ProjectsDialog";
 import starterCircuit from "../examples/demo-circuit.json";
 import hbridgeSimplifiedCircuit from "../examples/hbridge-simplified.json";
 import { applyTheme, readStoredTheme, type UiTheme } from "./theme";
@@ -115,6 +140,7 @@ const mk = (
 const STARTER = parseCircuitFile(starterCircuit);
 const INITIAL_NODES: Node<ComponentData>[] = STARTER.nodes;
 const INITIAL_EDGES: Edge[] = STARTER.edges;
+const INITIAL_TAB_ID = "tab-1";
 
 function makeAllocator(nodes: Node<ComponentData>[]) {
   const counts = new Map<string, number>();
@@ -147,6 +173,27 @@ export default function App() {
   const placeCounter = useRef(0);
   const clipboard = useRef<CircuitClipboard | null>(null);
   const history = useRef(createHistory());
+  const tabsRef = useRef<SchematicTabDoc[] | null>(null);
+  if (!tabsRef.current) {
+    tabsRef.current = [
+      createTabDoc("Circuit 1", STARTER, {
+        id: INITIAL_TAB_ID,
+        history: history.current,
+        nextId: INITIAL_NODES.length,
+      }),
+    ];
+  }
+  const [tabMetas, setTabMetas] = useState<SchematicTabMeta[]>([
+    { id: INITIAL_TAB_ID, title: "Circuit 1" },
+  ]);
+  const [activeTabId, setActiveTabId] = useState(INITIAL_TAB_ID);
+  const activeTabIdRef = useRef(activeTabId);
+  activeTabIdRef.current = activeTabId;
+  const tabTitleSeq = useRef(1);
+  const [projectsOpen, setProjectsOpen] = useState(false);
+  const [projectName, setProjectName] = useState("Untitled project");
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
+  const bootstrapDone = useRef(false);
   const dragOrigin = useRef<CircuitSnapshot | null>(null);
   const connectedMoveRef = useRef(false);
   const moveSeverGuard = useRef<{ nodeId: string; at: number } | null>(null);
@@ -238,17 +285,24 @@ export default function App() {
   const rightColRef = useRef<HTMLDivElement>(null);
   const [canvasMode, setCanvasMode] = useState<CanvasMode>("explore");
   const canvasViewApiRef = useRef<CanvasViewApi | null>(null);
+  /** Bump to fit-to-window after load / tab / restore. */
+  const [fitViewToken, setFitViewToken] = useState(0);
+  const requestFitView = useCallback(() => {
+    setFitViewToken((n) => n + 1);
+  }, []);
   const simControlRef = useRef<SimControlApi | null>(null);
   const [simRunState, setSimRunState] = useState<SimRunState>("idle");
   /** Last successful/failed sim waveforms — enables canvas probe hover when ok. */
   const [simResult, setSimResult] = useState<SimResult | null>(null);
   const [placeKind, setPlaceKind] = useState<ComponentKind | null>(null);
   const [placeParams, setPlaceParams] = useState<Record<string, string> | null>(null);
-  /** Session palette “Commonly used” (most recent first). */
-  const [commonlyUsed, setCommonlyUsed] = useState<ComponentKind[]>(() => readCommonlyUsed());
+  /** Session palette “Commonly used” (pinned basics + most recent). */
+  const [commonlyUsed, setCommonlyUsed] = useState<ComponentKind[]>(() =>
+    mergeCommonlyUsed(readCommonlyUsed()),
+  );
   const noteCommonlyUsed = useCallback((...kinds: ComponentKind[]) => {
     if (!kinds.length) return;
-    setCommonlyUsed(recordCommonlyUsed(...kinds));
+    setCommonlyUsed(mergeCommonlyUsed(recordCommonlyUsed(...kinds)));
   }, []);
   const [netNameDialog, setNetNameDialog] = useState(false);
   const lastWireLabelName = useRef("");
@@ -266,7 +320,27 @@ export default function App() {
     x: number;
     y: number;
   } | null>(null);
+  /** Circuit as of opening the properties dialog — Cancel restores this (incl. mode symbol swaps). */
+  const propsDialogBaselineRef = useRef<CircuitSnapshot | null>(null);
   const [histTick, setHistTick] = useState(0);
+  const [modeGuideOpen, setModeGuideOpen] = useState(() => {
+    try {
+      return localStorage.getItem("simulai-mode-guide-open") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggleModeGuide = useCallback(() => {
+    setModeGuideOpen((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("simulai-mode-guide-open", next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     applyTheme(uiTheme);
@@ -313,6 +387,299 @@ export default function App() {
     if (next) restore(next);
   }, [snapshot, restore]);
 
+  const clearTransientUi = useCallback(() => {
+    setPlaceKind(null);
+    setPlaceParams(null);
+    setPasteClip(null);
+    setCopyMarquee(false);
+    setCanvasMode("explore");
+    propsDialogBaselineRef.current = null;
+    setPropsDialog(null);
+    setSimResult(null);
+    setNetNameDialog(false);
+    setNetlistStatus(null);
+    setNetlistStatusError(false);
+  }, []);
+
+  const flushActiveTab = useCallback(() => {
+    const docs = tabsRef.current;
+    if (!docs) return;
+    const id = activeTabIdRef.current;
+    const t = docs.find((d) => d.id === id);
+    if (!t) return;
+    t.snap = cloneSnapshot(snapshot());
+    t.hiddenCrossingKeys = hiddenCrossingKeys;
+    t.nextId = idCounter.current;
+    // history.current is already this tab's history instance
+  }, [snapshot, hiddenCrossingKeys]);
+
+  const activateTab = useCallback(
+    (id: string) => {
+      if (id === activeTabIdRef.current) return;
+      const docs = tabsRef.current;
+      if (!docs) return;
+      const next = docs.find((d) => d.id === id);
+      if (!next) return;
+      flushActiveTab();
+      history.current = next.history;
+      restore(cloneSnapshot(next.snap));
+      setHiddenCrossingKeys([...next.hiddenCrossingKeys]);
+      idCounter.current = next.nextId;
+      setActiveTabId(id);
+      clearTransientUi();
+      setHistTick((t) => t + 1);
+      requestFitView();
+    },
+    [flushActiveTab, restore, clearTransientUi, requestFitView],
+  );
+
+  const onNewTab = useCallback(() => {
+    flushActiveTab();
+    tabTitleSeq.current += 1;
+    const title = `Circuit ${tabTitleSeq.current}`;
+    const doc = createTabDoc(
+      title,
+      emptySchematic({
+        // Keep models handy; blank canvas for a fresh build
+        library: libraryRef.current,
+        directives: [".tran 1u 1m", ".options reltol=1e-3"],
+      }),
+    );
+    tabsRef.current = [...(tabsRef.current ?? []), doc];
+    setTabMetas((m) => [...m, { id: doc.id, title: doc.title }]);
+    history.current = doc.history;
+    restore(cloneSnapshot(doc.snap));
+    setHiddenCrossingKeys([]);
+    idCounter.current = 0;
+    setActiveTabId(doc.id);
+    clearTransientUi();
+    setHistTick((t) => t + 1);
+    setNetlistStatus(`new tab: ${title}`);
+    requestFitView();
+  }, [flushActiveTab, restore, clearTransientUi, requestFitView]);
+
+  const onCloseTab = useCallback(
+    (id: string) => {
+      const docs = tabsRef.current;
+      if (!docs || docs.length <= 1) return;
+      const closing = docs.find((d) => d.id === id);
+      if (!closing) return;
+      const busy =
+        closing.id === activeTabIdRef.current
+          ? nodesRef.current.length > 0 || edgesRef.current.length > 0
+          : closing.snap.nodes.length > 0 || closing.snap.edges.length > 0;
+      if (
+        busy &&
+        !window.confirm(`Close “${closing.title}”? Unsaved changes on this tab will be lost.`)
+      ) {
+        return;
+      }
+      if (id === activeTabIdRef.current) {
+        flushActiveTab();
+      }
+      const remaining = docs.filter((d) => d.id !== id);
+      tabsRef.current = remaining;
+      setTabMetas((m) => m.filter((t) => t.id !== id));
+      if (id === activeTabIdRef.current) {
+        const next = remaining[remaining.length - 1]!;
+        history.current = next.history;
+        restore(cloneSnapshot(next.snap));
+        setHiddenCrossingKeys([...next.hiddenCrossingKeys]);
+        idCounter.current = next.nextId;
+        setActiveTabId(next.id);
+        clearTransientUi();
+        setHistTick((t) => t + 1);
+        requestFitView();
+      }
+    },
+    [flushActiveTab, restore, clearTransientUi, requestFitView],
+  );
+
+  const onClearSchematic = useCallback(() => {
+    if (nodesRef.current.length === 0 && edgesRef.current.length === 0) {
+      setNetlistStatus("schematic already empty");
+      return;
+    }
+    if (
+      !window.confirm(
+        "Clear this schematic? Parts and wires will be removed. Models library is kept. Undo restores the previous state.",
+      )
+    ) {
+      return;
+    }
+    pushHistory();
+    restore(
+      emptySchematic({
+        library: libraryRef.current,
+        directives: directivesRef.current ?? [".tran 1u 1m", ".options reltol=1e-3"],
+      }),
+    );
+    setHiddenCrossingKeys([]);
+    clearTransientUi();
+    setNetlistStatus("schematic cleared (undo to restore)");
+  }, [pushHistory, restore, clearTransientUi]);
+
+  const captureWorkspace = useCallback((): WorkspaceFile => {
+    flushActiveTab();
+    const docs = tabsRef.current ?? [];
+    const metas = new Map(tabMetas.map((m) => [m.id, m.title]));
+    return buildWorkspaceFile({
+      name: projectName.trim() || "Untitled project",
+      activeTabId: activeTabIdRef.current,
+      tabs: docs.map((d) =>
+        tabFromSnapshot(d.id, metas.get(d.id) ?? d.title, d.snap, {
+          hiddenCrossingKeys: d.hiddenCrossingKeys,
+          nextId: d.nextId,
+        }),
+      ),
+    });
+  }, [flushActiveTab, projectName, tabMetas]);
+
+  const applyWorkspace = useCallback(
+    (wsIn: WorkspaceFile, opts?: { projectId?: string | null }) => {
+      const ws = parseWorkspaceFile(wsIn);
+      const docs: SchematicTabDoc[] = ws.tabs.map((t) => {
+        const doc = createTabDoc(
+          t.title,
+          {
+            nodes: t.nodes,
+            edges: t.edges,
+            directives: t.directives,
+            library: t.library ?? "",
+          },
+          {
+            id: t.id,
+            nextId: t.nextId ?? maxNodeId(t.nodes),
+          },
+        );
+        doc.hiddenCrossingKeys = t.hiddenCrossingKeys ?? [];
+        return doc;
+      });
+      tabsRef.current = docs;
+      setTabMetas(docs.map((d) => ({ id: d.id, title: d.title })));
+      let maxTitle = 1;
+      for (const d of docs) {
+        const m = /^Circuit (\d+)$/i.exec(d.title);
+        if (m) maxTitle = Math.max(maxTitle, Number(m[1]));
+      }
+      tabTitleSeq.current = Math.max(tabTitleSeq.current, maxTitle);
+
+      const active = docs.find((d) => d.id === ws.activeTabId) ?? docs[0]!;
+      history.current = active.history;
+      restore(cloneSnapshot(active.snap));
+      setHiddenCrossingKeys([...active.hiddenCrossingKeys]);
+      idCounter.current = active.nextId;
+      setActiveTabId(active.id);
+      setProjectName(ws.name);
+      setCurrentProjectId(opts?.projectId ?? null);
+      clearTransientUi();
+      setHistTick((t) => t + 1);
+      requestFitView();
+    },
+    [restore, clearTransientUi, requestFitView],
+  );
+
+  const onSaveProgress = useCallback(() => {
+    try {
+      const ws = captureWorkspace();
+      const rec = saveLocalProject(ws, currentProjectId);
+      setCurrentProjectId(rec.id);
+      setProjectName(rec.name);
+      saveDraftWorkspace(rec.workspace);
+      setNetlistStatus(`saved “${rec.name}” in this browser`);
+      setNetlistStatusError(false);
+    } catch (e) {
+      setNetlistStatusError(true);
+      setNetlistStatus(
+        `save failed: ${e instanceof Error ? e.message : "storage full or blocked"}`,
+      );
+    }
+  }, [captureWorkspace, currentProjectId]);
+
+  const onExportWorkspaceFile = useCallback(() => {
+    downloadWorkspace(captureWorkspace());
+    setNetlistStatus("downloaded project file");
+    setNetlistStatusError(false);
+  }, [captureWorkspace]);
+
+  const onLoadLocalProject = useCallback(
+    (id: string) => {
+      const rec = getLocalProject(id);
+      if (!rec) {
+        setNetlistStatusError(true);
+        setNetlistStatus("project not found");
+        return;
+      }
+      applyWorkspace(rec.workspace, { projectId: rec.id });
+      setProjectsOpen(false);
+      setNetlistStatus(`opened “${rec.name}”`);
+      setNetlistStatusError(false);
+    },
+    [applyWorkspace],
+  );
+
+  const onImportProjectFile = useCallback(
+    async (file: File) => {
+      try {
+        const text = await file.text();
+        const ws = parseProjectPayload(JSON.parse(text));
+        applyWorkspace(ws, { projectId: null });
+        setProjectsOpen(false);
+        setNetlistStatus(`imported “${ws.name}”`);
+        setNetlistStatusError(false);
+      } catch (e) {
+        setNetlistStatusError(true);
+        setNetlistStatus(`import failed: ${e instanceof Error ? e.message : "error"}`);
+      }
+    },
+    [applyWorkspace],
+  );
+
+  // Share-link / draft bootstrap (once). Prefer #share= over draft.
+  useEffect(() => {
+    if (bootstrapDone.current) return;
+    bootstrapDone.current = true;
+    const shared = tryParseShareFromLocation();
+    if (shared) {
+      try {
+        applyWorkspace(shared, { projectId: null });
+        setNetlistStatus(`opened shared project “${shared.name}”`);
+        window.history.replaceState(null, "", window.location.pathname + window.location.search);
+        return;
+      } catch {
+        /* fall through to draft */
+      }
+    }
+    const draft = loadDraftWorkspace();
+    if (draft && (draft.tabs.some((t) => t.nodes.length > 0) || draft.tabs.length > 1)) {
+      // Soft restore: only if draft looks like real progress
+      // Skip auto-load to avoid surprising overwrite of starter — user opens Projects.
+    }
+  }, [applyWorkspace]);
+
+  // Autosave draft while working (crash safety; not a named project).
+  useEffect(() => {
+    const tick = window.setInterval(() => {
+      try {
+        saveDraftWorkspace(captureWorkspace());
+      } catch {
+        /* ignore */
+      }
+    }, 45_000);
+    const onUnload = () => {
+      try {
+        saveDraftWorkspace(captureWorkspace());
+      } catch {
+        /* ignore */
+      }
+    };
+    window.addEventListener("beforeunload", onUnload);
+    return () => {
+      window.clearInterval(tick);
+      window.removeEventListener("beforeunload", onUnload);
+    };
+  }, [captureWorkspace]);
+
   const netlist = useMemo(
     () => toNetlist(nodes, edges, { title: "SimulAI demo", directives, library }),
     [nodes, edges, directives, library],
@@ -323,7 +690,10 @@ export default function App() {
 
   // Part deleted/replaced while dialog open → close it.
   useEffect(() => {
-    if (propsDialog && !propsDialogNode) setPropsDialog(null);
+    if (propsDialog && !propsDialogNode) {
+      propsDialogBaselineRef.current = null;
+      setPropsDialog(null);
+    }
   }, [propsDialog, propsDialogNode]);
 
   const beginRowSplit = useCallback(
@@ -1218,37 +1588,55 @@ export default function App() {
   }, [setNodes, setEdges, pushHistory, noteCommonlyUsed]);
 
   /**
-   * DC voltage ↔ Pulse generator in place: same node id, refdes, wires, rotation.
+   * DC / AC / Pulse voltage source in place: same node id, refdes, wires, rotation.
    * Properties dialog Mode radio — does not mint a new Vn.
+   * While the dialog is open, skips history (Cancel restores the open-time baseline).
    */
   const convertVoltageSourceMode = useCallback(
     (
       nodeId: string,
-      mode: "DC" | "Pulse",
+      mode: "DC" | "AC" | "Pulse",
       draft?: { params?: Record<string, string>; refdes?: string },
     ) => {
-      const nextKind: ComponentKind = mode === "Pulse" ? "VPULSE" : "BATTERY";
+      const nextKind: ComponentKind =
+        mode === "Pulse" ? "VPULSE" : mode === "AC" ? "VAC" : "BATTERY";
       const target = nodesRef.current.find((n) => n.id === nodeId);
       if (!target) return;
       if (target.data.kind === nextKind) return;
-      if (target.data.kind !== "BATTERY" && target.data.kind !== "VPULSE") return;
-      pushHistory();
+      if (
+        target.data.kind !== "BATTERY" &&
+        target.data.kind !== "VPULSE" &&
+        target.data.kind !== "VAC"
+      ) {
+        return;
+      }
+      if (!propsDialogBaselineRef.current) pushHistory();
       const prev = { ...target.data.params, ...(draft?.params ?? {}) };
       const params = { ...defaultParams(nextKind) };
+      const pick = (...keys: string[]) => {
+        for (const k of keys) {
+          const t = (prev[k] ?? "").trim();
+          if (t) return t;
+        }
+        return "";
+      };
       if (nextKind === "VPULSE") {
-        const dc = (prev.dc ?? "").trim();
-        params.vinitial = (prev.vinitial ?? "").trim() || "0";
-        params.von = (prev.von ?? "").trim() || dc || params.von || "V";
+        params.vinitial = pick("vinitial") || "0";
+        params.von = pick("von", "dc", "vamp") || params.von || "V";
         for (const k of ["tdelay", "trise", "tfall", "ton", "tperiod"] as const) {
           if ((prev[k] ?? "").trim()) params[k] = prev[k]!;
         }
+      } else if (nextKind === "VAC") {
+        params.voffset = pick("voffset") || "0";
+        params.vamp = pick("vamp", "dc", "von") || params.vamp || "V";
+        for (const k of ["freq", "tdelay", "theta", "phi", "stimulus"] as const) {
+          if ((prev[k] ?? "").trim()) params[k] = prev[k]!;
+        }
       } else {
-        const von = (prev.von ?? "").trim();
-        params.dc = (prev.dc ?? "").trim() || von || params.dc || "V";
+        params.dc = pick("dc", "vamp", "von") || params.dc || "V";
         if ((prev.rser ?? "").trim()) params.rser = prev.rser!;
       }
-      const refdes =
-        (draft?.refdes ?? "").trim() || target.data.refdes;
+      const refdes = (draft?.refdes ?? "").trim() || target.data.refdes;
       setNodes((ns) =>
         ns.map((n) =>
           n.id !== nodeId
@@ -1273,16 +1661,31 @@ export default function App() {
     (nodeId: string, x: number, y: number) => {
       const node = nodesRef.current.find((n) => n.id === nodeId);
       if (!node || node.data.kind === "TIP") return;
+      propsDialogBaselineRef.current = cloneSnapshot(snapshot());
       setNodes((ns) => ns.map((n) => ({ ...n, selected: n.id === nodeId })));
       setEdges((es) => es.map((e) => (e.selected ? { ...e, selected: false } : e)));
       setPropsDialog({ nodeId, x, y });
     },
-    [setNodes, setEdges],
+    [setNodes, setEdges, snapshot],
   );
+
+  const cancelComponentProps = useCallback(() => {
+    const baseline = propsDialogBaselineRef.current;
+    propsDialogBaselineRef.current = null;
+    setPropsDialog(null);
+    if (baseline) restore(baseline);
+  }, [restore]);
 
   const applyComponentProps = useCallback(
     (nodeId: string, draft: ComponentPropsDraft) => {
-      pushHistory();
+      const baseline = propsDialogBaselineRef.current;
+      if (baseline) {
+        history.current.push(baseline);
+        setHistTick((t) => t + 1);
+      } else {
+        pushHistory();
+      }
+      propsDialogBaselineRef.current = null;
       const target = nodesRef.current.find((n) => n.id === nodeId);
       const nextParams = target
         ? { ...target.data.params, ...draft.params }
@@ -1327,7 +1730,7 @@ export default function App() {
       const edgesNow = edgesRef.current;
       const target = nodesNow.find((n) => n.id === nodeId && n.data.kind !== "TIP");
       if (!target) return;
-      pushHistory();
+      if (!propsDialogBaselineRef.current) pushHistory();
       const moved = new Set([nodeId]);
       const finalized = finalizePartRotate(nodesNow, edgesNow, moved);
       let ns = finalized.nodes;
@@ -1896,7 +2299,12 @@ export default function App() {
           internals?: unknown;
         };
         void internals;
-        return { ...rest, position: posById.get(n.id)! };
+        const next = { ...rest, position: posById.get(n.id)! };
+        // Dragging an Apply-added part places it.
+        if (next.data.unplaced) {
+          return { ...next, data: { ...next.data, unplaced: false } };
+        }
+        return next;
       });
 
       const partRec = reconnectPartsOnTips(
@@ -2629,7 +3037,7 @@ export default function App() {
       }
       else if (mod && e.key.toLowerCase() === "s") {
         e.preventDefault();
-        downloadCircuit(snapshot());
+        onSaveProgress();
       }
       else if (mod && e.key.toLowerCase() === "o") {
         e.preventDefault();
@@ -2697,6 +3105,7 @@ export default function App() {
       setEdges,
       pushHistory,
       deleteSelectionOrToggleScissors,
+      onSaveProgress,
     ]);
 
   const startTextEdit = useCallback(() => {
@@ -2729,7 +3138,17 @@ export default function App() {
     syncIdCounter(result.nodes, idCounter);
 
     const dirs = extractDirectives(draftNetlist);
-    if (dirs.length) setDirectives(dirs);
+    if (dirs.length) {
+      // Keep previous .tran if the paste omitted analysis (easy to delete by mistake).
+      let next = dirs;
+      if (!dirs.some((d) => /^\.tran\b/i.test(d))) {
+        const kept = (directivesRef.current ?? []).filter((d) => /^\.tran\b/i.test(d));
+        if (kept.length) next = [...dirs, ...kept];
+      }
+      setDirectives(next);
+    } else if (result.convertedFrom === "expresspcb") {
+      setDirectives([".tran 1u 500u", ".options reltol=1e-3"]);
+    }
 
     const errors: string[] = [];
     if (result.skippedUnknown.length) {
@@ -2739,11 +3158,17 @@ export default function App() {
     }
 
     const parts: string[] = [];
+    if (result.convertedFrom === "expresspcb") {
+      parts.push("converted ExpressPCB (simplified)");
+    }
     if (result.updated.length) parts.push(`updated ${result.updated.join(", ")}`);
     if (result.added.length) parts.push(`added ${result.added.join(", ")} (unplaced — drag to position)`);
     if (result.deleted.length) parts.push(`deleted ${result.deleted.join(", ")}`);
     if (!parts.length && !errors.length) parts.push("no device changes");
     if (result.rewired) parts.push("wires rebuilt from nets");
+    if (result.warnings?.length) {
+      parts.push(`${result.warnings.length} conversion note(s)`);
+    }
 
     if (errors.length) {
       // Graph already updated for recognized devices; keep draft so user can fix unknowns.
@@ -2772,7 +3197,7 @@ export default function App() {
       }
       onNodesChange(changes);
       const placed = changes.flatMap((c) =>
-        c.type === "position" && c.dragging === false && c.position
+        c.type === "position" && c.dragging === false
           ? [{ id: c.id, position: c.position }]
           : [],
       );
@@ -2781,7 +3206,9 @@ export default function App() {
       const idSet = new Set(placed.map((p) => p.id));
       const nodesForRoute = nodesRef.current.map((node) => {
         const p = placed.find((pl) => pl.id === node.id);
-        const positioned = p ? { ...node, position: p.position } : node;
+        const positioned =
+          p && p.position ? { ...node, position: p.position } : node;
+        // Any finished drag clears "unplaced" (Apply adds parts wired but still marked).
         return idSet.has(node.id) && positioned.data.unplaced
           ? { ...positioned, data: { ...positioned.data, unplaced: false } }
           : positioned;
@@ -2810,27 +3237,36 @@ export default function App() {
         setEdges(absorbed.edges);
       } else {
         connectedMoveRef.current = false;
+        // Sync ref before reconnect — otherwise reconnect reads stale nodes
+        // and re-applies unplaced:true after we cleared it.
+        nodesRef.current = nodesForRoute;
         setNodes(nodesForRoute);
         // Reconnect any pin that was dropped back onto a dangling wire end.
-        reconnectDroppedParts(placed);
+        reconnectDroppedParts(
+          placed.filter(
+            (p): p is { id: string; position: { x: number; y: number } } =>
+              !!p.position,
+          ),
+        );
       }
     },
     [onNodesChange, setNodes, setEdges, snapshot, reconnectDroppedParts],
   );
 
   const onSave = useCallback(() => {
-    downloadCircuit(snapshot());
-  }, [snapshot]);
+    onSaveProgress();
+  }, [onSaveProgress]);
 
   const onRestoreStarter = useCallback(() => {
     try {
       pushHistory();
       restore(parseCircuitFile(starterCircuit));
       setNetlistStatus("restored starter circuit (examples/demo-circuit.json)");
+      requestFitView();
     } catch (e) {
       setNetlistStatus(`restore failed: ${e instanceof Error ? e.message : "error"}`);
     }
-  }, [pushHistory, restore]);
+  }, [pushHistory, restore, requestFitView]);
 
   /** Optional example — does not replace starter; undo via history. */
   const onLoadHbridgeExample = useCallback(() => {
@@ -2840,24 +3276,35 @@ export default function App() {
       setNetlistStatus(
         "loaded H-bridge example (examples/hbridge-simplified.json) — simplified PWM, toy SIC_MOS",
       );
+      requestFitView();
     } catch (e) {
       setNetlistStatus(`H-bridge load failed: ${e instanceof Error ? e.message : "error"}`);
     }
-  }, [pushHistory, restore]);
+  }, [pushHistory, restore, requestFitView]);
 
   const onLoadClick = useCallback(() => fileInputRef.current?.click(), []);
 
   const onLoadFile = useCallback(async (file: File | null) => {
     if (!file) return;
     try {
-      const loaded = await readCircuitFile(file);
+      const raw = JSON.parse(await file.text()) as unknown;
+      if (isWorkspaceFile(raw)) {
+        applyWorkspace(parseWorkspaceFile(raw), { projectId: null });
+        setNetlistStatus(`opened workspace ${file.name}`);
+        setNetlistStatusError(false);
+        return;
+      }
+      const loaded = parseCircuitFile(raw);
       pushHistory();
       restore(loaded);
       setNetlistStatus(`opened ${file.name}`);
+      setNetlistStatusError(false);
+      requestFitView();
     } catch (e) {
+      setNetlistStatusError(true);
       setNetlistStatus(`load failed: ${e instanceof Error ? e.message : "error"}`);
     }
-  }, [pushHistory, restore]);
+  }, [pushHistory, restore, applyWorkspace, requestFitView]);
 
   const onLibraryChange = useCallback((text: string) => {
     setLibrary(text);
@@ -2966,57 +3413,12 @@ export default function App() {
     <div className="app">
       <header className="app-header">
         <span className="app-title">SimulAI · Schematic Editor</span>
-        <div className="app-actions">
-          <button type="button" className="ghost-btn" onClick={onSave} title="Save circuit JSON (Ctrl+S)">Save</button>
-          <button type="button" className="ghost-btn" onClick={onLoadClick} title="Open circuit JSON (Ctrl+O)">Open</button>
-          <button type="button" className="ghost-btn" onClick={onRestoreStarter} title="Reload the starter schematic">
-            Restore starter
-          </button>
-          <button
-            type="button"
-            className="ghost-btn"
-            onClick={onLoadHbridgeExample}
-            title="Load simplified H-bridge example (does not change the default starter)"
-          >
-            Load H-bridge
-          </button>
-          <button type="button" className="ghost-btn" onClick={() => setShowLibrary((v) => !v)}>
-            {showLibrary ? "Hide models" : "Models"}
-          </button>
-          <div className="theme-toggle" role="group" aria-label="Color theme">
-            <button
-              type="button"
-              className={`theme-toggle-btn${uiTheme === "light" ? " is-active" : ""}`}
-              aria-pressed={uiTheme === "light"}
-              title="Light theme"
-              onClick={() => setUiTheme("light")}
-            >
-              Light
-            </button>
-            <button
-              type="button"
-              className={`theme-toggle-btn${uiTheme === "dark" ? " is-active" : ""}`}
-              aria-pressed={uiTheme === "dark"}
-              title="Dark theme"
-              onClick={() => setUiTheme("dark")}
-            >
-              Dark
-            </button>
-          </div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="application/json,.json"
-            hidden
-            onChange={(e) => {
-              void onLoadFile(e.target.files?.[0] ?? null);
-              e.target.value = "";
-            }}
-          />
-        </div>
       </header>
 
-      <div className={`mode-guide mode-guide-${canvasMode}`} role="status">
+      <div
+        className={`mode-guide mode-guide-${canvasMode}${modeGuideOpen ? "" : " is-collapsed"}`}
+        role="status"
+      >
         <span className="mode-guide-badge">
           {canvasMode === "explore"
             ? "Explore"
@@ -3028,92 +3430,115 @@ export default function App() {
                   ? "Move"
                   : "Drag"}
         </span>
-        <div className="mode-guide-content">
-          {canvasMode === "explore" ? (
-            <>
-              <p className="mode-guide-lead">Pan and zoom, or click to select parts and wires.</p>
-              <ul className="mode-guide-list">
-                <li><kbd>Drag</kbd> empty canvas to pan · <kbd>Scroll</kbd> to zoom · <kbd>Space</kbd> fit view</li>
-                <li>Palette: click a part, then left-click to stamp · <kbd>R</kbd> rotates the ghost · right-click / Esc cancels</li>
-                <li><kbd>N</kbd> or toolbar <strong>Net name</strong>: type a name, stamp text on the schematic · <kbd>R</kbd> rotates (3 ways) · same name joins nets</li>
-                <li><kbd>Ctrl</kbd>+C copy mode · click a part/wire or drag a box (≥70%) to copy · paste ghost follows · <kbd>Esc</kbd> exits</li>
-                <li>Palette <strong>Net label</strong> is the older flag symbol (still names nets when connected)</li>
-                <li><kbd>Click</kbd> a part or wire to select · <kbd>Ctrl</kbd>+click toggles multi-select</li>
-                <li>After a successful <strong>Run</strong>, <strong>Probe ON</strong>: click a wire for the <em>red</em> pin, then another wire for the <em>black</em> pin → <code>V(a,b)</code> · right-click removes black then red · <kbd>Shift</kbd>+click a part for current · <kbd>Ctrl</kbd>+click selects</li>
-                <li><kbd>Right-click</kbd> a part to edit properties (OK / Cancel)</li>
-                <li><kbd>Click</kbd> empty canvas to deselect · hollow square = free wire end</li>
-                <li><kbd>E</kbd> Explore · <kbd>W</kbd> Wire · <kbd>M</kbd> Move · <kbd>D</kbd> Drag</li>
-                <li><kbd>Delete</kbd> / <kbd>Backspace</kbd> removes a selection · with nothing selected, enters Delete · <kbd>Esc</kbd> returns to Explore</li>
-              </ul>
-            </>
-          ) : canvasMode === "wire" ? (
-            <>
-              <p className="mode-guide-lead">Draw and edit wires (crosshair cursor).</p>
-              <ul className="mode-guide-list">
-                <li><kbd>Click</kbd> a pin or empty space to start · <kbd>Click</kbd> a pin to finish</li>
-                <li>While drawing: <kbd>Click</kbd> empty = bend · click a pin/wire = finish</li>
-                <li>Right-click = keep white segments, discard blue preview, then stop</li>
-                <li><kbd>Click</kbd> a wire to branch at that column (first stroke prefers vertical off an H bus)</li>
-                <li><kbd>Alt</kbd>+click a wire to select it (turns amber)</li>
-                <li><kbd>Double-click</kbd> a wire to straighten it (pulls the run into the nearer pin)</li>
-                <li>Hollow square = free <strong>wire end</strong> — select it, then <kbd>Delete</kbd> to remove the stub</li>
-                <li><kbd>Esc</kbd> = stop drawing (keeps locked bends) and return to Explore</li>
-                <li><kbd>Delete</kbd> / <kbd>Backspace</kbd>: remove selected part/wire · with nothing selected, enter Delete</li>
-              </ul>
-              <div className="mode-guide-legend" aria-label="Wire legend">
-                <span className="wl-item">
-                  <svg width="10" height="10" aria-hidden><rect x="1" y="1" width="8" height="8" fill="currentColor" /></svg>
-                  Connected junction
-                </span>
-                <span className="wl-item">
-                  <svg width="16" height="12" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.6">
-                    <path d="M1 9 H5.5 A4 4 0 0 1 13.5 9 H15" />
-                    <path d="M8.5 1 V5.2" />
-                    <path d="M8.5 9 V11" />
-                  </svg>
-                  Crossing hop (not joined)
-                </span>
-              </div>
-            </>
-          ) : canvasMode === "delete" ? (
-            <>
-              <p className="mode-guide-lead">Click anything to remove it (scissors cursor).</p>
-              <ul className="mode-guide-list">
-                <li><kbd>Click</kbd> a part, wire, or hollow <strong>wire end</strong> square to delete it</li>
-                <li><kbd>Click</kbd> a filled junction square to break the join (wires stay, ends open)</li>
-                <li><kbd>Click</kbd> a crossing hop to hide it — wires stay as they are</li>
-                <li>Short stubs are easiest to remove by clicking the square at the end</li>
-                <li><kbd>Esc</kbd> Explore · toolbar Delete toggles scissors off · <kbd>E</kbd> <kbd>W</kbd> <kbd>M</kbd> <kbd>D</kbd> switch tools · <kbd>Delete</kbd> / <kbd>Backspace</kbd> removes a selection</li>
-              </ul>
-            </>
-          ) : canvasMode === "move" ? (
-            <>
-              <p className="mode-guide-lead">Disconnect a part and move it alone (wires stay behind).</p>
-              <ul className="mode-guide-list">
-                <li><kbd>Drag</kbd> a part — wires detach at the pins and stay put</li>
-                <li><kbd>Drag</kbd> empty canvas to box-select · <kbd>Ctrl</kbd>+drag adds to selection</li>
-                <li><kbd>Click</kbd> empty = deselect · drag a selected part to move the whole group (each detaches)</li>
-                <li><kbd>Drag</kbd> a straight wire run — that section disconnects; move it alone and drop to reconnect</li>
-                <li>Drop onto a hollow wire end or pin to reconnect · GND on a rail forms a T</li>
-                <li><kbd>R</kbd> rotates selected parts · <kbd>Esc</kbd> Explore · <kbd>Delete</kbd> / <kbd>Backspace</kbd> removes selection</li>
-              </ul>
-            </>
-          ) : (
-            <>
-              <p className="mode-guide-lead">Drag parts with wires still connected.</p>
-              <ul className="mode-guide-list">
-                <li><kbd>Drag</kbd> a part — wires stay attached and follow</li>
-                <li><kbd>Drag</kbd> empty canvas to box-select · <kbd>Ctrl</kbd>+drag adds to selection</li>
-                <li><kbd>Shift</kbd>+drag empty = cut wires in the box · <kbd>Click</kbd> empty = deselect</li>
-                <li><kbd>Click</kbd> a wire to select it · <kbd>Drag</kbd> a segment to slide it (pins stay attached)</li>
-                <li>Hollow square = free <strong>wire end</strong> — click it, then <kbd>Delete</kbd></li>
-                <li><kbd>Click</kbd> / <kbd>Ctrl</kbd>+click parts · drag a selected part to move the whole group</li>
-                <li><kbd>Double-click</kbd> a wire to straighten it after a move</li>
-                <li><kbd>R</kbd> rotates selected parts · <kbd>Esc</kbd> Explore · <kbd>Delete</kbd> / <kbd>Backspace</kbd> removes selection · <kbd>Ctrl</kbd>+C copy mode</li>
-              </ul>
-            </>
-          )}
-        </div>
+        {modeGuideOpen ? (
+          <div className="mode-guide-content">
+            {canvasMode === "explore" ? (
+              <>
+                <p className="mode-guide-lead">Pan and zoom, or click to select parts and wires.</p>
+                <ul className="mode-guide-list">
+                  <li><kbd>Drag</kbd> empty canvas to pan · <kbd>Scroll</kbd> to zoom · <kbd>Space</kbd> fit view</li>
+                  <li>Palette: click a part, then left-click to stamp · <kbd>R</kbd> rotates the ghost · right-click / Esc cancels</li>
+                  <li><kbd>N</kbd> or toolbar <strong>Net name</strong>: type a name, stamp text on the schematic · <kbd>R</kbd> rotates (3 ways) · same name joins nets</li>
+                  <li><kbd>Ctrl</kbd>+C copy mode · click a part/wire or drag a box (≥70%) to copy · paste ghost follows · <kbd>Esc</kbd> exits</li>
+                  <li>Palette <strong>Net label</strong> is the older flag symbol (still names nets when connected)</li>
+                  <li><kbd>Click</kbd> a part or wire to select · <kbd>Ctrl</kbd>+click toggles multi-select</li>
+                  <li>After a successful <strong>Run</strong>, turn <strong>Probe</strong> on when you want it: click a wire for the <em>red</em> pin, then another for the <em>black</em> pin → <code>V(a,b)</code> · right-click removes black then red · <kbd>Shift</kbd>+click a part for current · <kbd>Ctrl</kbd>+click selects</li>
+                  <li><kbd>Right-click</kbd> a part to edit properties (OK / Cancel)</li>
+                  <li><kbd>Click</kbd> empty canvas to deselect · hollow square = free wire end</li>
+                  <li><kbd>E</kbd> Explore · <kbd>W</kbd> Wire · <kbd>M</kbd> Move · <kbd>D</kbd> Drag</li>
+                  <li><kbd>Delete</kbd> / <kbd>Backspace</kbd> removes a selection · with nothing selected, enters Delete · <kbd>Esc</kbd> returns to Explore</li>
+                </ul>
+              </>
+            ) : canvasMode === "wire" ? (
+              <>
+                <p className="mode-guide-lead">Draw and edit wires (crosshair cursor).</p>
+                <ul className="mode-guide-list">
+                  <li><kbd>Click</kbd> a pin or empty space to start · <kbd>Click</kbd> a pin to finish</li>
+                  <li>While drawing: <kbd>Click</kbd> empty = bend · click a pin/wire = finish</li>
+                  <li>Right-click = keep white segments, discard blue preview, then stop</li>
+                  <li><kbd>Click</kbd> a wire to branch at that column (first stroke prefers vertical off an H bus)</li>
+                  <li><kbd>Alt</kbd>+click a wire to select it (turns amber)</li>
+                  <li><kbd>Double-click</kbd> a wire to straighten it (pulls the run into the nearer pin)</li>
+                  <li>Hollow square = free <strong>wire end</strong> — select it, then <kbd>Delete</kbd> to remove the stub</li>
+                  <li><kbd>Esc</kbd> = stop drawing (keeps locked bends) and return to Explore</li>
+                  <li><kbd>Delete</kbd> / <kbd>Backspace</kbd>: remove selected part/wire · with nothing selected, enter Delete</li>
+                </ul>
+                <div className="mode-guide-legend" aria-label="Wire legend">
+                  <span className="wl-item">
+                    <svg width="10" height="10" aria-hidden><rect x="1" y="1" width="8" height="8" fill="currentColor" /></svg>
+                    Connected junction
+                  </span>
+                  <span className="wl-item">
+                    <svg width="16" height="12" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.6">
+                      <path d="M1 9 H5.5 A4 4 0 0 1 13.5 9 H15" />
+                      <path d="M8.5 1 V5.2" />
+                      <path d="M8.5 9 V11" />
+                    </svg>
+                    Crossing hop (not joined)
+                  </span>
+                </div>
+              </>
+            ) : canvasMode === "delete" ? (
+              <>
+                <p className="mode-guide-lead">Click anything to remove it (scissors cursor).</p>
+                <ul className="mode-guide-list">
+                  <li><kbd>Click</kbd> a part, wire, or hollow <strong>wire end</strong> square to delete it</li>
+                  <li><kbd>Click</kbd> a filled junction square to break the join (wires stay, ends open)</li>
+                  <li><kbd>Click</kbd> a crossing hop to hide it — wires stay as they are</li>
+                  <li>Short stubs are easiest to remove by clicking the square at the end</li>
+                  <li><kbd>Esc</kbd> Explore · toolbar Delete toggles scissors off · <kbd>E</kbd> <kbd>W</kbd> <kbd>M</kbd> <kbd>D</kbd> switch tools · <kbd>Delete</kbd> / <kbd>Backspace</kbd> removes a selection</li>
+                </ul>
+              </>
+            ) : canvasMode === "move" ? (
+              <>
+                <p className="mode-guide-lead">Disconnect a part and move it alone (wires stay behind).</p>
+                <ul className="mode-guide-list">
+                  <li><kbd>Drag</kbd> a part — wires detach at the pins and stay put</li>
+                  <li><kbd>Drag</kbd> empty canvas to box-select · <kbd>Ctrl</kbd>+drag adds to selection</li>
+                  <li><kbd>Click</kbd> empty = deselect · drag a selected part to move the whole group (each detaches)</li>
+                  <li><kbd>Drag</kbd> a straight wire run — that section disconnects; move it alone and drop to reconnect</li>
+                  <li>Drop onto a hollow wire end or pin to reconnect · GND on a rail forms a T</li>
+                  <li><kbd>R</kbd> rotates selected parts · <kbd>Esc</kbd> Explore · <kbd>Delete</kbd> / <kbd>Backspace</kbd> removes selection</li>
+                </ul>
+              </>
+            ) : (
+              <>
+                <p className="mode-guide-lead">Drag parts with wires still connected.</p>
+                <ul className="mode-guide-list">
+                  <li><kbd>Drag</kbd> a part — wires stay attached and follow</li>
+                  <li><kbd>Drag</kbd> empty canvas to box-select · <kbd>Ctrl</kbd>+drag adds to selection</li>
+                  <li><kbd>Shift</kbd>+drag empty = cut wires in the box · <kbd>Click</kbd> empty = deselect</li>
+                  <li><kbd>Click</kbd> a wire to select it · <kbd>Drag</kbd> a segment to slide it (pins stay attached)</li>
+                  <li>Hollow square = free <strong>wire end</strong> — click it, then <kbd>Delete</kbd></li>
+                  <li><kbd>Click</kbd> / <kbd>Ctrl</kbd>+click parts · drag a selected part to move the whole group</li>
+                  <li><kbd>Double-click</kbd> a wire to straighten it after a move</li>
+                  <li><kbd>R</kbd> rotates selected parts · <kbd>Esc</kbd> Explore · <kbd>Delete</kbd> / <kbd>Backspace</kbd> removes selection · <kbd>Ctrl</kbd>+C copy mode</li>
+                </ul>
+              </>
+            )}
+          </div>
+        ) : (
+          <p className="mode-guide-collapsed-lead">
+            {canvasMode === "explore"
+              ? "Pan, select, stamp parts — click Tips for shortcuts"
+              : canvasMode === "wire"
+                ? "Draw wires — click Tips for shortcuts"
+                : canvasMode === "delete"
+                  ? "Click to remove — Tips for details"
+                  : canvasMode === "move"
+                    ? "Disconnect & move — Tips for details"
+                    : "Drag with wires attached — Tips for details"}
+          </p>
+        )}
+        <button
+          type="button"
+          className="mode-guide-toggle"
+          aria-expanded={modeGuideOpen}
+          title={modeGuideOpen ? "Hide command tips" : "Show command tips"}
+          onClick={toggleModeGuide}
+        >
+          {modeGuideOpen ? "Hide tips" : "Tips"}
+        </button>
       </div>
 
       <div className="workspace" style={{ gridTemplateColumns: `280px 1fr ${rightWidth}px` }}>
@@ -3126,6 +3551,13 @@ export default function App() {
         />
 
         <div className="canvas-col">
+          <SchematicTabBar
+            tabs={tabMetas}
+            activeId={activeTabId}
+            onSelect={activateTab}
+            onNew={onNewTab}
+            onClose={onCloseTab}
+          />
           <ModeToolbar
             mode={canvasMode}
             onModeChange={setCanvasModeAndClearPlace}
@@ -3134,16 +3566,101 @@ export default function App() {
             labelActive={placeKind === "WIRELABEL"}
             simControlRef={simControlRef}
             simRunState={simRunState}
-            onCut={cutSelection}
             onCopy={triggerCopy}
             copyActive={copyMarquee}
             onUndo={undo}
             onRedo={redo}
             canUndo={histTick >= 0 && history.current.canUndo()}
             canRedo={histTick >= 0 && history.current.canRedo()}
+            trailingActions={
+              <>
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={onSave}
+                  title="Save all tabs to this browser (Ctrl+S)"
+                >
+                  Save
+                </button>
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={() => setProjectsOpen(true)}
+                  title="Named saves, open previous work, share with others"
+                >
+                  Projects…
+                </button>
+                <button type="button" className="ghost-btn" onClick={onLoadClick} title="Open circuit or project JSON (Ctrl+O)">
+                  Open
+                </button>
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={onClearSchematic}
+                  title="Clear parts and wires on this tab (undoable)"
+                >
+                  Clear
+                </button>
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={onRestoreStarter}
+                  title="Reload the starter schematic"
+                >
+                  Restore starter
+                </button>
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={onLoadHbridgeExample}
+                  title="Load simplified H-bridge example (does not change the default starter)"
+                >
+                  Load H-bridge
+                </button>
+                <button
+                  type="button"
+                  className={`ghost-btn${showLibrary ? " ghost-btn-active" : ""}`}
+                  onClick={() => setShowLibrary((v) => !v)}
+                  title="Show or hide Models (.sub / .lib) panel"
+                >
+                  {showLibrary ? "Hide models" : "Models"}
+                </button>
+                <div className="theme-toggle" role="group" aria-label="Color theme">
+                  <button
+                    type="button"
+                    className={`theme-toggle-btn${uiTheme === "light" ? " is-active" : ""}`}
+                    aria-pressed={uiTheme === "light"}
+                    title="Light theme"
+                    onClick={() => setUiTheme("light")}
+                  >
+                    Light
+                  </button>
+                  <button
+                    type="button"
+                    className={`theme-toggle-btn${uiTheme === "dark" ? " is-active" : ""}`}
+                    aria-pressed={uiTheme === "dark"}
+                    title="Dark theme"
+                    onClick={() => setUiTheme("dark")}
+                  >
+                    Dark
+                  </button>
+                </div>
+              </>
+            }
+          />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/json,.json"
+            hidden
+            onChange={(e) => {
+              void onLoadFile(e.target.files?.[0] ?? null);
+              e.target.value = "";
+            }}
           />
           <Canvas
             viewApiRef={canvasViewApiRef}
+            fitViewToken={fitViewToken}
             nodes={nodes}
             edges={edges}
             mode={canvasMode}
@@ -3223,7 +3740,14 @@ export default function App() {
                 />
               )}
               <div className="right-slot" style={{ flex: `${slotFr.library} 1 80px` }}>
-                <LibraryPanel library={library} onChange={onLibraryChange} />
+                <LibraryPanel
+                  library={library}
+                  onChange={onLibraryChange}
+                  analysisHint={
+                    (directives ?? []).find((d) => /^\.tran\b/i.test(d)) ??
+                    ".tran 1u 1m (default)"
+                  }
+                />
               </div>
             </>
           )}
@@ -3245,6 +3769,8 @@ export default function App() {
                   controlRef={simControlRef}
                   onRunStateChange={setSimRunState}
                   onSimResult={setSimResult}
+                  directives={directives}
+                  onDirectivesChange={setDirectives}
                   onPopOut={() => setSimFloating(true)}
                 />
               </div>
@@ -3280,10 +3806,11 @@ export default function App() {
           node={propsDialogNode}
           anchor={{ x: propsDialog.x, y: propsDialog.y }}
           onApply={applyComponentProps}
-          onCancel={() => setPropsDialog(null)}
+          onCancel={cancelComponentProps}
           onRotateLive={rotateNodeLive}
           onConvertVoltageMode={convertVoltageSourceMode}
           onDelete={(id) => {
+            propsDialogBaselineRef.current = null;
             setPropsDialog(null);
             deleteNodes([id]);
           }}
@@ -3322,8 +3849,28 @@ export default function App() {
             controlRef={simControlRef}
             onRunStateChange={setSimRunState}
             onSimResult={setSimResult}
+            directives={directives}
+            onDirectivesChange={setDirectives}
           />
         </FloatingWindow>
+      )}
+      {projectsOpen && (
+        <ProjectsDialog
+          open={projectsOpen}
+          onClose={() => setProjectsOpen(false)}
+          projectName={projectName}
+          onProjectNameChange={setProjectName}
+          currentProjectId={currentProjectId}
+          workspace={captureWorkspace()}
+          onSaveProgress={() => {
+            onSaveProgress();
+          }}
+          onLoadProject={onLoadLocalProject}
+          onExportFile={onExportWorkspaceFile}
+          onImportFile={(file) => {
+            void onImportProjectFile(file);
+          }}
+        />
       )}
     </div>
     </SimResultContext.Provider>

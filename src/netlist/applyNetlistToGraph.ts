@@ -3,13 +3,17 @@ import type { ComponentData, ComponentKind } from "../model/types";
 import { COMPONENT_SPECS, defaultParams, isGroundKind } from "../model/componentSpecs";
 import {
   extractParamsFromRest,
-  inferKindFromRefdes,
+  inferKindFromDevice,
   parseDeviceLines,
   splitNetsAndParams,
   spicePinOrder,
 } from "./parseDeviceParams";
 import { extractNets } from "./nets";
 import { classifyNetlistText } from "./netlistFormat";
+import {
+  convertExpressPcbText,
+  type MappedExpressDevice,
+} from "./expresspcb";
 
 export interface ApplyNetlistResult {
   nodes: Node<ComponentData>[];
@@ -26,6 +30,10 @@ export interface ApplyNetlistResult {
    * nodes/edges are the inputs unchanged.
    */
   rejected?: string;
+  /** Soft notes (e.g. ExpressPCB simplifications). */
+  warnings?: string[];
+  /** Set when ExpressPCB was converted before apply. */
+  convertedFrom?: "expresspcb";
 }
 
 type Endpoint = { nodeId: string; pinId: string };
@@ -85,6 +93,195 @@ function edgesFromNetMap(netToPins: Map<string, Endpoint[]>): Edge[] {
 }
 
 /**
+ * Apply pre-mapped devices (ExpressPCB converter). Same add/delete/rewire
+ * rules as SPICE Apply, but kinds/params/nets are already resolved.
+ */
+function applyMappedExpressDevices(
+  nodes: Node<ComponentData>[],
+  edges: Edge[],
+  mapped: MappedExpressDevice[],
+  warnings: string[],
+): ApplyNetlistResult {
+  const empty = (): ApplyNetlistResult => ({
+    nodes,
+    edges,
+    updated: [],
+    added: [],
+    deleted: [],
+    rewired: false,
+    skippedUnknown: [],
+    warnings,
+    convertedFrom: "expresspcb",
+  });
+
+  if (!mapped.length) {
+    return {
+      ...empty(),
+      rejected: "ExpressPCB conversion produced no devices. Schematic unchanged.",
+    };
+  }
+
+  const updated: string[] = [];
+  const added: string[] = [];
+  const deleted: string[] = [];
+
+  const byRefdes = new Map<string, Node<ComponentData>>();
+  for (const n of nodes) {
+    if (n.data.refdes) byRefdes.set(n.data.refdes, n);
+  }
+
+  const textRefdes = new Set(mapped.map((d) => d.refdes));
+  const kept: Node<ComponentData>[] = [];
+  for (const n of nodes) {
+    const spec = COMPONENT_SPECS[n.data.kind];
+    if (spec.emits && n.data.refdes && !textRefdes.has(n.data.refdes)) {
+      deleted.push(n.data.refdes);
+      continue;
+    }
+    kept.push(n);
+  }
+
+  byRefdes.clear();
+  for (const n of kept) {
+    if (n.data.refdes) byRefdes.set(n.data.refdes, n);
+  }
+
+  let working = [...kept];
+  let nextIdNum = 0;
+  for (const n of working) {
+    const m = /^n(\d+)$/.exec(n.id);
+    if (m) nextIdNum = Math.max(nextIdNum, Number(m[1]));
+  }
+  const allocId = () => `n${++nextIdNum}`;
+
+  let maxX = 0;
+  let minY = 120;
+  for (const n of working) {
+    maxX = Math.max(maxX, n.position.x);
+    minY = Math.min(minY, n.position.y);
+  }
+  let addSlot = 0;
+
+  const deviceNets = new Map<string, { kind: ComponentKind; nets: string[]; pinOrder: string[] }>();
+
+  for (const device of mapped) {
+    const existing = byRefdes.get(device.refdes);
+    const pinOrder = spicePinOrder(device.kind).filter((p, i, arr) => arr.indexOf(p) === i);
+    const nets = pinOrder.map((p) => device.pins[p]!).filter(Boolean);
+    if (nets.length < pinOrder.length) continue;
+
+    deviceNets.set(device.refdes, { kind: device.kind, nets, pinOrder });
+
+    if (existing) {
+      const params = { ...existing.data.params, ...device.params };
+      const kindChanged = existing.data.kind !== device.kind;
+      updated.push(device.refdes);
+      working = working.map((n) =>
+        n.id === existing.id
+          ? {
+              ...n,
+              data: {
+                ...n.data,
+                kind: device.kind,
+                params,
+                unplaced: false,
+              },
+            }
+          : n,
+      );
+      byRefdes.set(device.refdes, working.find((n) => n.id === existing.id)!);
+      if (kindChanged) {
+        warnings.push(`${device.refdes}: kind → ${device.kind}`);
+      }
+    } else {
+      const params = { ...defaultParams(device.kind), ...device.params };
+      const node: Node<ComponentData> = {
+        id: allocId(),
+        type: "component",
+        position: {
+          x: maxX + 140 + (addSlot % 4) * 30,
+          y: minY + (addSlot % 6) * 70,
+        },
+        data: {
+          kind: device.kind,
+          refdes: device.refdes,
+          params,
+          unplaced: true,
+        },
+      };
+      addSlot++;
+      working = [...working, node];
+      byRefdes.set(device.refdes, node);
+      added.push(device.refdes);
+    }
+  }
+
+  // Ensure a GND symbol exists when net 0 is used.
+  const usesGnd = [...deviceNets.values()].some((d) => d.nets.includes("0"));
+  if (usesGnd && !working.some((n) => isGroundKind(n.data.kind))) {
+    const gnd: Node<ComponentData> = {
+      id: allocId(),
+      type: "component",
+      position: { x: maxX + 80, y: minY + 360 },
+      data: { kind: "GND", refdes: "", params: {}, unplaced: true },
+    };
+    working = [...working, gnd];
+  }
+
+  const netToPins = new Map<string, Endpoint[]>();
+  for (const [refdes, { pinOrder, nets }] of deviceNets) {
+    const node = byRefdes.get(refdes);
+    if (!node) continue;
+    for (let i = 0; i < pinOrder.length && i < nets.length; i++) {
+      addEndpoint(netToPins, nets[i]!, node.id, pinOrder[i]!);
+    }
+  }
+  for (const n of working) {
+    if (isGroundKind(n.data.kind)) addEndpoint(netToPins, "0", n.id, "g");
+    if (n.data.kind === "NODE" && n.data.params.name) {
+      addEndpoint(netToPins, n.data.params.name, n.id, "g");
+    }
+    if (n.data.kind === "WIRELABEL" && n.data.params.name) {
+      addEndpoint(netToPins, n.data.params.name, n.id, "g");
+    }
+  }
+
+  const rebuilt = edgesFromNetMap(netToPins);
+  const rebuiltNodes = working.filter((n) => n.data.kind !== "TIP");
+  const rebuiltAlive = new Set(rebuiltNodes.map((n) => n.id));
+  const kindOf = new Map(rebuiltNodes.map((n) => [n.id, n.data.kind]));
+  const preserved = edges.filter((e) => {
+    if (!rebuiltAlive.has(e.source) || !rebuiltAlive.has(e.target)) return false;
+    const sk = kindOf.get(e.source);
+    const tk = kindOf.get(e.target);
+    return sk === "VSENSE" || sk === "VPROBE" || tk === "VSENSE" || tk === "VPROBE";
+  });
+
+  const edgeKey = (e: Edge) =>
+    `${e.source}:${e.sourceHandle ?? ""}-${e.target}:${e.targetHandle ?? ""}`;
+  const seen = new Set(rebuilt.map(edgeKey));
+  const extra = preserved.filter((e) => {
+    const k = edgeKey(e);
+    const rev = `${e.target}:${e.targetHandle ?? ""}-${e.source}:${e.sourceHandle ?? ""}`;
+    if (seen.has(k) || seen.has(rev)) return false;
+    seen.add(k);
+    return true;
+  });
+
+  return {
+    nodes: rebuiltNodes,
+    edges: [...rebuilt, ...extra],
+    updated,
+    added,
+    deleted,
+    rewired: true,
+    skippedUnknown: [],
+    warnings,
+    convertedFrom: "expresspcb",
+  };
+}
+
+/**
  * Full Step-2 apply: params (B) + add/delete (C) + rewire emitting devices (D).
  *
  * Preserves:
@@ -93,6 +290,9 @@ function edgesFromNetMap(netToPins: Map<string, Endpoint[]>): Edge[] {
  * - Old edges that touch VSENSE/VPROBE (they have no device lines)
  *
  * Does not run auto-layout for cold paste (new parts are flagged unplaced).
+ *
+ * ExpressPCB .net files are converted (simplified) then applied; plain SPICE
+ * path is unchanged. Other foreign quoted tables are still refused.
  */
 export function applyNetlistToGraph(
   nodes: Node<ComponentData>[],
@@ -110,6 +310,21 @@ export function applyNetlistToGraph(
   });
 
   const format = classifyNetlistText(netlistText);
+  if (format.kind === "expresspcb") {
+    const converted = convertExpressPcbText(netlistText);
+    if ("error" in converted) {
+      return { ...empty(), rejected: converted.error + " Schematic was not changed." };
+    }
+    return applyMappedExpressDevices(
+      nodes,
+      edges,
+      converted.devices,
+      [
+        "Converted LTspice ExpressPCB → simplified schematic (behavioral PWM → VPULSE, FETs → SIC_MOS).",
+        ...converted.warnings,
+      ],
+    );
+  }
   if (format.kind !== "spice") {
     return { ...empty(), rejected: format.message ?? "Unsupported netlist format." };
   }
@@ -129,7 +344,7 @@ export function applyNetlistToGraph(
   let recognizable = 0;
   for (const device of devices) {
     const existing = byRefdes.get(device.refdes);
-    const kind = inferKindFromRefdes(device.refdes, existing?.data.kind);
+    const kind = inferKindFromDevice(device.refdes, device.rest, existing?.data.kind);
     if (!kind) continue;
     if (splitNetsAndParams(kind, device.rest)) recognizable++;
   }
@@ -193,7 +408,7 @@ export function applyNetlistToGraph(
 
   for (const device of devices) {
     const existing = byRefdes.get(device.refdes);
-    const kind = inferKindFromRefdes(device.refdes, existing?.data.kind);
+    const kind = inferKindFromDevice(device.refdes, device.rest, existing?.data.kind);
     if (!kind) {
       skippedUnknown.push(device.refdes);
       continue;
@@ -213,11 +428,23 @@ export function applyNetlistToGraph(
         existing.data.params,
         split.paramTokens,
       );
-      if (changed) {
+      const kindChanged = existing.data.kind !== kind;
+      if (changed || kindChanged) {
         updated.push(device.refdes);
         working = working.map((n) =>
           n.id === existing.id
-            ? { ...n, data: { ...n.data, params, unplaced: false } }
+            ? {
+                ...n,
+                data: {
+                  ...n.data,
+                  kind,
+                  params: kindChanged
+                    ? { ...defaultParams(kind), ...extractParamsFromRest(kind, split.paramTokens) }
+                    : params,
+                  // Keep unplaced until the user drags; don't clear just because Apply re-ran.
+                  unplaced: Boolean(existing.data.unplaced),
+                },
+              }
             : n,
         );
         byRefdes.set(device.refdes, working.find((n) => n.id === existing.id)!);

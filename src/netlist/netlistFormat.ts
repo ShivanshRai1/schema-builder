@@ -1,19 +1,18 @@
 /**
- * Detect netlist dialects that are not SPICE decks.
- * Apply must refuse these so the schematic is never wiped by a foreign paste.
+ * Detect netlist dialects.
+ * ExpressPCB is converted on Apply (simplified). Other foreign quoted tables are refused.
  */
 
 export type NetlistFormatKind = "spice" | "expresspcb" | "foreign";
 
 export type NetlistFormatInfo = {
   kind: NetlistFormatKind;
-  /** Human message when kind !== "spice". */
+  /** Human message when kind is foreign (or legacy expresspcb hint). */
   message?: string;
 };
 
 /**
  * Classify pasted netlist text. Default is "spice" (existing Apply path).
- * ExpressPCB / mostly-quoted tables are rejected before any graph mutation.
  */
 export function classifyNetlistText(text: string): NetlistFormatInfo {
   const t = text.trim();
@@ -28,9 +27,8 @@ export function classifyNetlistText(text: string): NetlistFormatInfo {
     return {
       kind: "expresspcb",
       message:
-        "This is an LTspice ExpressPCB .net file, not a SPICE deck. " +
-        "Use a SPICE netlist (lines like V1 n1 0 PULSE(...), R1 n1 n2 1k). " +
-        "Your schematic was not changed.",
+        "LTspice ExpressPCB .net — Apply will convert to a simplified schematic " +
+        "(FETs → SIC_MOS, V=if → VPULSE).",
     };
   }
 

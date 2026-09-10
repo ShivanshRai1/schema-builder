@@ -13,7 +13,6 @@ import {
   Filler,
   CategoryScale,
 } from "chart.js";
-import { SicComparePanel } from "./SicComparePanel";
 import { legendLabelsForSeries, runSimulation, type SimEngine, type SimResult, type SimSeries } from "../sim/runSimulation";
 import { useProbeSelectionOptional } from "../sim/ProbeContext";
 import {
@@ -42,6 +41,23 @@ export type SimControlApi = {
   stop: () => void;
   getState: () => SimRunState;
 };
+
+function parseTranLine(line: string | undefined): { step: string; stop: string } {
+  if (!line) return { step: "1u", stop: "1m" };
+  const parts = line.replace(/^\.tran\s+/i, "").trim().split(/\s+/);
+  return { step: parts[0] || "1u", stop: parts[1] || "1m" };
+}
+
+function setTranInDirectives(
+  dirs: string[] | undefined,
+  step: string,
+  stop: string,
+): string[] {
+  const base = [...(dirs ?? [])].filter((d) => !/^\.tran\b/i.test(d));
+  const s = step.trim() || "1u";
+  const e = stop.trim() || "1m";
+  return [...base, `.tran ${s} ${e}`];
+}
 
 type ZoomMode = "x" | "y" | "xy";
 
@@ -175,6 +191,8 @@ export function SimPanel({
   controlRef,
   onRunStateChange,
   onSimResult,
+  directives,
+  onDirectivesChange,
 }: {
   netlist: string;
   onPopOut?: () => void;
@@ -183,6 +201,9 @@ export function SimPanel({
   onRunStateChange?: (state: SimRunState) => void;
   /** Fired after each run/stop so the canvas can show probe hover values. */
   onSimResult?: (result: SimResult | null) => void;
+  /** Circuit analysis directives (e.g. .tran) — edited via UI, not raw SPICE. */
+  directives?: string[];
+  onDirectivesChange?: (dirs: string[]) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
@@ -196,7 +217,6 @@ export function SimPanel({
   const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(() => new Set());
   const hiddenSeriesRef = useRef(hiddenSeries);
   hiddenSeriesRef.current = hiddenSeries;
-  const [tab, setTab] = useState<"circuit" | "sic">("circuit");
   const netlistRef = useRef(netlist);
   netlistRef.current = netlist;
   const probeSel = useProbeSelectionOptional();
@@ -208,6 +228,13 @@ export function SimPanel({
   onRunStateChangeRef.current = onRunStateChange;
   const onSimResultRef = useRef(onSimResult);
   onSimResultRef.current = onSimResult;
+
+  const tranLine = (directives ?? []).find((d) => /^\.tran\b/i.test(d));
+  const { step: tranStep, stop: tranStop } = parseTranLine(tranLine);
+
+  const updateTran = (step: string, stop: string) => {
+    onDirectivesChange?.(setTranInDirectives(directives, step, stop));
+  };
 
   const publishResult = (next: SimResult | null) => {
     setResult(next);
@@ -448,16 +475,48 @@ export function SimPanel({
     <div className="sim-panel">
       <div className="panel-header">
         <span className="sim-tabs">
-          <button type="button" className={tab === "circuit" ? "sim-tab on" : "sim-tab"} onClick={() => setTab("circuit")}>
-            Circuit
-          </button>
-          <button type="button" className={tab === "sic" ? "sim-tab on" : "sim-tab"} onClick={() => setTab("sic")}>
-            SiC compare
-          </button>
+          <span className="sim-tab on">Circuit</span>
         </span>
         <div className="panel-header-right">
-          {tab === "circuit" && (
-            <>
+          <>
+              <label className="sim-tran-fields" title="Transient analysis — written as .tran automatically">
+                <span className="sim-tran-label">Sim time</span>
+                <input
+                  className="sim-tran-input"
+                  value={tranStep}
+                  disabled={busy || !onDirectivesChange}
+                  aria-label="Time step"
+                  title="Time step (e.g. 1u or 0.000250)"
+                  onChange={(e) => updateTran(e.target.value, tranStop)}
+                />
+                <span className="sim-tran-sep">→</span>
+                <input
+                  className="sim-tran-input sim-tran-input-stop"
+                  value={tranStop}
+                  disabled={busy || !onDirectivesChange}
+                  aria-label="Stop time"
+                  title="Stop time (e.g. 1m or 1 for 1 second)"
+                  onChange={(e) => updateTran(tranStep, e.target.value)}
+                />
+                <select
+                  className="sim-tran-preset"
+                  disabled={busy || !onDirectivesChange}
+                  value=""
+                  aria-label="Simulation duration preset"
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    e.target.value = "";
+                    if (v === "fast") updateTran("1u", "1m");
+                    if (v === "loaddump") updateTran("250u", "1");
+                  }}
+                >
+                  <option value="" disabled>
+                    Preset…
+                  </option>
+                  <option value="fast">Quick (1 ms)</option>
+                  <option value="loaddump">Load dump (1 s)</option>
+                </select>
+              </label>
               <select
                 className="sim-engine"
                 value={engine}
@@ -494,7 +553,6 @@ export function SimPanel({
                 {busy ? "Running…" : runState === "paused" ? "Resume" : "Run"}
               </button>
             </>
-          )}
           {onPopOut && (
             <button
               type="button"
@@ -507,7 +565,7 @@ export function SimPanel({
           )}
         </div>
       </div>
-      <div className={tab === "circuit" ? "sim-body" : "sim-body sim-body-hidden"}>
+      <div className="sim-body">
         {result && (
           <div className={`netlist-status${result.ok ? "" : " netlist-status-error"}`}>
             {result.message}
@@ -607,9 +665,6 @@ export function SimPanel({
             </div>
           )}
         </div>
-      </div>
-      <div className={tab === "sic" ? "sim-body" : "sim-body sim-body-hidden"}>
-        <SicComparePanel netlist={netlist} />
       </div>
     </div>
   );

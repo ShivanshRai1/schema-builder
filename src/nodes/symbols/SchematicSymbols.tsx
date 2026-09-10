@@ -472,30 +472,31 @@ function PulseGenSymbol({ selected }: SymProps) {
   );
 }
 
-/** TVS unidirectional — Zener-like cathode bar. */
+/** TVS unidirectional — diode + cathode bar with inverted-Z wings (≠ Zener). */
 function TvsUniSymbol({ selected }: SymProps) {
   return (
     <SymbolSvg kind="DTVS" w={48} h={24}>
       <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
-        <path d="M0 12 H16" />
-        <path d="M16 4 L32 12 L16 20 Z" fill={STROKE} stroke="none" />
-        <path d="M28 0 L32 4 V20 L36 24" />
-        <path d="M32 12 H48" />
+        <path d="M0 12 H12" />
+        <path d="M12 3 L34 12 L12 21 Z" fill={STROKE} stroke="none" />
+        {/* Top stub left, bottom stub right — opposite of Zener's Z. */}
+        <path d="M30 0 L34 3 V21 L38 24" />
+        <path d="M34 12 H48" />
       </g>
     </SymbolSvg>
   );
 }
 
-/** TVS bidirectional — two triangles tip-to-tip on a bar. */
+/** TVS bidirectional — two triangles tip-to-tip meeting at the center bar. */
 function TvsBiSymbol({ selected }: SymProps) {
   return (
     <SymbolSvg kind="DTVSBI" w={48} h={24}>
       <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
-        <path d="M0 12 H10" />
-        <path d="M10 4 L22 12 L10 20 Z" fill={STROKE} stroke="none" />
-        <path d="M22 4 V20" />
-        <path d="M38 4 L26 12 L38 20 Z" fill={STROKE} stroke="none" />
-        <path d="M38 12 H48" />
+        <path d="M0 12 H8" />
+        <path d="M8 3 L24 12 L8 21 Z" fill={STROKE} stroke="none" />
+        <path d="M24 3 V21" />
+        <path d="M40 3 L24 12 L40 21 Z" fill={STROKE} stroke="none" />
+        <path d="M40 12 H48" />
       </g>
     </SymbolSvg>
   );
@@ -848,27 +849,28 @@ function DFfSymbol({ selected }: SymProps) {
 }
 
 function DiodeSymbol({ selected }: SymProps) {
+  // Larger body, shorter leads — endpoints stay at 0/48 so pins align.
   return (
     <SymbolSvg kind="D" w={48} h={24}>
       <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
-        <path d="M0 12 H16" />
-        <path d="M16 4 L32 12 L16 20 Z" fill={STROKE} stroke="none" />
-        <path d="M32 4 V20" />
-        <path d="M32 12 H48" />
+        <path d="M0 12 H12" />
+        <path d="M12 3 L34 12 L12 21 Z" fill={STROKE} stroke="none" />
+        <path d="M34 3 V21" />
+        <path d="M34 12 H48" />
       </g>
     </SymbolSvg>
   );
 }
 
 function ZenerDiodeSymbol({ selected }: SymProps) {
-  // Diode body + Z-shaped cathode bar (wings at top-left / bottom-right).
+  // Diode body + classic Z cathode bar (top stub right, bottom stub left).
   return (
     <SymbolSvg kind="DZ" w={48} h={24}>
       <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
-        <path d="M0 12 H16" />
-        <path d="M16 4 L32 12 L16 20 Z" fill={STROKE} stroke="none" />
-        <path d="M28 0 L32 4 V20 L36 24" />
-        <path d="M32 12 H48" />
+        <path d="M0 12 H12" />
+        <path d="M12 3 L34 12 L12 21 Z" fill={STROKE} stroke="none" />
+        <path d="M38 0 L34 3 V21 L30 24" />
+        <path d="M34 12 H48" />
       </g>
     </SymbolSvg>
   );
@@ -879,11 +881,11 @@ function SchottkyDiodeSymbol({ selected }: SymProps) {
   return (
     <SymbolSvg kind="DS" w={48} h={24}>
       <g {...STROKE_BUTT} opacity={selected ? 1 : 0.92}>
-        <path d="M0 12 H16" />
-        <path d="M16 4 L32 12 L16 20 Z" fill={STROKE} stroke="none" />
+        <path d="M0 12 H12" />
+        <path d="M12 3 L34 12 L12 21 Z" fill={STROKE} stroke="none" />
         {/* Cathode bar with opposite hooks (classic Schottky). */}
-        <path d="M36 6 V4 H32 V20 H28 V18" />
-        <path d="M32 12 H48" />
+        <path d="M38 5 V3 H34 V21 H30 V19" />
+        <path d="M34 12 H48" />
       </g>
     </SymbolSvg>
   );
@@ -896,17 +898,17 @@ function LedSymbol({ selected }: SymProps) {
     <SymbolSvg kind="LED" w={48} h={28}>
       <g {...STROKE_BUTT} opacity={op}>
         {/* Same body as PN diode, centered on y=14 for arrow headroom. */}
-        <path d="M0 14 H16" />
-        <path d="M16 6 L32 14 L16 22 Z" fill={STROKE} stroke="none" />
-        <path d="M32 6 V22" />
-        <path d="M32 14 H48" />
+        <path d="M0 14 H12" />
+        <path d="M12 5 L34 14 L12 23 Z" fill={STROKE} stroke="none" />
+        <path d="M34 5 V23" />
+        <path d="M34 14 H48" />
         {/* Emission arrows (up-right from cathode side). */}
-        <path d="M34 7 L42 2" />
-        <path d="M36 10 L44 5" />
+        <path d="M36 6 L44 1" />
+        <path d="M38 9 L46 4" />
       </g>
       <g fill={STROKE} stroke="none" opacity={op}>
-        <path d="M42 2 L38.5 2.6 L40.6 5.4 Z" />
-        <path d="M44 5 L40.5 5.6 L42.6 8.4 Z" />
+        <path d="M44 1 L40.5 1.6 L42.6 4.4 Z" />
+        <path d="M46 4 L42.5 4.6 L44.6 7.4 Z" />
       </g>
     </SymbolSvg>
   );
