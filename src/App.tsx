@@ -58,7 +58,6 @@ import {
 } from "./model/schematicTabs";
 import { ProjectsDialog } from "./components/ProjectsDialog";
 import starterCircuit from "../examples/demo-circuit.json";
-import hbridgeSimplifiedCircuit from "../examples/hbridge-simplified.json";
 import { applyTheme, readStoredTheme, type UiTheme } from "./theme";
 import type { Op } from "./llm/ops";
 import type { AssistantContext } from "./llm/assistantTypes";
@@ -3476,29 +3475,6 @@ export default function App() {
     setPasteClip(next);
   }, []);
 
-  const cutSelection = useCallback(() => {
-    const nodesNow = nodesRef.current;
-    const edgesNow = edgesRef.current;
-    const selectedNodeIds = nodesNow.filter((n) => n.selected).map((n) => n.id);
-    const selectedEdgeIds = edgesNow.filter((e) => e.selected).map((e) => e.id);
-    if (!selectedNodeIds.length && !selectedEdgeIds.length) return;
-    copySelection();
-    pushHistory();
-    const dropNodes = new Set(selectedNodeIds);
-    const dropEdges = new Set(selectedEdgeIds);
-    const nextNodes = nodesNow.filter((n) => !dropNodes.has(n.id));
-    const nextEdges = edgesNow.filter(
-      (e) =>
-        !dropEdges.has(e.id) &&
-        !dropNodes.has(e.source) &&
-        !dropNodes.has(e.target),
-    );
-    const pruned = pruneOrphanTips(nextNodes, nextEdges);
-    const collapsed = collapsePassThroughTips(pruned.nodes, pruned.edges);
-    setNodes(collapsed.nodes);
-    setEdges(collapsed.edges);
-  }, [copySelection, pushHistory, setNodes, setEdges]);
-
   /** Toolbar / Ctrl+C: copy selection immediately, else enter/exit copy mode. */
   const triggerCopy = useCallback(() => {
     if (copyMarquee) {
@@ -3800,20 +3776,6 @@ export default function App() {
       requestFitView();
     } catch (e) {
       setNetlistStatus(`restore failed: ${e instanceof Error ? e.message : "error"}`);
-    }
-  }, [pushHistory, restore, requestFitView]);
-
-  /** Optional example — does not replace starter; undo via history. */
-  const onLoadHbridgeExample = useCallback(() => {
-    try {
-      pushHistory();
-      restore(parseCircuitFile(hbridgeSimplifiedCircuit));
-      setNetlistStatus(
-        "loaded H-bridge example (examples/hbridge-simplified.json) — simplified PWM, toy SIC_MOS",
-      );
-      requestFitView();
-    } catch (e) {
-      setNetlistStatus(`H-bridge load failed: ${e instanceof Error ? e.message : "error"}`);
     }
   }, [pushHistory, restore, requestFitView]);
 
