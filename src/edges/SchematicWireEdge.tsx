@@ -111,7 +111,7 @@ export function SchematicWireEdge({
           style={{
             ...style,
             stroke: "var(--wire)",
-            strokeWidth: 1.75,
+            strokeWidth: 2.15,
           }}
         />
         <BaseEdge
@@ -121,7 +121,7 @@ export function SchematicWireEdge({
           style={{
             ...style,
             stroke: "var(--wire-selected)",
-            strokeWidth: 2.6,
+            strokeWidth: 2.85,
           }}
         />
       </>
@@ -137,7 +137,7 @@ export function SchematicWireEdge({
       style={{
         ...style,
         stroke: selected ? "var(--wire-selected)" : "var(--wire)",
-        strokeWidth: selected ? 2.6 : 1.75,
+        strokeWidth: selected ? 2.85 : 2.15,
       }}
     />
   );

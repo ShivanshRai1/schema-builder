@@ -22,7 +22,7 @@ import {
   hitTestWirePolyline,
   polylineToStoredWaypoints,
 } from "./wireGeometry";
-import { collapsePassThroughTips, pruneOrphanTips } from "./tipCleanup";
+import { collapsePassThroughTips, collapseOnePassThroughTip, pruneOrphanTips, pruneShortJunctionSpurs } from "./tipCleanup";
 
 const TIP_SIZE = 8;
 
@@ -129,9 +129,27 @@ export function detachWireForMove(
     newEdge,
   ];
 
+  // Old T must lose its square as soon as the branch peels (point 1 → gone).
+  // Force-collapse deg-2 tips that were this wire's ends even if slightly off-axis.
+  const spurClean = pruneShortJunctionSpurs(nextNodes, nextEdges, 48);
+  let ns = spurClean.nodes;
+  let es = spurClean.edges;
+  const peelTipIds = [oldSource, oldTarget].filter((id) => {
+    const n = ns.find((x) => x.id === id);
+    return n?.data.kind === "TIP";
+  });
+  for (const tipId of peelTipIds) {
+    const one = collapseOnePassThroughTip(ns, es, tipId, { force: true });
+    if (one.merged) {
+      ns = one.nodes;
+      es = one.edges;
+    }
+  }
+  const collapsed = collapsePassThroughTips(ns, es);
+
   return {
-    nodes: nextNodes,
-    edges: nextEdges,
+    nodes: collapsed.nodes,
+    edges: collapsed.edges,
     moveIds: [tipA, tipB],
     edgeId,
     baseWaypoints: interior.map((p) => ({ ...p })),
@@ -170,9 +188,30 @@ export function detachWireSegmentForDrag(
   const polyline = computeEdgePolyline(nodes, edge);
   if (polyline.length < 2) return null;
 
-  const lo = Math.max(0, Math.min(fromIndex, toIndex));
-  const hi = Math.min(polyline.length - 1, Math.max(fromIndex, toIndex));
+  let lo = Math.max(0, Math.min(fromIndex, toIndex));
+  let hi = Math.min(polyline.length - 1, Math.max(fromIndex, toIndex));
   if (hi - lo < 1) return null;
+
+  const srcIsTip = src.data.kind === "TIP";
+  const tgtIsTip = tgt.data.kind === "TIP";
+  const polyLen = (pts: Point[]) => {
+    let n = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      n += Math.hypot(pts[i + 1]!.x - pts[i]!.x, pts[i + 1]!.y - pts[i]!.y);
+    }
+    return n;
+  };
+  // Short pin-side OR tip-side remnants become ghost tails + keep the old T
+  // at deg≥3 while the free piece is dragged (stacked squares on the rail).
+  const SHORT_REMNANT = 48;
+  if (lo > 0) {
+    const before = polyline.slice(0, lo + 1);
+    if (polyLen(before) <= SHORT_REMNANT) lo = 0;
+  }
+  if (hi < polyline.length - 1) {
+    const after = polyline.slice(hi);
+    if (polyLen(after) <= SHORT_REMNANT) hi = polyline.length - 1;
+  }
 
   // Whole path → peel the entire wire.
   if (lo === 0 && hi === polyline.length - 1) {
@@ -192,8 +231,6 @@ export function detachWireSegmentForDrag(
       0,
     );
 
-  const srcIsTip = src.data.kind === "TIP";
-  const tgtIsTip = tgt.data.kind === "TIP";
   // Never drop an endpoint tip that a remnant still needs.
   const dropIds = new Set<string>();
   if (srcIsTip && !beforePts && usage(edge.source) === 0) dropIds.add(edge.source);
@@ -255,9 +292,12 @@ export function detachWireSegmentForDrag(
     selected: true,
   });
 
+  const spurClean = pruneShortJunctionSpurs(nextNodes, nextEdges, 40);
+  const collapsed = collapsePassThroughTips(spurClean.nodes, spurClean.edges);
+
   return {
-    nodes: nextNodes,
-    edges: nextEdges,
+    nodes: collapsed.nodes,
+    edges: collapsed.edges,
     moveIds: [tipFreeA, tipFreeB],
     edgeId: freeEdgeId,
     baseWaypoints: pathInterior(freePts),
@@ -1409,6 +1449,63 @@ export function attachFreeTipsToWires(
     const tipPoint = pinWorldPoint(tip, "t");
     if (!tipPoint) continue;
 
+    // Prefer an existing tip under the free end (e.g. Move peeled a T-branch
+    // and the user dropped it back on the same junction). Mid-rail split here
+    // would leave the old tip + a parallel "extra" wire.
+    const mergeTol = Math.max(tolerance, 12);
+    const branchOtherId =
+      branchEdge.source === tipId ? branchEdge.target : branchEdge.source;
+    let hostTip: Node<ComponentData> | null = null;
+    let hostDist = Infinity;
+    for (const other of nextNodes) {
+      if (other.id === tipId || other.data.kind !== "TIP") continue;
+      // Never merge onto the far end of this same free wire (self-loop).
+      if (other.id === branchOtherId) continue;
+      const otherDeg = nextEdges.reduce(
+        (n, e) => n + (e.source === other.id || e.target === other.id ? 1 : 0),
+        0,
+      );
+      // Need a real host — not an isolated orphan tip.
+      if (otherDeg < 1) continue;
+      const at = pinWorldPoint(other, "t");
+      if (!at) continue;
+      const d = Math.hypot(at.x - tipPoint.x, at.y - tipPoint.y);
+      if (d > mergeTol || d >= hostDist) continue;
+      hostTip = other;
+      hostDist = d;
+    }
+    if (hostTip) {
+      const hostId = hostTip.id;
+      nextEdges = nextEdges.map((edge) => {
+        if (edge.id !== branchEdge.id) return edge;
+        if (edge.source === tipId) {
+          return {
+            ...edge,
+            source: hostId,
+            sourceHandle: "t",
+            data: {
+              ...(edge.data as object),
+              waypoints: [],
+              directPath: true,
+            },
+          };
+        }
+        return {
+          ...edge,
+          target: hostId,
+          targetHandle: "t",
+          data: {
+            ...(edge.data as object),
+            waypoints: [],
+            directPath: true,
+          },
+        };
+      });
+      nextNodes = nextNodes.filter((node) => node.id !== tipId);
+      attached++;
+      continue;
+    }
+
     let target:
       | { edge: Edge; poly: Point[]; point: Point; distance: number }
       | null = null;
@@ -1418,7 +1515,9 @@ export function attachFreeTipsToWires(
       const poly = computeEdgePolyline(nextNodes, edge);
       if (poly.length < 2) continue;
       const distance = distToPolyline(poly, tipPoint);
-      if (distance > tolerance || (target && distance >= target.distance)) continue;
+      if (distance > Math.max(tolerance, 8) || (target && distance >= target.distance)) {
+        continue;
+      }
       target = {
         edge,
         poly,
@@ -1428,10 +1527,43 @@ export function attachFreeTipsToWires(
     }
     if (!target) continue;
 
-    const first = target.poly[0]!;
-    const last = target.poly[target.poly.length - 1]!;
-    const nearStart = Math.hypot(target.point.x - first.x, target.point.y - first.y) <= 1;
-    const nearEnd = Math.hypot(target.point.x - last.x, target.point.y - last.y) <= 1;
+    // Distance *along the rail* to each end. Euclidean-to-endpoint (old) treated
+    // a hit ~10px above M1 as "on the pin", snapped the branch there, and the
+    // T square disappeared when dragging the cross-wire around M1.
+    let hitAlong = 0;
+    let railLen = 0;
+    {
+      let best = Infinity;
+      let acc = 0;
+      for (let i = 0; i < target.poly.length - 1; i++) {
+        const a = target.poly[i]!;
+        const b = target.poly[i + 1]!;
+        const seg = Math.hypot(b.x - a.x, b.y - a.y);
+        const t =
+          seg < 0.01
+            ? 0
+            : Math.max(
+                0,
+                Math.min(
+                  1,
+                  ((target.point.x - a.x) * (b.x - a.x) +
+                    (target.point.y - a.y) * (b.y - a.y)) /
+                    (seg * seg),
+                ),
+              );
+        const qx = a.x + t * (b.x - a.x);
+        const qy = a.y + t * (b.y - a.y);
+        const d = Math.hypot(target.point.x - qx, target.point.y - qy);
+        if (d < best) {
+          best = d;
+          hitAlong = acc + t * seg;
+        }
+        acc += seg;
+      }
+      railLen = acc;
+    }
+    const nearStart = hitAlong <= mergeTol;
+    const nearEnd = railLen - hitAlong <= mergeTol;
 
     // At an existing endpoint, merge the dangling branch directly into that
     // endpoint instead of creating a zero-length rail half.
@@ -1450,12 +1582,68 @@ export function attachFreeTipsToWires(
             ...edge,
             source: endpointNodeId,
             sourceHandle: endpointHandle,
+            data: {
+              ...(edge.data as object),
+              waypoints: [],
+              directPath: true,
+            },
           };
         }
         return {
           ...edge,
           target: endpointNodeId,
           targetHandle: endpointHandle,
+          data: {
+            ...(edge.data as object),
+            waypoints: [],
+            directPath: true,
+          },
+        };
+      });
+      nextNodes = nextNodes.filter((node) => node.id !== tipId);
+      attached++;
+      continue;
+    }
+
+    // Landing near another tip on this rail (projected point, not free-tip
+    // center): merge there instead of planting a second square a few px away.
+    let railHost: Node<ComponentData> | null = null;
+    let railHostDist = Infinity;
+    for (const other of nextNodes) {
+      if (other.id === tipId || other.data.kind !== "TIP") continue;
+      if (other.id === branchOtherId) continue;
+      const at = pinWorldPoint(other, "t");
+      if (!at) continue;
+      const d = Math.hypot(at.x - target.point.x, at.y - target.point.y);
+      if (d > mergeTol || d >= railHostDist) continue;
+      railHost = other;
+      railHostDist = d;
+    }
+    if (railHost) {
+      const hostId = railHost.id;
+      nextEdges = nextEdges.map((edge) => {
+        if (edge.id !== branchEdge.id) return edge;
+        if (edge.source === tipId) {
+          return {
+            ...edge,
+            source: hostId,
+            sourceHandle: "t",
+            data: {
+              ...(edge.data as object),
+              waypoints: [],
+              directPath: true,
+            },
+          };
+        }
+        return {
+          ...edge,
+          target: hostId,
+          targetHandle: "t",
+          data: {
+            ...(edge.data as object),
+            waypoints: [],
+            directPath: true,
+          },
         };
       });
       nextNodes = nextNodes.filter((node) => node.id !== tipId);
@@ -1596,115 +1784,6 @@ function applyTipMoves(
 }
 
 /**
- * Slide a shared junction tip along its rail so it sits under/near the moved
- * pin. Using pin-row straighten here would yank the tip off a horizontal bus
- * when the part has left/right pins.
- */
-function snapJunctionTipOntoRail(
-  nodes: Node<ComponentData>[],
-  edges: Edge[],
-  branchEdge: Edge,
-  tipId: string,
-  partId: string,
-  partHandle: string,
-): TipMove | null {
-  const part = nodes.find((n) => n.id === partId);
-  if (!part) return null;
-  const pinPt = pinWorldPoint(part, partHandle);
-  if (!pinPt) return null;
-
-  const side = pinWorldSide(part, partHandle);
-  // Top/bottom pins onto a horizontal bus: project the pin column, not an
-  // outward stub that points away from the rail (rotation left stranded tips).
-  const aim =
-    side === "left" || side === "right"
-      ? outwardStub(pinPt, side, STUB)
-      : pinPt;
-
-  let best: Point | null = null;
-  let bestDist = Infinity;
-  for (const edge of edges) {
-    if (edge.id === branchEdge.id) continue;
-    if (edge.source !== tipId && edge.target !== tipId) continue;
-    const railSrc = nodes.find((n) => n.id === edge.source);
-    const railTgt = nodes.find((n) => n.id === edge.target);
-    // Only slide along tip↔tip rail halves — never along part branches (C tap,
-    // R leg, etc.) or the snap lands on the wrong segment after rotate/move.
-    if (railSrc?.data.kind !== "TIP" || railTgt?.data.kind !== "TIP") continue;
-    const poly = computeEdgePolyline(nodes, edge);
-    if (poly.length < 2) continue;
-    const onRail = closestPointOnPolyline(poly, aim, WIRE_GRID);
-    const dist = Math.hypot(onRail.x - aim.x, onRail.y - aim.y);
-    if (dist < bestDist) {
-      bestDist = dist;
-      best = onRail;
-    }
-  }
-  if (!best) return null;
-
-  const tip = nodes.find((n) => n.id === tipId);
-  const cur = tip ? pinWorldPoint(tip, "t") : null;
-  if (cur && Math.hypot(cur.x - best.x, cur.y - best.y) < 0.5) return null;
-  const p = tipNodePositionFromPin(best);
-  return { id: tipId, x: p.x, y: p.y };
-}
-
-/** Reposition every junction tip attached to a transformed part (2 passes). */
-function snapAllJunctionTipsForParts(
-  nodes: Node<ComponentData>[],
-  edges: Edge[],
-  movedPartIds: ReadonlySet<string>,
-): { nodes: Node<ComponentData>[]; edges: Edge[] } {
-  let nextNodes = nodes;
-  let nextEdges = edges;
-  const deg = () => {
-    const d = new Map<string, number>();
-    for (const e of nextEdges) {
-      d.set(e.source, (d.get(e.source) ?? 0) + 1);
-      d.set(e.target, (d.get(e.target) ?? 0) + 1);
-    }
-    return d;
-  };
-
-  for (let pass = 0; pass < 2; pass++) {
-    const tipMoves: TipMove[] = [];
-    const d = deg();
-    for (const e of nextEdges) {
-      const srcMoved = movedPartIds.has(e.source);
-      const tgtMoved = movedPartIds.has(e.target);
-      if (!srcMoved && !tgtMoved) continue;
-      const src = nextNodes.find((n) => n.id === e.source);
-      const tgt = nextNodes.find((n) => n.id === e.target);
-      if (!src || !tgt) continue;
-      if (src.data.kind === "TIP" && tgt.data.kind === "TIP") continue;
-      if (src.data.kind !== "TIP" && tgt.data.kind !== "TIP") continue;
-      const tip = src.data.kind === "TIP" ? src : tgt;
-      const part = src.data.kind === "TIP" ? tgt : src;
-      const partHandle =
-        src.data.kind === "TIP" ? e.targetHandle! : e.sourceHandle!;
-      if ((d.get(tip.id) ?? 0) < 2 || !movedPartIds.has(part.id)) continue;
-      const snap = snapJunctionTipOntoRail(
-        nextNodes,
-        nextEdges,
-        e,
-        tip.id,
-        part.id,
-        partHandle,
-      );
-      if (snap) tipMoves.push(snap);
-    }
-    if (!tipMoves.length) break;
-    nextNodes = applyTipMoves(nextNodes, tipMoves);
-    const touched = new Set(tipMoves.map((m) => m.id));
-    nextEdges = nextEdges.map((edge) => {
-      if (!touched.has(edge.source) && !touched.has(edge.target)) return edge;
-      return { ...edge, data: { ...(edge.data as object), waypoints: [] } };
-    });
-  }
-  return { nodes: nextNodes, edges: nextEdges };
-}
-
-/**
  * Drop short free stubs still hanging off moved parts (especially when the
  * same pin already has a real connection — those draw as hollow crossings).
  */
@@ -1753,7 +1832,7 @@ function dropShortFreeStubsOnParts(
 /**
  * After a part lands, rebuild attached wires and clean the graph:
  * - pin↔pin: one clean elbow into the moved pin
- * - pin↔junction: slide tip along the rail under the pin (keep T intact)
+ * - pin↔junction: leave the rail tap fixed; branch rubber-bands as an L
  * - pin↔free TIP: align tip onto the pin row/column
  * - free tips that land on rails merge into real junctions
  * - short free stubs on moved parts are removed
@@ -1805,6 +1884,9 @@ export function finalizeConnectedPartMove(
     const tgtMoved = movedPartIds.has(e.target);
     if (srcMoved || tgtMoved) clearWaypointIds.add(e.id);
     if (!srcMoved && !tgtMoved) continue;
+    const movedId = srcMoved ? e.source : e.target;
+    // Net-name move: only touch the invisible stub — never clear rail waypoints.
+    if (byId.get(movedId)?.data.kind === "WIRELABEL") continue;
     const otherId = srcMoved ? e.target : e.source;
     const other = byId.get(otherId);
     if (other?.data.kind === "TIP" && (deg.get(otherId) ?? 0) >= 2) {
@@ -1847,26 +1929,24 @@ export function finalizeConnectedPartMove(
     if (src.data.kind === "TIP" || tgt.data.kind === "TIP") {
       const tip = src.data.kind === "TIP" ? src : tgt;
       const part = src.data.kind === "TIP" ? tgt : src;
-      const partHandle =
-        src.data.kind === "TIP" ? edge.targetHandle : edge.sourceHandle;
       const tipDeg = deg.get(tip.id) ?? 0;
 
       if (tipDeg >= 2 && movedPartIds.has(part.id)) {
-        const snap = snapJunctionTipOntoRail(
-          nodes,
-          workEdges,
-          edge,
-          tip.id,
-          part.id,
-          partHandle,
-        );
-        if (snap) {
-          tipMoves.push(snap);
-          touchedTipIds.add(snap.id);
+        // Net-name stubs must not slide the rail tip — leave the wire alone.
+        if (part.data.kind === "WIRELABEL") {
+          return edge;
         }
+        // Keep the junction where it is. Sliding it under the pin stretched
+        // unselected rail branches into long horizontals; an L from the fixed
+        // tap matches Drag rubber-band expectations (tip stays, pin moves).
+        touchedTipIds.add(tip.id);
         return {
           ...edge,
-          data: { ...(edge.data as object), waypoints: [] },
+          data: {
+            ...(edge.data as object),
+            waypoints: [],
+            directPath: true,
+          },
         };
       }
 
@@ -1950,9 +2030,7 @@ export function finalizeConnectedPartMove(
   nextNodes = prunedStubs.nodes;
   nextEdges = prunedStubs.edges;
 
-  const resnapped = snapAllJunctionTipsForParts(nextNodes, nextEdges, movedPartIds);
-  nextNodes = resnapped.nodes;
-  nextEdges = resnapped.edges;
+  // Do not re-snap junction tips onto the pin row — that undoes the fixed-tap L.
 
   const collapsed = collapsePassThroughTips(nextNodes, nextEdges);
   return pruneOrphanTips(collapsed.nodes, collapsed.edges);

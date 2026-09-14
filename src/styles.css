@@ -24,8 +24,9 @@
   --junction-fill: #e8eef5;
   --junction-stroke: #0f1419;
   --crossing-stroke: #e8eef5;
-  --label-bg: rgba(12, 16, 22, 0.82);
-  --label-text: #e8eef5;
+  --label-bg: rgba(12, 16, 22, 0.88);
+  --label-text: #f2f6fb;
+  --label-value: #d5dee8;
   --label-chip-border: var(--border);
   --label-chip-pad: 4px 6px;
   --pin-label-bg: rgba(15, 20, 25, 0.88);
@@ -87,7 +88,8 @@
   --junction-stroke: #ffffff;
   --crossing-stroke: #1a2330;
   --label-bg: transparent;
-  --label-text: #1a2330;
+  --label-text: #0a1220;
+  --label-value: #0f2744;
   --label-chip-border: transparent;
   --label-chip-pad: 0;
   --pin-label-bg: transparent;
@@ -195,6 +197,7 @@ body { background: var(--bg); color: var(--text); }
 .mode-guide-move .mode-guide-badge { background: #f0b429; color: #1a1408; }
 .mode-guide-drag .mode-guide-badge { background: #c9a227; color: #1a1408; }
 .mode-guide-delete .mode-guide-badge { background: #f07178; color: #1a0a0c; }
+.mode-guide-copy .mode-guide-badge { background: #7ec2ff; color: #0a1520; }
 .mode-guide-content {
   flex: 1;
   min-width: 0;
@@ -284,6 +287,118 @@ body { background: var(--bg); color: var(--text); }
 .mode-guide-legend .wl-item svg { flex-shrink: 0; }
 
 .workspace { flex: 1; display: grid; grid-template-columns: 280px 1fr 380px; min-height: 0; position: relative; }
+
+.palette-shell,
+.right-shell {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.palette-shell { background: var(--panel); border-right: 1px solid var(--border); }
+.right-shell { border-left: 1px solid var(--border); }
+.palette-shell .palette {
+  flex: 1;
+  min-height: 0;
+  border-right: none;
+}
+.right-shell .right-col {
+  flex: 1;
+  min-height: 0;
+  border-left: none;
+  width: 100%;
+}
+.panel-rail-btn {
+  flex: 1;
+  width: 100%;
+  margin: 0;
+  padding: 12px 4px;
+  border: none;
+  background: var(--panel-2, var(--panel));
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  cursor: pointer;
+}
+.panel-rail-btn:hover {
+  color: var(--accent);
+  background: var(--panel);
+}
+.panel-collapse-btn {
+  position: absolute;
+  z-index: 6;
+  top: 8px;
+  width: 22px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.panel-collapse-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.panel-collapse-btn-left { right: 4px; }
+.panel-collapse-btn-right { left: 8px; }
+
+/* Laptop / smaller windows: denser chrome, more room for the schematic. */
+.workspace-compact .palette {
+  padding: 8px 6px;
+}
+.workspace-compact .palette-search input,
+.workspace-compact .palette-search-input {
+  font-size: 12px;
+  padding: 6px 8px;
+}
+.workspace-compact .palette-cat-btn {
+  padding: 5px 6px;
+  font-size: 11px;
+}
+.workspace-compact .panel-header {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.workspace-compact .ghost-btn {
+  padding: 2px 7px;
+  font-size: 11.5px;
+}
+.workspace-compact .right-slot {
+  min-height: 56px;
+}
+.workspace-compact .mode-toolbar {
+  gap: 4px;
+  padding: 4px 6px;
+}
+.workspace-laptop .palette-grid,
+.workspace-compact .palette-grid {
+  gap: 6px;
+}
+.workspace-compact .palette-item {
+  padding: 6px 4px;
+}
+.workspace-compact .palette-label {
+  font-size: 10.5px;
+}
+@media (max-height: 820px) {
+  .mode-guide:not(.is-collapsed) {
+    max-height: 88px;
+    overflow: auto;
+  }
+  .workspace-compact .right-slot {
+    min-height: 48px;
+  }
+}
 .canvas-col {
   display: flex;
   flex-direction: column;
@@ -607,8 +722,8 @@ body { background: var(--bg); color: var(--text); }
 }
 .mode-toolbar-copy.is-active {
   border-color: #7ec2ff;
-  background: rgba(126, 194, 255, 0.16);
-  box-shadow: 0 0 0 1px rgba(126, 194, 255, 0.35);
+  background: rgba(126, 194, 255, 0.22);
+  box-shadow: 0 0 0 1px rgba(126, 194, 255, 0.55);
 }
 .mode-toolbar-sim-icon {
   display: block;
@@ -1039,16 +1154,16 @@ body { background: var(--bg); color: var(--text); }
 .wire-label-text {
   position: absolute;
   left: 0;
-  bottom: 1px;
-  transform: translate(-50%, -100%);
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
+  bottom: 0;
+  transform: translate(-50%, calc(-100% + 2px));
+  font-size: var(--schematic-net-size, 20px);
+  font-weight: 800;
+  letter-spacing: 0.03em;
   color: var(--label-text);
   white-space: nowrap;
   line-height: 1;
   /* Light theme: ink only (no white chip over wires). Dark keeps a soft plate. */
-  text-shadow: 0 0 3px var(--bg), 0 1px 0 var(--bg);
+  text-shadow: 0 0 4px var(--bg), 0 1px 0 var(--bg);
   background: var(--label-bg);
   border: 1px solid var(--label-chip-border);
   padding: var(--label-chip-pad);
@@ -1433,10 +1548,9 @@ body { background: var(--bg); color: var(--text); }
 .canvas-drag .react-flow__node.dragging {
   cursor: grabbing;
 }
-/* Delete: scissors on targets; normal arrow on empty canvas. */
-.canvas-delete .react-flow__pane {
-  cursor: default;
-}
+/* Delete: scissors everywhere in this mode. */
+.canvas-delete,
+.canvas-delete .react-flow__pane,
 .canvas-delete .react-flow__node,
 .canvas-delete .react-flow__edge,
 .canvas-delete .react-flow__edge-path,
@@ -1520,12 +1634,19 @@ body { background: var(--bg); color: var(--text); }
   stroke-dasharray: 6 4;
   pointer-events: none;
 }
-/* Ctrl+C copy mode — LTspice-like arrow + dashed box cursor */
+.cut-marquee-rect.is-delete {
+  fill: rgba(240, 113, 120, 0.12);
+  stroke: #f07178;
+}
+/* Copy mode — same dual-document icon as the toolbar Copy button */
 .canvas-copy-marquee,
 .canvas-copy-marquee .react-flow__pane,
 .canvas-copy-marquee .react-flow__node,
-.canvas-copy-marquee .react-flow__edge {
-  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cpath fill='%23fff' stroke='%23000' stroke-width='1.2' d='M4 2 L4 22 L9.5 17.5 L12.5 25 L15.5 24 L12.5 16.5 L19 16.5 Z'/%3E%3Crect x='14' y='14' width='14' height='12' fill='none' stroke='%23000' stroke-width='1.4' stroke-dasharray='2.5 1.8'/%3E%3Crect x='14.5' y='14.5' width='13' height='11' fill='none' stroke='%23fff' stroke-width='0.7' stroke-dasharray='2.5 1.8'/%3E%3C/svg%3E") 4 2, copy !important;
+.canvas-copy-marquee .react-flow__edge,
+.canvas-copy-marquee .react-flow__edge-path,
+.canvas-copy-marquee .component-node,
+.canvas-copy-marquee .component-pin {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke-linejoin='round'%3E%3Crect x='7.5' y='4' width='11' height='14' rx='1.2' fill='%23e8eef5' stroke='%230b1220' stroke-width='2.4'/%3E%3Crect x='4.5' y='7' width='11' height='14' rx='1.2' fill='%23ffffff' stroke='%230b1220' stroke-width='2.4'/%3E%3Cpath d='M12.5 7 H15.5 L12.5 10 Z' fill='%23d5dee8' stroke='%230b1220' stroke-width='1.8'/%3E%3Crect x='7.5' y='4' width='11' height='14' rx='1.2' fill='none' stroke='%23f2f6fb' stroke-width='1.15'/%3E%3Crect x='4.5' y='7' width='11' height='14' rx='1.2' fill='none' stroke='%23f2f6fb' stroke-width='1.15'/%3E%3Cpath d='M12.5 7 H15.5 L12.5 10 Z' fill='none' stroke='%23f2f6fb' stroke-width='0.9'/%3E%3Cpath d='M7 12.2 H12.8 M7 14.6 H12.8 M7 17 H11.2' stroke='%234da3ff' stroke-width='1.5' stroke-linecap='round'/%3E%3C/g%3E%3C/svg%3E") 4 2, copy !important;
 }
 .canvas-mode-hint { border-color: rgba(77, 163, 255, 0.45); }
 .react-flow { background: var(--bg); }
@@ -1592,6 +1713,10 @@ body { background: var(--bg); color: var(--text); }
   padding: 8px; border: 1.5px solid var(--border); border-radius: 8px;
   background: var(--panel-2); color: var(--text); font-size: 12px;
   overflow: visible;
+  /* Schematic ink — large enough to read beside symbols on laptop screens. */
+  --schematic-refdes-size: 22px;
+  --schematic-value-size: 19px;
+  --schematic-net-size: 20px;
 }
 /* LTspice-style SVG symbols — no card box; labels sit to the right. */
 .component-node.symbol-node {
@@ -1658,27 +1783,48 @@ body { background: var(--bg); color: var(--text); }
   transform-origin: center center;
   transition: transform 0.12s ease;
   line-height: 0;
+  /* Receives clicks while the node bbox stays pass-through (see below). */
+  pointer-events: auto;
+  cursor: pointer;
+}
+/*
+ * Symbol node boxes are larger than the glyph. Empty padding (e.g. above M1
+ * drain) used to steal clicks from wires that run across that area. Pass
+ * those clicks through to edges; only the glyph, pins, and labels capture.
+ */
+.react-flow__node:has(> .component-node.symbol-node):not(:has(.tip-node)) {
+  pointer-events: none;
+}
+.react-flow__node:has(> .component-node.symbol-node) .symbol-body,
+.react-flow__node:has(> .component-node.symbol-node) .component-pin,
+.react-flow__node:has(> .component-node.symbol-node) .react-flow__handle,
+.react-flow__node:has(> .component-node.symbol-node) .wire-label-text {
+  pointer-events: auto;
 }
 .symbol-labels {
   position: absolute;
   white-space: nowrap;
   pointer-events: none;
   z-index: 3;
-  line-height: 1.1;
-  padding: 0;
-  border-radius: 2px;
-  font-size: 10.5px;
+  line-height: 1.2;
+  padding: 2px 5px;
+  border-radius: 3px;
+  font-size: var(--schematic-refdes-size, 22px);
+  font-weight: 800;
   color: var(--label-text);
   background: var(--label-bg);
-  text-shadow: 0 0 3px var(--bg), 0 1px 0 var(--bg);
+  text-shadow: 0 0 4px var(--bg), 0 1px 0 var(--bg);
 }
 .symbol-labels .component-refdes {
   margin-top: 0;
   font-size: inherit;
+  font-weight: 800;
 }
 .symbol-labels .component-params {
-  font-size: 9px;
-  margin-top: 0;
+  font-size: var(--schematic-value-size, 19px);
+  font-weight: 750;
+  margin-top: 2px;
+  color: var(--label-value, var(--muted));
 }
 /* LTspice-style: refdes upper-right, value lower-right — top/bottom pins stay clear. */
 .symbol-labels-split {
@@ -1692,27 +1838,33 @@ body { background: var(--bg); color: var(--text); }
   position: absolute;
   white-space: nowrap;
   transform: translateY(-50%);
-  line-height: 1;
-  text-shadow: 0 0 3px var(--bg), 0 1px 0 var(--bg);
+  line-height: 1.05;
+  padding: 2px 5px;
+  border-radius: 3px;
+  background: var(--label-bg);
+  text-shadow: 0 0 4px var(--bg), 0 1px 0 var(--bg);
 }
 .symbol-labels-split.labels-split-right .label-refdes,
 .symbol-labels-split.labels-split-right .label-value {
-  left: calc(var(--label-x, 80%) + 2px);
+  left: calc(var(--label-x, 80%) + 3px);
 }
 .symbol-labels-split.labels-split-left .label-refdes,
 .symbol-labels-split.labels-split-left .label-value {
-  right: calc((100% - var(--label-x, 80%)) + 2px);
+  right: calc((100% - var(--label-x, 80%)) + 3px);
   left: auto;
   text-align: right;
 }
 .symbol-labels-split .label-refdes {
-  font-size: 11px;
-  font-weight: 650;
+  font-size: var(--schematic-refdes-size, 22px) !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.02em;
+  color: var(--label-text) !important;
 }
 .symbol-labels-split .label-value {
-  font-size: 10px;
-  font-weight: 500;
-  color: var(--muted);
+  font-size: var(--schematic-value-size, 19px) !important;
+  font-weight: 750 !important;
+  letter-spacing: 0.015em;
+  color: var(--label-value, var(--muted)) !important;
 }
 .symbol-labels-split .label-unplaced {
   position: absolute;
@@ -1817,8 +1969,17 @@ body { background: var(--bg); color: var(--text); }
   transform-origin: center center;
   transition: transform 0.12s ease;
 }
-.component-refdes { font-weight: 650; margin-top: 2px; }
-.component-params { color: var(--muted); font-size: 10.5px; margin-top: 1px; }
+.component-refdes {
+  font-weight: 800;
+  font-size: var(--schematic-refdes-size, 22px);
+  margin-top: 2px;
+}
+.component-params {
+  color: var(--label-value, var(--muted));
+  font-size: var(--schematic-value-size, 19px);
+  font-weight: 750;
+  margin-top: 1px;
+}
 .component-unplaced {
   margin-top: 2px;
   font-size: 9px;
@@ -1909,6 +2070,11 @@ body { background: var(--bg); color: var(--text); }
 /* Tip sitting on a pin — no square (the pin owns the connection visually). */
 .tip-node.tip-on-pin .component-pin::after,
 .tip-node.tip-on-pin .react-flow__handle.component-pin::after {
+  display: none !important;
+}
+/* Deg-2 bend / leftover pass-through after Move — not a real T. */
+.tip-node.tip-quiet .component-pin::after,
+.tip-node.tip-quiet .react-flow__handle.component-pin::after {
   display: none !important;
 }
 .tip-node .component-pin,

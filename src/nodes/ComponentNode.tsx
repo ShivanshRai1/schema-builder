@@ -95,11 +95,15 @@ export function ComponentNode({
     }
     return n;
   });
-  const tipJunction = isTip && tipDegree >= 2;
+  const tipJunction = isTip && tipDegree >= 3;
   const tipFree = isTip && tipDegree <= 1;
-  /** Tip parked on a pin or another wire mid-rail — hide its square. */
+  /** Deg-2 bend/pass-through — keep in the graph, don't draw a false junction. */
+  const tipQuiet = isTip && tipDegree === 2;
+  /** Tip parked on a pin — hide its square. Deg-3 T tips keep their mark
+   *  (overlay draws them); only free/ghost tips on pins go quiet. */
   const tipOnPin = useStore((s) => {
     if (!isTip) return false;
+    if (tipDegree >= 3) return false;
     const tip = s.nodes.find((n) => n.id === id);
     if (!tip) return false;
     const t = {
@@ -199,7 +203,7 @@ export function ComponentNode({
 
   return (
     <div
-      className={`component-node${isSymbol ? " symbol-node" : ""}${isSymbol ? nodeLabelsClass : ""} kind-${data.kind}${selected ? " selected" : ""}${unplaced ? " unplaced" : ""}${isTip ? " tip-node" : ""}${tipJunction ? " tip-junction" : ""}${tipFree ? " tip-free" : ""}${tipOnPin ? " tip-on-pin" : ""}`}
+      className={`component-node${isSymbol ? " symbol-node" : ""}${isSymbol ? nodeLabelsClass : ""} kind-${data.kind}${selected ? " selected" : ""}${unplaced ? " unplaced" : ""}${isTip ? " tip-node" : ""}${tipJunction ? " tip-junction" : ""}${tipFree ? " tip-free" : ""}${tipQuiet ? " tip-quiet" : ""}${tipOnPin ? " tip-on-pin" : ""}`}
       style={
         symLayout
           ? {

@@ -42,6 +42,7 @@ import {
   previewCornerToPin,
   projectOrthogonalDraw,
   segmentAxis,
+  snapCoord,
   snapPoint,
   waypointsClosingTo,
   WIRE_DRAW_GRID,
@@ -218,7 +219,7 @@ function wireHitAtCursor(
 function findNetLabelNear(
   nodes: Node<ComponentData>[],
   cursor: Point,
-  radius = 26,
+  radius = 32,
 ): string | null {
   let best: { id: string; d: number } | null = null;
   for (const n of nodes) {
@@ -227,8 +228,8 @@ function findNetLabelNear(
       x: n.position.x,
       y: n.position.y + 8,
     };
-    // Chip is centered above the join pad.
-    const textAnchor = { x: join.x, y: join.y - 12 };
+    // Chip sits above the join; reach a bit higher for the larger net font.
+    const textAnchor = { x: join.x, y: join.y - 16 };
     const d = Math.min(
       Math.hypot(cursor.x - textAnchor.x, cursor.y - textAnchor.y),
       Math.hypot(cursor.x - join.x, cursor.y - join.y),
@@ -309,9 +310,9 @@ export type CanvasViewApi = {
  * Node boxes omit refdes labels (above/beside) and slightly scaled glyphs.
  * Expand measured bounds so fit-to-window does not clip the top/bottom rails.
  */
-const FIT_LABEL_PAD = { top: 30, right: 56, bottom: 24, left: 40 };
-
-const FIT_VIEW_OPTS = { padding: 0.18, maxZoom: 2.5, duration: 200 } as const;
+const FIT_LABEL_PAD = { top: 48, right: 96, bottom: 40, left: 56 };
+/** Fill the canvas more aggressively so small circuits aren't a postage stamp. */
+const FIT_VIEW_OPTS = { padding: 0.06, maxZoom: 5, duration: 200 } as const;
 
 function fitSchematicView(rf: {
   getNodes: () => Node[];
@@ -438,7 +439,13 @@ type MarqueeDraft = {
 };
 
 /** Snipping-tool rectangle in flow coords. */
-function CutMarqueeOverlay({ rect }: { rect: FlowRect | null }) {
+function CutMarqueeOverlay({
+  rect,
+  variant = "default",
+}: {
+  rect: FlowRect | null;
+  variant?: "default" | "delete";
+}) {
   const { x, y, zoom } = useViewport();
   if (!rect || !rectMeaningful(rect, 1)) return null;
   return (
@@ -457,7 +464,7 @@ function CutMarqueeOverlay({ rect }: { rect: FlowRect | null }) {
       }}
     >
       <rect
-        className="cut-marquee-rect"
+        className={`cut-marquee-rect${variant === "delete" ? " is-delete" : ""}`}
         x={rect.x}
         y={rect.y}
         width={rect.w}
@@ -810,6 +817,8 @@ export type CanvasProps = {
   /** Finish copy-marquee drag: highlight nodes/wires ≥70% inside (Ctrl = additive). */
   onCopyRegion?: (rect: FlowRect, additive: boolean) => void;
   onCancelCopyMarquee?: () => void;
+  /** Delete-mode marquee: remove nodes/wires ≥70% inside the box. */
+  onDeleteRegion?: (rect: FlowRect) => void;
   /** Copy-mode wire click — exclusive or Ctrl-toggle. */
   onToggleSelectEdge?: (edgeId: string, multi: boolean) => void;
   /** Copy-mode: plain click a part → copy + paste ghost immediately. */
@@ -828,6 +837,8 @@ export type CanvasProps = {
   onWirePartial: (payload: WirePartialPayload) => void;
   onTrimWire: () => boolean;
   onWirePathUpdate: (edgeId: string, waypoints: Point[]) => void;
+  /** After Drag-slide/bend ends — collapse doglegs + purge leftover rail tips. */
+  onWirePathCommit?: (edgeId: string) => void;
   onMoveWireDisconnect: (
     edgeId: string,
     opts?: { fromIndex: number; toIndex: number },
@@ -910,6 +921,7 @@ export function Canvas({
   copyMarquee = false,
   onCopyRegion,
   onCancelCopyMarquee,
+  onDeleteRegion,
   onToggleSelectEdge,
   onCopyPartImmediate,
   onCopyEdgeImmediate,
@@ -924,6 +936,7 @@ export function Canvas({
   onWirePartial,
   onTrimWire,
   onWirePathUpdate,
+  onWirePathCommit,
   onMoveWireDisconnect,
   onPushHistory,
   onReplace,
@@ -1065,6 +1078,7 @@ export function Canvas({
   const onWirePartialRef = useRef(onWirePartial);
   const onTrimWireRef = useRef(onTrimWire);
   const onWirePathUpdateRef = useRef(onWirePathUpdate);
+  const onWirePathCommitRef = useRef(onWirePathCommit);
   const onMoveWireDisconnectRef = useRef(onMoveWireDisconnect);
   const onPushHistoryRef = useRef(onPushHistory);
   const onModeChangeRef = useRef(onModeChange);
@@ -1074,6 +1088,8 @@ export function Canvas({
   onCopyRegionRef.current = onCopyRegion;
   const onCancelCopyMarqueeRef = useRef(onCancelCopyMarquee);
   onCancelCopyMarqueeRef.current = onCancelCopyMarquee;
+  const onDeleteRegionRef = useRef(onDeleteRegion);
+  onDeleteRegionRef.current = onDeleteRegion;
   const onToggleSelectEdgeRef = useRef(onToggleSelectEdge);
   onToggleSelectEdgeRef.current = onToggleSelectEdge;
   const onCopyPartImmediateRef = useRef(onCopyPartImmediate);
@@ -1121,6 +1137,7 @@ export function Canvas({
   onWirePartialRef.current = onWirePartial;
   onTrimWireRef.current = onTrimWire;
   onWirePathUpdateRef.current = onWirePathUpdate;
+  onWirePathCommitRef.current = onWirePathCommit;
   onMoveWireDisconnectRef.current = onMoveWireDisconnect;
   onPushHistoryRef.current = onPushHistory;
   onModeChangeRef.current = onModeChange;
@@ -1672,11 +1689,10 @@ export function Canvas({
     if (moveDragRef.current) return;
     const rf = rfRef.current;
     if (!rf) return;
-    const detach =
-      modeNow === "move" ||
-      nodesRef.current.find((n) => n.id === nodeId)?.data.kind === "WIRELABEL";
     const movingLabel =
       nodesRef.current.find((n) => n.id === nodeId)?.data.kind === "WIRELABEL";
+    // Labels keep their invisible stub; Move-tool detach must not cut the rail.
+    const detach = modeNow === "move" && !movingLabel;
 
     const grabPoint = rf.screenToFlowPosition({ x: clientX, y: clientY });
     const startClient = { x: clientX, y: clientY };
@@ -1735,13 +1751,12 @@ export function Canvas({
       const cur = inst.screenToFlowPosition({ x: ev.clientX, y: ev.clientY });
       const dx = cur.x - drag.startFlow.x;
       const dy = cur.y - drag.startFlow.y;
-      // One snapped delta for the whole group (rigid — no sticky end).
-      const o0 = drag.origins[0]!;
-      const snapped = snapPoint({ x: o0.x + dx, y: o0.y + dy }, SCHEMATIC_GRID);
-      // Grid only — wire/peer magnets were stealing the drop position.
-      // Attach/splice still runs after drop from the user's snapped point.
-      const sdx = snapped.x - o0.x;
-      const sdy = snapped.y - o0.y;
+      // Snap the *delta*, not absolute origin. Tip nodes sit off-grid
+      // (pin − TIP_SIZE/2); snapping o0+dx yanked the wire when the user
+      // returned to the start — free tip missed the pin and stayed dangling.
+      const grid = movingLabel ? 4 : SCHEMATIC_GRID;
+      const sdx = snapCoord(dx, grid);
+      const sdy = snapCoord(dy, grid);
       onNodesChangeRef.current(
         drag.origins.map((o) => ({
           type: "position" as const,
@@ -1883,10 +1898,9 @@ export function Canvas({
         const cur = inst.screenToFlowPosition({ x: ev.clientX, y: ev.clientY });
         const dx = cur.x - drag.startFlow.x;
         const dy = cur.y - drag.startFlow.y;
-        const o0 = drag.origins[0]!;
-        const snapped = snapPoint({ x: o0.x + dx, y: o0.y + dy }, SCHEMATIC_GRID);
-        const sdx = snapped.x - o0.x;
-        const sdy = snapped.y - o0.y;
+        // Same as part Move: snap delta so "put it back" is truly zero offset.
+        const sdx = snapCoord(dx, SCHEMATIC_GRID);
+        const sdy = snapCoord(dy, SCHEMATIC_GRID);
         onNodesChangeRef.current(
           drag.origins.map((o) => ({
             type: "position" as const,
@@ -1985,6 +1999,8 @@ export function Canvas({
       setMoveHint(null);
       if (!armed) {
         onSelectEdgeRef.current(edgeId, grabPoint);
+      } else {
+        onWirePathCommitRef.current?.(edgeId);
       }
     };
 
@@ -2010,6 +2026,30 @@ export function Canvas({
       // Never start Move/Drag from a dangling wire tip.
       if (nodeEl.querySelector(".component-node.tip-node")) return;
 
+      // Wire under/near this part (e.g. horizontal on M1 drain) — drag the wire.
+      const rf = rfRef.current;
+      if (rf) {
+        const cursor = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+        const near = findNearestWireHit(
+          nodesRef.current,
+          edgesRef.current,
+          cursor,
+          14,
+          SCHEMATIC_GRID,
+        );
+        if (near && near.dist <= 12) {
+          e.preventDefault();
+          e.stopPropagation();
+          beginWireSegmentDrag(
+            near.edgeId,
+            e.clientX,
+            e.clientY,
+            isMultiSelectModifier(e),
+          );
+          return;
+        }
+      }
+
       e.preventDefault();
       e.stopPropagation();
       beginMoveDrag(id, e.clientX, e.clientY, isMultiSelectModifier(e));
@@ -2017,7 +2057,7 @@ export function Canvas({
 
     root.addEventListener("pointerdown", onDown, true);
     return () => root.removeEventListener("pointerdown", onDown, true);
-  }, [mode, beginMoveDrag]);
+  }, [mode, beginWireSegmentDrag, beginMoveDrag]);
 
   // Move / Drag: slide one wire segment or bend (ends stay attached).
   useEffect(() => {
@@ -2033,6 +2073,20 @@ export function Canvas({
       const t = e.target as HTMLElement | null;
       if (t?.closest?.(".wire-bend-handle, .wire-add-handle")) return;
       if (t?.closest?.(".react-flow__node, .component-pin, .react-flow__handle")) return;
+
+      // Wide wire hit area under a net name — move the label, don't jog the rail.
+      const rf = rfRef.current;
+      if (rf) {
+        const cursor = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+        const labelId = findNetLabelNear(nodesRef.current, cursor);
+        if (labelId) {
+          e.preventDefault();
+          e.stopPropagation();
+          beginMoveDrag(labelId, e.clientX, e.clientY, isMultiSelectModifier(e));
+          return;
+        }
+      }
+
       const edgeEl = t?.closest?.(".react-flow__edge") as HTMLElement | null;
       if (!edgeEl) return;
 
@@ -2046,7 +2100,7 @@ export function Canvas({
 
     root.addEventListener("pointerdown", onDown, true);
     return () => root.removeEventListener("pointerdown", onDown, true);
-  }, [mode, beginWireSegmentDrag]);
+  }, [mode, beginWireSegmentDrag, beginMoveDrag]);
 
   // Box-select marquee on empty canvas (Move + Drag — Explore is pan/zoom only).
   // Move + Shift: keep the older cut-move (sever wires in the box).
@@ -2269,6 +2323,108 @@ export function Canvas({
       root.removeEventListener("contextmenu", onContext, true);
     };
   }, [copyMarquee]);
+
+  // Delete mode: drag a box on empty canvas → delete parts/wires ≥70% covered.
+  // Click-to-delete on parts/wires stays (box only starts on empty pane).
+  useEffect(() => {
+    if (mode !== "delete") {
+      if (marqueeRef.current && !copyMarqueeRef.current) {
+        marqueeRef.current = null;
+        setMarquee(null);
+      }
+      return;
+    }
+    const root = canvasElRef.current;
+    if (!root) return;
+
+    const finishDelete = () => {
+      const draft = marqueeRef.current;
+      marqueeRef.current = null;
+      setMarquee(null);
+      if (!draft) return;
+      const rect = normalizeRect(draft.start, draft.end);
+      if (!rectMeaningful(rect)) return;
+      skipPaneClickRef.current = true;
+      onDeleteRegionRef.current?.(rect);
+    };
+
+    const onDown = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      if (placingRef.current) return;
+      if (moveDragRef.current) return;
+      if (copyMarqueeRef.current) return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.(".react-flow__controls, .react-flow__minimap, .wire-draft-hint")) {
+        return;
+      }
+      // Only start the box on empty pane so click-to-delete still works.
+      if (t?.closest?.(".react-flow__node, .react-flow__edge, .component-pin, .react-flow__handle")) {
+        return;
+      }
+      if (!t?.closest?.(".react-flow__pane, .react-flow__viewport")) return;
+
+      const rf = rfRef.current;
+      if (!rf) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      const startClient = { x: e.clientX, y: e.clientY };
+      const start = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+      marqueeRef.current = { start, end: start };
+      let painted = false;
+      let raf = 0;
+
+      const onMove = (moveEvent: MouseEvent) => {
+        const inst = rfRef.current;
+        const draft = marqueeRef.current;
+        if (!inst || !draft) return;
+        const end = inst.screenToFlowPosition({
+          x: moveEvent.clientX,
+          y: moveEvent.clientY,
+        });
+        if (pointsEqual(draft.end, end)) return;
+        const next = { ...draft, end };
+        marqueeRef.current = next;
+        const dragged = Math.hypot(
+          moveEvent.clientX - startClient.x,
+          moveEvent.clientY - startClient.y,
+        );
+        if (!painted && dragged < MOVE_DRAG_THRESHOLD) return;
+        painted = true;
+        if (raf) return;
+        raf = window.requestAnimationFrame(() => {
+          raf = 0;
+          const cur = marqueeRef.current;
+          if (cur) setMarquee(cur);
+        });
+      };
+
+      const onUp = () => {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+        if (raf) window.cancelAnimationFrame(raf);
+        finishDelete();
+        const swallowClick = (ev: MouseEvent) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          ev.stopImmediatePropagation();
+          window.removeEventListener("click", swallowClick, true);
+        };
+        window.addEventListener("click", swallowClick, true);
+        window.setTimeout(() => {
+          window.removeEventListener("click", swallowClick, true);
+        }, 0);
+      };
+
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    };
+
+    root.addEventListener("mousedown", onDown, true);
+    return () => {
+      root.removeEventListener("mousedown", onDown, true);
+    };
+  }, [mode]);
 
   // Copy mode: click part → copy immediately; Ctrl+click → add to highlight only.
   useEffect(() => {
@@ -2663,6 +2819,35 @@ export function Canvas({
           onSelectEdgeRef.current(edge.id, cursor);
           return;
         }
+        // Part bbox sits above edges (z-index). Prefer a wire under the click
+        // so a rail on M1's drain is selectable instead of always picking M1.
+        if (nodeId) {
+          const near = findNearestWireHit(
+            nodes,
+            edges,
+            cursor,
+            14,
+            SCHEMATIC_GRID,
+          );
+          if (near && near.dist <= 12) {
+            const edge = edges.find((e) => e.id === near.edgeId);
+            if (edge?.sourceHandle) {
+              const nets = extractNets(nodes, edges);
+              const net = nets.netOf(edge.source, edge.sourceHandle);
+              if (placeV(net, cursor, event)) {
+                event.preventDefault();
+                event.stopPropagation();
+                event.stopImmediatePropagation();
+                return;
+              }
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+            onSelectEdgeRef.current(near.edgeId, cursor);
+            return;
+          }
+        }
         return;
       }
       if (target?.closest?.(".react-flow__edge")) {
@@ -2772,6 +2957,30 @@ export function Canvas({
         }
         probeSelRef.current.toggleCurrent(refdes);
         return;
+      }
+
+      // Same as wire-hit handler: don't let the part steal a click on a wire
+      // that runs across this symbol (M1 drain rail, etc.).
+      const rf = rfRef.current;
+      if (rf) {
+        const cursor = rf.screenToFlowPosition({
+          x: event.clientX,
+          y: event.clientY,
+        });
+        const near = findNearestWireHit(
+          nodesRef.current,
+          edgesRef.current,
+          cursor,
+          14,
+          SCHEMATIC_GRID,
+        );
+        if (near && near.dist <= 12) {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          onSelectEdgeRef.current(near.edgeId, cursor);
+          return;
+        }
       }
 
       event.preventDefault();
@@ -3611,14 +3820,14 @@ export function Canvas({
         zoomOnDoubleClick={false}
         preventScrolling={!viewLocked}
         minZoom={0.15}
-        maxZoom={3}
+        maxZoom={6}
         deleteKeyCode={null}
         connectionMode={ConnectionMode.Loose}
         defaultEdgeOptions={defaultEdgeOptions}
         snapToGrid
         snapGrid={[SCHEMATIC_GRID, SCHEMATIC_GRID]}
         fitView
-        fitViewOptions={{ padding: 0.18, maxZoom: 2.5 }}
+        fitViewOptions={{ padding: 0.06, maxZoom: 5 }}
         proOptions={{ hideAttribution: true }}
         onInit={(instance) => {
           rfRef.current = instance;
@@ -3711,7 +3920,10 @@ export function Canvas({
           snapDotRef={snapDotElRef}
           anchor={wiring ? lastLocked(wiring) : null}
         />
-        <CutMarqueeOverlay rect={marqueeRect} />
+        <CutMarqueeOverlay
+          rect={marqueeRect}
+          variant={mode === "delete" ? "delete" : "default"}
+        />
         <JunctionOverlay
           junctions={wireMarks.junctions}
           crossings={wireMarks.crossings}

@@ -35,7 +35,14 @@ export function routePinToTipPoints(
     // Tip is behind the pin exit — do NOT horizontal-first through the body.
     return orthogonalPolyline(pinAwareOrthoPath(pinPt, tipPt, pinSide, null));
   }
-  return orthogonalPolyline([pinPt, exit, tipPt]);
+  // Keep the rail tap fixed: L along the tip's row/column, then into the pin
+  // (not a stretched pin-row horizontal that looks like the wire was dragged).
+  // left/right pin → vertical to tip.y, then across; top/bottom → horizontal
+  // to tip.x, then in.
+  if (pinSide === "left" || pinSide === "right") {
+    return orthogonalPolyline([pinPt, { x: pinPt.x, y: tipPt.y }, tipPt]);
+  }
+  return orthogonalPolyline([pinPt, { x: tipPt.x, y: pinPt.y }, tipPt]);
 }
 
 function distToSegment(p: Point, a: Point, b: Point): number {
@@ -91,6 +98,22 @@ export function computeEdgePolyline(
       return orthogonalPolyline(pinAwareOrthoPath(start, end));
     }
     if (srcIsTip !== tgtIsTip) {
+      // Prefer L on the tip's row/column (fixed rail tap), not pin-row stretch.
+      const tipPt = srcIsTip ? start : end;
+      const pinPt = srcIsTip ? end : start;
+      const pinSide = srcIsTip ? tgtSide : srcSide;
+      if (pinSide === "left" || pinSide === "right") {
+        const mid = { x: pinPt.x, y: tipPt.y };
+        return orthogonalPolyline(
+          srcIsTip ? [tipPt, mid, pinPt] : [pinPt, mid, tipPt],
+        );
+      }
+      if (pinSide === "top" || pinSide === "bottom") {
+        const mid = { x: tipPt.x, y: pinPt.y };
+        return orthogonalPolyline(
+          srcIsTip ? [tipPt, mid, pinPt] : [pinPt, mid, tipPt],
+        );
+      }
       return orthogonalPolyline(
         pinAwareOrthoPath(
           start,
@@ -295,7 +318,11 @@ export function dragWireSegment(
 
   if (horiz) {
     const y = snapCoord(cursor.y, grid);
-    if (Math.abs(y - p.y) < 0.5) return polyline;
+    // Snap back to the straight run — otherwise a near-return leaves a thin
+    // U that looks like a duplicate parallel wire + junction squares.
+    if (Math.abs(y - p.y) < grid) {
+      return orthogonalPolyline([...head, p, q, ...tail]);
+    }
     // Keep original end vertices of the run; insert the shifted bar between them.
     return orthogonalPolyline([
       ...head,
@@ -308,7 +335,9 @@ export function dragWireSegment(
   }
 
   const x = snapCoord(cursor.x, grid);
-  if (Math.abs(x - p.x) < 0.5) return polyline;
+  if (Math.abs(x - p.x) < grid) {
+    return orthogonalPolyline([...head, p, q, ...tail]);
+  }
   return orthogonalPolyline([
     ...head,
     p,

@@ -5,9 +5,17 @@ import { PALETTE_DND_MIME } from "../dnd";
 import { hasSymbol } from "../nodes/symbols/layout";
 import { SchematicSymbol } from "../nodes/symbols/SchematicSymbols";
 
+/**
+ * Title-case each word for palette display (Fixed Resistor, Pulse Generator).
+ * Keeps newlines for wrapping; capitalizes after spaces, hyphens, slashes, '('.
+ */
+function titleCaseLabel(label: string): string {
+  return label.replace(/(^|[\s\n/(-])([a-z])/g, (_, sep: string, ch: string) => sep + ch.toUpperCase());
+}
+
 /** Single-line label for titles/tooltips (palette may use \\n for wrapping). */
 function flatLabel(label: string): string {
-  return label.replace(/\n/g, " ");
+  return titleCaseLabel(label.replace(/\n/g, " "));
 }
 
 function kindMatchesQuery(kind: ComponentKind, q: string): boolean {
@@ -62,7 +70,7 @@ function PaletteItem({
       ) : (
         <span className="palette-glyph">{spec.glyph}</span>
       )}
-      <span className="palette-label">{spec.label}</span>
+      <span className="palette-label">{titleCaseLabel(spec.label)}</span>
     </button>
   );
 }

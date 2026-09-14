@@ -69,7 +69,7 @@ import {
   endpointLabel,
   findNodeByRefdes,
 } from "./llm/wireOps";
-import { applyCutMove, detachPartForMove, edgesCoveredByRect, nodesCoveredByRect, nodesInRect, reconnectPartsOnTips, reconnectTipsOnPins, type FlowRect } from "./wiring/cutMove";
+import { applyCutMove, detachPartForMove, edgesCoveredByRect, nodesCoveredByRect, nodesInRect, reconnectPartsOnTips, reconnectTipsOnPins, clipPolylineOutsideRect, type FlowRect } from "./wiring/cutMove";
 import { attachPartsToWires, attachNetNameToNearestPin } from "./wiring/insertOnWire";
 import {
   detachWireForMove,
@@ -80,6 +80,8 @@ import {
   planNearAlignPartNudge,
   promoteInlinePinTees,
   straightenWire,
+  attachFreeTipsToWires,
+  collapseMicroBends,
 } from "./wiring/wireMove";
 import {
   clearTipStubsOnPins,
@@ -88,6 +90,8 @@ import {
   collapseOnePassThroughTip,
   pruneGhostTipsOnPins,
   absorbTipsOntoPins,
+  mergeCoincidentTips,
+  pruneShortJunctionSpurs,
 } from "./wiring/tipCleanup";
 import { dissolveJunctionTip, wireMarkKey } from "./wiring/junctions";
 import {
@@ -112,6 +116,8 @@ import {
   planScissorWireDelete,
   removeDanglingOrTrailingEdges,
   trimEdgeEndsToJoins,
+  pruneDanglingJunctionStubs,
+  pruneShortPinStubs,
   type ScissorDeletePlan,
 } from "./wiring/normalizeWires";
 import {
@@ -306,6 +312,35 @@ export default function App() {
   const [showLibrary, setShowLibrary] = useState(false);
   const [netlistFloating, setNetlistFloating] = useState(false);
   const [simFloating, setSimFloating] = useState(false);
+  /** desktop ≥1480 · laptop ≥1100 · compact (phones/small laptops) <1100 */
+  const [viewport, setViewport] = useState<"desktop" | "laptop" | "compact">(() => {
+    if (typeof window === "undefined") return "desktop";
+    const w = window.innerWidth;
+    if (w < 1100) return "compact";
+    if (w < 1480) return "laptop";
+    return "desktop";
+  });
+  const [leftCollapsed, setLeftCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      const saved = localStorage.getItem("simulai-left-collapsed");
+      if (saved === "1") return true;
+      if (saved === "0") return false;
+    } catch { /* ignore */ }
+    return window.innerWidth < 1100;
+  });
+  const [rightCollapsed, setRightCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      const saved = localStorage.getItem("simulai-right-collapsed");
+      if (saved === "1") return true;
+      if (saved === "0") return false;
+    } catch { /* ignore */ }
+    // Laptops: collapse the crowded right stack by default so the canvas wins.
+    return window.innerWidth < 1480;
+  });
+  const userSizedRight = useRef(false);
+  const [paletteWidth, setPaletteWidth] = useState(280);
   const [rightWidth, setRightWidth] = useState(380);
   const [slotFr, setSlotFr] = useState({
     netlist: 1.2,
@@ -313,6 +348,50 @@ export default function App() {
     chat: 1.0,
     library: 0.55,
   });
+
+  useEffect(() => {
+    const syncLayout = () => {
+      const w = window.innerWidth;
+      const next: "desktop" | "laptop" | "compact" =
+        w < 1100 ? "compact" : w < 1480 ? "laptop" : "desktop";
+      setViewport(next);
+      if (next === "desktop") {
+        setPaletteWidth(leftCollapsed ? 44 : 280);
+        if (!userSizedRight.current) setRightWidth(rightCollapsed ? 44 : 380);
+        setSlotFr({ netlist: 1.2, sim: 1.0, chat: 1.0, library: 0.55 });
+      } else if (next === "laptop") {
+        setPaletteWidth(leftCollapsed ? 44 : 200);
+        if (!userSizedRight.current) setRightWidth(rightCollapsed ? 44 : 300);
+        setSlotFr({ netlist: 1.15, sim: 0.9, chat: 0.75, library: 0.5 });
+      } else {
+        setPaletteWidth(leftCollapsed ? 44 : 176);
+        if (!userSizedRight.current) setRightWidth(rightCollapsed ? 44 : 268);
+        setSlotFr({ netlist: 1.1, sim: 0.85, chat: 0.65, library: 0.45 });
+      }
+    };
+    syncLayout();
+    window.addEventListener("resize", syncLayout);
+    return () => window.removeEventListener("resize", syncLayout);
+  }, [leftCollapsed, rightCollapsed]);
+
+  const toggleLeftPanel = useCallback(() => {
+    setLeftCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("simulai-left-collapsed", next ? "1" : "0");
+      } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
+  const toggleRightPanel = useCallback(() => {
+    setRightCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("simulai-right-collapsed", next ? "1" : "0");
+      } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
   const rightColRef = useRef<HTMLDivElement>(null);
   const [canvasMode, setCanvasMode] = useState<CanvasMode>("explore");
   const canvasViewApiRef = useRef<CanvasViewApi | null>(null);
@@ -762,11 +841,13 @@ export default function App() {
   );
 
   const beginColResize = useCallback((e: React.PointerEvent) => {
+    if (rightCollapsed) return;
     e.preventDefault();
     const startX = e.clientX;
     const startW = rightWidth;
     const onMove = (ev: PointerEvent) => {
-      setRightWidth(Math.max(260, Math.min(720, startW - (ev.clientX - startX))));
+      userSizedRight.current = true;
+      setRightWidth(Math.max(240, Math.min(720, startW - (ev.clientX - startX))));
     };
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
@@ -774,7 +855,7 @@ export default function App() {
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
-  }, [rightWidth]);
+  }, [rightWidth, rightCollapsed]);
 
   const TIP_SIZE = 8;
   const newId = () => `n${++idCounter.current}`;
@@ -1283,9 +1364,11 @@ export default function App() {
       let nodesNow = nodesRef.current;
       let edgesNow = edgesRef.current;
       const detach =
-        Boolean(opts?.detach) ||
-        // Labels name a net; they must not rubber-band wires when relocated.
-        nodesNow.find((n) => n.id === nodeId)?.data.kind === "WIRELABEL";
+        // Net names float on an invisible stub — never sever/re-splice the rail
+        // (that felt laggy and jogged the wire when nudging the label).
+        nodesNow.find((n) => n.id === nodeId)?.data.kind === "WIRELABEL"
+          ? false
+          : Boolean(opts?.detach);
 
       // Multi-select: move the whole selected group of real parts together.
       let selectedParts = nodesNow.filter(
@@ -1377,6 +1460,30 @@ export default function App() {
         connectedMoveRef.current = moveIds.some((id) =>
           partHasLiveWire(nodesNow, edgesNow, id),
         );
+        // Clear waypoints on wires touching the group so unselected branches
+        // rubber-band as Ls from fixed taps (not frozen stretches).
+        const clearSet = new Set(
+          edgesNow
+            .filter((e) => idSet.has(e.source) || idSet.has(e.target))
+            .map((e) => e.id),
+        );
+        if (clearSet.size) {
+          const nextEdges = edgesNow.map((e) =>
+            clearSet.has(e.id)
+              ? {
+                  ...e,
+                  data: {
+                    ...(e.data as object),
+                    waypoints: [],
+                    directPath: true,
+                  },
+                }
+              : e,
+          );
+          edgesNow = nextEdges;
+          edgesRef.current = nextEdges;
+          flushSync(() => setEdges(nextEdges));
+        }
         return {
           moveIds,
           origins: nodesNow
@@ -1479,7 +1586,7 @@ export default function App() {
       ns = finalized.nodes;
       es = finalized.edges;
       // Sibling pins may still sit mid-rail after rotate — attach them.
-      const attached = attachPartsToWires(ns, es, [part.id]);
+      const attached = attachPartsToWires(ns, es, [part.id], undefined, newId);
       if (attached.attached) {
         ns = attached.nodes;
         es = attached.edges;
@@ -1529,6 +1636,8 @@ export default function App() {
     // Fresh copy-tool selection (highlight builds while in this mode).
     setNodes((ns) => ns.map((n) => (n.selected ? { ...n, selected: false } : n)));
     setEdges((es) => es.map((e) => (e.selected ? { ...e, selected: false } : e)));
+    // Copy is its own tool — leave Move/Drag/Wire so both aren't "on".
+    setCanvasMode("explore");
     setCopyMarquee(true);
   }, [setNodes, setEdges]);
 
@@ -1556,7 +1665,7 @@ export default function App() {
     const placed = mk(id, kind, alloc(kind), x, y, rotation, extra);
     let nextNodes = [...nodesRef.current, placed];
     let nextEdges = edgesRef.current;
-    const attached = attachPartsToWires(nextNodes, nextEdges, [id]);
+    const attached = attachPartsToWires(nextNodes, nextEdges, [id], undefined, newId);
     if (attached.attached) {
       // Do not run normalizeWires here — it rewrites waypoints and puts 16px
       // pin stubs back on a rail we just split (the stair-step "break").
@@ -1770,7 +1879,7 @@ export default function App() {
       const finalized = finalizePartRotate(nodesNow, edgesNow, moved);
       let ns = finalized.nodes;
       let es = finalized.edges;
-      const attached = attachPartsToWires(ns, es, [nodeId]);
+      const attached = attachPartsToWires(ns, es, [nodeId], undefined, newId);
       if (attached.attached) {
         ns = attached.nodes;
         es = attached.edges;
@@ -2466,14 +2575,37 @@ export default function App() {
       let ns = partRec.reconnected ? partRec.nodes : withPositions;
       let es = partRec.reconnected ? partRec.edges : edgesRef.current;
 
-      const tipRec = reconnectTipsOnPins(ns, es, movedIds);
+      const tipRec = reconnectTipsOnPins(ns, es, movedIds, 28);
       if (tipRec.reconnected) {
         ns = tipRec.nodes;
         es = tipRec.edges;
       }
 
+      // Free wire ends (Move peeled a segment) landing back on a rail / old T.
+      const freeTipIds = new Set(
+        movedIds.filter((id) => {
+          const n = ns.find((x) => x.id === id);
+          if (!n || n.data.kind !== "TIP") return false;
+          const deg = es.reduce(
+            (c, e) => c + (e.source === id || e.target === id ? 1 : 0),
+            0,
+          );
+          return deg === 1;
+        }),
+      );
+      let tipsOnRails = 0;
+      if (freeTipIds.size) {
+        const railHit = attachFreeTipsToWires(ns, es, freeTipIds, 8);
+        if (railHit.attached) {
+          ns = railHit.nodes;
+          es = railHit.edges;
+          tipsOnRails = railHit.attached;
+        }
+      }
+
       // Free pins landing on rails → per-pin T (or series insert above).
-      const attached = attachPartsToWires(ns, es, movedIds);
+      // Net names attach as invisible stubs (never series-split the rail).
+      const attached = attachPartsToWires(ns, es, movedIds, undefined, newId);
       if (attached.attached) {
         ns = attached.nodes;
         es = attached.edges;
@@ -2527,14 +2659,53 @@ export default function App() {
       ns = pruned.nodes;
       es = pruned.edges;
 
+      // Peel remnants: short free tails left on the old junction after Move-wire.
+      const stubClean = pruneDanglingJunctionStubs(ns, es, { onlyShort: true });
+      if (stubClean.removed) {
+        ns = stubClean.nodes;
+        es = stubClean.edges;
+      }
+
+      // Old T kept alive by a micro spur → ghost square mid-rail under L1.
+      const spurClean = pruneShortJunctionSpurs(ns, es, 40);
+      if (spurClean.removed) {
+        ns = spurClean.nodes;
+        es = spurClean.edges;
+      }
+
+      // Pin↔deg-1 tip micro stubs under D1 (false pin junction + overshoot).
+      const pinStubs = pruneShortPinStubs(ns, es, 40);
+      if (pinStubs.removed) {
+        ns = pinStubs.nodes;
+        es = pinStubs.edges;
+      }
+
+      // Collapse again after spur removal (old T often becomes pass-through).
+      const collapsed2 = collapsePassThroughTips(ns, es);
+      ns = collapsed2.nodes;
+      es = collapsed2.edges;
+
+      // Old T tip + new attach tip a few px apart → one junction square.
+      const coinc = mergeCoincidentTips(ns, es, 24);
+      if (coinc.merged) {
+        ns = coinc.nodes;
+        es = coinc.edges;
+      }
+
       const changed =
         partRec.reconnected ||
         tipRec.reconnected ||
+        tipsOnRails > 0 ||
         attached.attached > 0 ||
         labelPinned > 0 ||
         absorbed.changed > 0 ||
         ghosts.removed > 0 ||
-        collapsed.merged > 0;
+        collapsed.merged > 0 ||
+        stubClean.removed > 0 ||
+        spurClean.removed > 0 ||
+        pinStubs.removed > 0 ||
+        collapsed2.merged > 0 ||
+        coinc.merged > 0;
 
       nodesRef.current = ns;
       edgesRef.current = es;
@@ -2875,6 +3046,61 @@ export default function App() {
     [setEdges],
   );
 
+  /** Drag-slide finished: simplify doglegs and remove leftover mid-rail tips. */
+  const onWirePathCommit = useCallback(
+    (edgeId: string) => {
+      const nodesNow = nodesRef.current;
+      const edgesNow = edgesRef.current;
+      const edge = edgesNow.find((e) => e.id === edgeId);
+      if (!edge) return;
+
+      const poly = computeEdgePolyline(nodesNow, edge);
+      const simplified = collapseMicroBends(poly, 10);
+      const waypoints =
+        simplified.length > 2 ? simplified.slice(1, -1) : [];
+      let es = edgesNow.map((e) =>
+        e.id === edgeId
+          ? {
+              ...e,
+              data: {
+                ...(e.data as object),
+                waypoints,
+                directPath: true,
+              },
+            }
+          : e,
+      );
+
+      const collapsed = collapsePassThroughTips(nodesNow, es);
+      let ns = collapsed.nodes;
+      es = collapsed.edges;
+      const coinc = mergeCoincidentTips(ns, es, 24);
+      ns = coinc.nodes;
+      es = coinc.edges;
+      const stubs = pruneDanglingJunctionStubs(ns, es, { onlyShort: true });
+      ns = stubs.nodes;
+      es = stubs.edges;
+      const spurs = pruneShortJunctionSpurs(ns, es, 40);
+      ns = spurs.nodes;
+      es = spurs.edges;
+      const pinStubs = pruneShortPinStubs(ns, es, 40);
+      ns = pinStubs.nodes;
+      es = pinStubs.edges;
+      const collapsed2 = collapsePassThroughTips(ns, es);
+      ns = collapsed2.nodes;
+      es = collapsed2.edges;
+      const pruned = pruneOrphanTips(ns, es);
+      ns = pruned.nodes;
+      es = pruned.edges;
+
+      nodesRef.current = ns;
+      edgesRef.current = es;
+      setNodes(ns);
+      setEdges(es);
+    },
+    [setNodes, setEdges],
+  );
+
 
   const onMoveWireDisconnect = useCallback(
     (edgeId: string, opts?: { fromIndex: number; toIndex: number }) => {
@@ -3052,6 +3278,131 @@ export default function App() {
     );
   }, [armPasteFromIds, setNodes, setEdges]);
 
+  /**
+   * Delete-mode marquee (≥70% coverage, same as Copy):
+   * - Parts/tips mostly inside → removed
+   * - Wires mostly inside → removed, but any portion *outside* the box is kept
+   *   as a free tip↔tip stub (so a top rail above the box survives)
+   * - Remaining wires on deleted parts → detach (no stub litter from ≥70% wires)
+   */
+  const deleteCoveredRegion = useCallback(
+    (rect: FlowRect) => {
+      const ns = nodesRef.current;
+      const es = edgesRef.current;
+      const coveredNodes = new Set(
+        nodesCoveredByRect(ns, rect, 0.7).filter((id) => {
+          const n = ns.find((x) => x.id === id);
+          return Boolean(n && n.data.kind !== "TIP");
+        }),
+      );
+      const coveredTips = nodesCoveredByRect(ns, rect, 0.7).filter((id) => {
+        const n = ns.find((x) => x.id === id);
+        return n?.data.kind === "TIP";
+      });
+      const dropNodes = new Set([...coveredNodes, ...coveredTips]);
+
+      const coveredEdges = new Set(edgesCoveredByRect(ns, es, rect, 0.7));
+      for (const e of es) {
+        if (dropNodes.has(e.source) && dropNodes.has(e.target)) {
+          coveredEdges.add(e.id);
+        }
+      }
+
+      if (!dropNodes.size && !coveredEdges.size) return;
+
+      pushHistory();
+      let nextNs = ns;
+      let nextEs = es;
+
+      // Preserve wire geometry that sits outside the box before dropping ≥70% edges.
+      const keepTips: Node<ComponentData>[] = [];
+      const keepEdges: Edge[] = [];
+      const TIP = 8;
+      for (const e of nextEs) {
+        if (!coveredEdges.has(e.id)) continue;
+        const poly = computeEdgePolyline(nextNs, e);
+        const outside = clipPolylineOutsideRect(poly, rect);
+        for (const run of outside) {
+          const tipA = newId();
+          const tipB = newId();
+          const a = run[0]!;
+          const b = run[run.length - 1]!;
+          keepTips.push(
+            {
+              id: tipA,
+              type: "component",
+              position: { x: a.x, y: a.y - TIP / 2 },
+              data: { kind: "TIP", refdes: "", params: {} },
+              style: { width: TIP, height: TIP },
+              selected: false,
+              draggable: false,
+            },
+            {
+              id: tipB,
+              type: "component",
+              position: { x: b.x, y: b.y - TIP / 2 },
+              data: { kind: "TIP", refdes: "", params: {} },
+              style: { width: TIP, height: TIP },
+              selected: false,
+              draggable: false,
+            },
+          );
+          keepEdges.push({
+            id: `${tipA}t-${tipB}t-keep`,
+            type: "schematic",
+            source: tipA,
+            sourceHandle: "t",
+            target: tipB,
+            targetHandle: "t",
+            data: {
+              waypoints: run.length > 2 ? run.slice(1, -1) : [],
+              directPath: true,
+            },
+            selected: false,
+          });
+        }
+      }
+
+      nextEs = nextEs.filter((e) => !coveredEdges.has(e.id));
+
+      // Wires still attached to parts being deleted but mostly *outside* the box:
+      // detach so the outside run stays (tip at the old pin).
+      for (const id of coveredNodes) {
+        const part = nextNs.find((n) => n.id === id);
+        if (!part || part.data.kind === "WIRELABEL" || part.data.kind === "NODE") {
+          continue;
+        }
+        if (!nextEs.some((e) => e.source === id || e.target === id)) continue;
+        const det = detachPartForMove(nextNs, nextEs, id, newId);
+        nextNs = det.nodes;
+        nextEs = det.edges;
+      }
+
+      nextNs = [
+        ...nextNs.filter((n) => !dropNodes.has(n.id)),
+        ...keepTips,
+      ];
+      nextEs = [
+        ...nextEs.filter(
+          (e) => !dropNodes.has(e.source) && !dropNodes.has(e.target),
+        ),
+        ...keepEdges,
+      ];
+
+      const pruned = pruneOrphanTips(nextNs, nextEs);
+      const collapsed = collapsePassThroughTips(pruned.nodes, pruned.edges);
+      setNodes(collapsed.nodes);
+      setEdges(collapsed.edges);
+      const nParts = coveredNodes.size;
+      const nWires = coveredEdges.size;
+      setNetlistStatus(
+        `deleted ${nParts} part${nParts === 1 ? "" : "s"} · ${nWires} wire${nWires === 1 ? "" : "s"}`,
+      );
+      setNetlistStatusError(false);
+    },
+    [pushHistory, setNodes, setEdges],
+  );
+
   /** Ctrl+click wire while in copy mode — toggle without clearing parts. */
   const toggleSelectEdge = useCallback(
     (edgeId: string, multi: boolean) => {
@@ -3093,7 +3444,7 @@ export default function App() {
     let nextNodes = [...deselectedNodes, ...built.nodes];
     let nextEdges = [...deselectedEdges, ...built.edges];
     if (built.partIds.length) {
-      const attached = attachPartsToWires(nextNodes, nextEdges, built.partIds);
+      const attached = attachPartsToWires(nextNodes, nextEdges, built.partIds, undefined, newId);
       if (attached.attached) {
         const absorbed = absorbTipsOntoPins(attached.nodes, attached.edges);
         nextNodes = absorbed.nodes;
@@ -3148,13 +3499,17 @@ export default function App() {
     setEdges(collapsed.edges);
   }, [copySelection, pushHistory, setNodes, setEdges]);
 
-  /** Toolbar / Ctrl+C: copy selection immediately, else enter copy-marquee. */
+  /** Toolbar / Ctrl+C: copy selection immediately, else enter/exit copy mode. */
   const triggerCopy = useCallback(() => {
     if (copyMarquee) {
       const hasSel =
         nodesRef.current.some((n) => n.selected && n.data.kind !== "TIP") ||
         edgesRef.current.some((ed) => ed.selected);
-      if (hasSel) copySelection();
+      if (hasSel) {
+        copySelection();
+        return;
+      }
+      cancelCopyMarquee();
       return;
     }
     const hasSel =
@@ -3165,7 +3520,7 @@ export default function App() {
       return;
     }
     beginCopyMarquee();
-  }, [beginCopyMarquee, copyMarquee, copySelection]);
+  }, [beginCopyMarquee, cancelCopyMarquee, copyMarquee, copySelection]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -3181,7 +3536,11 @@ export default function App() {
         e.preventDefault();
         triggerCopy();
       }
-      else if (mod && e.key.toLowerCase() === "x") { e.preventDefault(); cutSelection(); }
+      else if (mod && e.key.toLowerCase() === "x") {
+        e.preventDefault();
+        // Enter / leave Delete mode (same as the trash toolbar button).
+        setCanvasModeAndClearPlace(canvasMode === "delete" ? "explore" : "delete");
+      }
       else if (e.key === "Escape" && copyMarquee) {
         e.preventDefault();
         cancelCopyMarquee();
@@ -3247,7 +3606,8 @@ export default function App() {
       cancelCopyMarquee,
       copyMarquee,
       copySelection,
-      cutSelection,
+      canvasMode,
+      setCanvasModeAndClearPlace,
       triggerCopy,
       nodes,
       placeKind,
@@ -3392,7 +3752,7 @@ export default function App() {
         // Free pins that landed on a rail (series insert / T-splice). No-op when
         // every pin is already wired — safe for keep-connected Drag. Needed when
         // a part has a free pin or when Drag was used to drop onto a wire.
-        const attached = attachPartsToWires(ns, es, [...movedParts]);
+        const attached = attachPartsToWires(ns, es, [...movedParts], undefined, newId);
         if (attached.attached) {
           ns = attached.nodes;
           es = attached.edges;
@@ -3591,23 +3951,35 @@ export default function App() {
       </header>
 
       <div
-        className={`mode-guide mode-guide-${canvasMode}${modeGuideOpen ? "" : " is-collapsed"}`}
+        className={`mode-guide mode-guide-${copyMarquee ? "copy" : canvasMode}${modeGuideOpen ? "" : " is-collapsed"}`}
         role="status"
       >
         <span className="mode-guide-badge">
-          {canvasMode === "explore"
-            ? "Explore"
-            : canvasMode === "wire"
-              ? "Wire"
-              : canvasMode === "delete"
-                ? "Delete"
-                : canvasMode === "move"
-                  ? "Move"
-                  : "Drag"}
+          {copyMarquee
+            ? "Copy"
+            : canvasMode === "explore"
+              ? "Explore"
+              : canvasMode === "wire"
+                ? "Wire"
+                : canvasMode === "delete"
+                  ? "Delete"
+                  : canvasMode === "move"
+                    ? "Move"
+                    : "Drag"}
         </span>
         {modeGuideOpen ? (
           <div className="mode-guide-content">
-            {canvasMode === "explore" ? (
+            {copyMarquee ? (
+              <>
+                <p className="mode-guide-lead">Copy parts and wires (separate from Move).</p>
+                <ul className="mode-guide-list">
+                  <li><kbd>Click</kbd> a part or wire to copy it · paste ghost follows the cursor</li>
+                  <li><kbd>Drag</kbd> a box to copy a region · <kbd>Ctrl</kbd>+click adds to the highlight</li>
+                  <li><kbd>Enter</kbd> copies the current highlight · left-click stamps the paste ghost</li>
+                  <li><kbd>Esc</kbd> or toolbar Copy again exits Copy mode · <kbd>M</kbd> <kbd>D</kbd> <kbd>W</kbd> switch to another tool</li>
+                </ul>
+              </>
+            ) : canvasMode === "explore" ? (
               <>
                 <p className="mode-guide-lead">Pan and zoom, or click to select parts and wires.</p>
                 <ul className="mode-guide-list">
@@ -3658,13 +4030,14 @@ export default function App() {
               </>
             ) : canvasMode === "delete" ? (
               <>
-                <p className="mode-guide-lead">Click anything to remove it (scissors cursor).</p>
+                <p className="mode-guide-lead">Click to remove, or drag a box to delete a region.</p>
                 <ul className="mode-guide-list">
                   <li><kbd>Click</kbd> a part, wire, or hollow <strong>wire end</strong> square to delete it</li>
+                  <li><kbd>Drag</kbd> a box on empty canvas — parts/wires mostly inside the box are deleted</li>
                   <li><kbd>Click</kbd> a filled junction square to unjoin (restores a crossing hop when possible)</li>
                   <li><kbd>Click</kbd> a crossing hop to hide it — wires stay as they are</li>
                   <li>Short stubs are easiest to remove by clicking the square at the end</li>
-                  <li><kbd>Esc</kbd> Explore · toolbar Delete toggles scissors off · <kbd>E</kbd> <kbd>W</kbd> <kbd>M</kbd> <kbd>D</kbd> switch tools · <kbd>Delete</kbd> / <kbd>Backspace</kbd> removes a selection</li>
+                  <li><kbd>Esc</kbd> Explore · toolbar Delete or <kbd>Ctrl</kbd>+X toggles scissors · <kbd>E</kbd> <kbd>W</kbd> <kbd>M</kbd> <kbd>D</kbd> switch tools · <kbd>Delete</kbd> / <kbd>Backspace</kbd> removes a selection</li>
                 </ul>
               </>
             ) : canvasMode === "move" ? (
@@ -3683,7 +4056,7 @@ export default function App() {
               <>
                 <p className="mode-guide-lead">Drag parts with wires still connected.</p>
                 <ul className="mode-guide-list">
-                  <li><kbd>Drag</kbd> a part — wires stay attached and follow</li>
+                  <li><kbd>Drag</kbd> a part — wires stay attached; unselected taps stay put and rubber-band as an L</li>
                   <li><kbd>Drag</kbd> empty canvas to box-select · <kbd>Ctrl</kbd>+drag adds to selection</li>
                   <li><kbd>Shift</kbd>+drag empty = cut wires in the box · <kbd>Click</kbd> empty = deselect</li>
                   <li><kbd>Click</kbd> a wire to select it · <kbd>Drag</kbd> a segment to slide it (pins stay attached)</li>
@@ -3697,15 +4070,17 @@ export default function App() {
           </div>
         ) : (
           <p className="mode-guide-collapsed-lead">
-            {canvasMode === "explore"
-              ? "Pan, select, stamp parts — click Tips for shortcuts"
-              : canvasMode === "wire"
-                ? "Draw wires — click Tips for shortcuts"
-                : canvasMode === "delete"
-                  ? "Click to remove — Tips for details"
-                  : canvasMode === "move"
-                    ? "Disconnect & move — Tips for details"
-                    : "Drag with wires attached — Tips for details"}
+            {copyMarquee
+              ? "Copy mode — click Tips for details"
+              : canvasMode === "explore"
+                ? "Pan, select, stamp parts — click Tips for shortcuts"
+                : canvasMode === "wire"
+                  ? "Draw wires — click Tips for shortcuts"
+                  : canvasMode === "delete"
+                    ? "Click or box-drag to delete — Tips for details"
+                    : canvasMode === "move"
+                      ? "Disconnect & move — Tips for details"
+                      : "Drag with wires attached — Tips for details"}
           </p>
         )}
         <button
@@ -3719,14 +4094,52 @@ export default function App() {
         </button>
       </div>
 
-      <div className="workspace" style={{ gridTemplateColumns: `280px 1fr ${rightWidth}px` }}>
-        <Palette
-          activeKind={placeKind}
-          pasting={Boolean(pasteClip)}
-          copying={copyMarquee}
-          commonlyUsed={commonlyUsed}
-          onPick={pickPlaceKind}
-        />
+      <div
+        className={[
+          "workspace",
+          viewport !== "desktop" ? "workspace-compact" : "",
+          leftCollapsed ? "workspace-left-collapsed" : "",
+          rightCollapsed ? "workspace-right-collapsed" : "",
+          `workspace-${viewport}`,
+        ]
+          .filter(Boolean)
+          .join(" ")}
+        style={{
+          gridTemplateColumns: `${leftCollapsed ? 44 : paletteWidth}px 1fr ${
+            rightCollapsed ? 44 : rightWidth
+          }px`,
+        }}
+      >
+        <aside className={`palette-shell${leftCollapsed ? " is-collapsed" : ""}`}>
+          {leftCollapsed ? (
+            <button
+              type="button"
+              className="panel-rail-btn"
+              title="Show parts library"
+              onClick={toggleLeftPanel}
+            >
+              Parts
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="panel-collapse-btn panel-collapse-btn-left"
+                title="Hide parts library (more canvas)"
+                onClick={toggleLeftPanel}
+              >
+                ⟨
+              </button>
+              <Palette
+                activeKind={placeKind}
+                pasting={Boolean(pasteClip)}
+                copying={copyMarquee}
+                commonlyUsed={commonlyUsed}
+                onPick={pickPlaceKind}
+              />
+            </>
+          )}
+        </aside>
 
         <div className="canvas-col">
           <SchematicTabBar
@@ -3754,20 +4167,29 @@ export default function App() {
               <>
                 <button
                   type="button"
+                  className={`ghost-btn${leftCollapsed ? "" : " ghost-btn-active"}`}
+                  onClick={toggleLeftPanel}
+                  title={leftCollapsed ? "Show parts library" : "Hide parts library"}
+                >
+                  {leftCollapsed ? "Parts" : "Hide parts"}
+                </button>
+                <button
+                  type="button"
+                  className={`ghost-btn${rightCollapsed ? "" : " ghost-btn-active"}`}
+                  onClick={toggleRightPanel}
+                  title={rightCollapsed ? "Show netlist / sim / chat" : "Hide right panels"}
+                >
+                  {rightCollapsed ? "Panels" : "Hide panels"}
+                </button>
+                <button
+                  type="button"
                   className="ghost-btn"
                   onClick={onSave}
                   title="Save all tabs to this browser (Ctrl+S)"
                 >
                   Save
                 </button>
-                <button
-                  type="button"
-                  className="ghost-btn"
-                  onClick={() => setProjectsOpen(true)}
-                  title="Named saves, open previous work, share with others"
-                >
-                  Projects…
-                </button>
+                {/* Temporarily hidden: Projects… */}
                 <button type="button" className="ghost-btn" onClick={onLoadClick} title="Open circuit or project JSON (Ctrl+O)">
                   Open
                 </button>
@@ -3787,14 +4209,7 @@ export default function App() {
                 >
                   Restore starter
                 </button>
-                <button
-                  type="button"
-                  className="ghost-btn"
-                  onClick={onLoadHbridgeExample}
-                  title="Load simplified H-bridge example (does not change the default starter)"
-                >
-                  Load H-bridge
-                </button>
+                {/* Temporarily hidden: Load H-bridge */}
                 <div className="theme-toggle" role="group" aria-label="Color theme">
                   <button
                     type="button"
@@ -3844,6 +4259,7 @@ export default function App() {
             copyMarquee={copyMarquee}
             onCopyRegion={selectCopyRegion}
             onCancelCopyMarquee={cancelCopyMarquee}
+            onDeleteRegion={deleteCoveredRegion}
             onToggleSelectEdge={toggleSelectEdge}
             onCopyPartImmediate={copyPartImmediate}
             onCopyEdgeImmediate={copyEdgeImmediate}
@@ -3858,6 +4274,7 @@ export default function App() {
             onWirePartial={onWirePartial}
             onTrimWire={trimSelectedWires}
             onWirePathUpdate={onWirePathUpdate}
+            onWirePathCommit={onWirePathCommit}
             onMoveWireDisconnect={onMoveWireDisconnect}
             onPushHistory={pushHistory}
             onReplace={replaceComponent}
@@ -3878,12 +4295,31 @@ export default function App() {
           />
         </div>
 
-        <div className="right-col" ref={rightColRef}>
+        <aside className={`right-shell${rightCollapsed ? " is-collapsed" : ""}`} ref={rightColRef}>
+          {rightCollapsed ? (
+            <button
+              type="button"
+              className="panel-rail-btn panel-rail-btn-right"
+              title="Show netlist, simulation, and assistant"
+              onClick={toggleRightPanel}
+            >
+              Panels
+            </button>
+          ) : (
+            <div className="right-col">
           <div
             className="col-resize"
             title="Drag to resize sidebar"
             onPointerDown={beginColResize}
           />
+          <button
+            type="button"
+            className="panel-collapse-btn panel-collapse-btn-right"
+            title="Hide right panels (more canvas)"
+            onClick={toggleRightPanel}
+          >
+            ⟩
+          </button>
           {!netlistFloating && (
             <div className="right-slot" style={{ flex: `${slotFr.netlist} 1 80px` }}>
               <NetlistPanel
@@ -3963,7 +4399,9 @@ export default function App() {
           <div className="right-slot" style={{ flex: `${slotFr.chat} 1 80px` }}>
             <ChatPanel onApplyOps={applyOpsSafe} getContext={getAssistantContext} />
           </div>
-        </div>
+            </div>
+          )}
+        </aside>
       </div>
 
       {netNameDialog && (

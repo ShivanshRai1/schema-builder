@@ -43,8 +43,8 @@ const MODES: {
     id: "delete",
     label: "Delete",
     glyph: "🗑",
-    title: "Delete (Del) — click parts or wires; with a selection, Delete removes it",
-    shortcut: "Del",
+    title: "Delete (Del / Ctrl+X) — click parts or wires; with a selection, Delete removes it",
+    shortcut: "Del / Ctrl+X",
   },
 ];
 
@@ -312,7 +312,8 @@ export function ModeToolbar({
   return (
     <div className="mode-toolbar" role="toolbar" aria-label="Canvas tools">
       {toolbarModes.map((m) => {
-        const active = mode === m.id;
+        // Copy is a separate tool — don't leave Move/Wire/etc. highlighted with it.
+        const active = !copyActive && mode === m.id;
         return (
           <button
             key={m.id}
@@ -348,8 +349,8 @@ export function ModeToolbar({
               <button
                 type="button"
                 className="mode-toolbar-view-btn mode-toolbar-cut"
-                title="Cut (Ctrl+X) — cut selected parts and wires"
-                aria-label="Cut (Ctrl+X)"
+                title="Cut — cut selected parts and wires"
+                aria-label="Cut"
                 onClick={onCut}
               >
                 <CutIcon />
@@ -359,8 +360,8 @@ export function ModeToolbar({
               <button
                 type="button"
                 className={`mode-toolbar-view-btn mode-toolbar-copy${copyActive ? " is-active" : ""}`}
-                title="Copy (Ctrl+C) — copy selection, or drag a box (≥70%)"
-                aria-label="Copy (Ctrl+C)"
+                title="Copy mode (Ctrl+C) — click a part/wire or drag a box; Esc exits"
+                aria-label="Copy mode (Ctrl+C)"
                 aria-pressed={copyActive}
                 onClick={onCopy}
               >

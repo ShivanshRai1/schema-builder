@@ -6,7 +6,7 @@ const MAX = 24;
 
 /**
  * Always shown first in “Commonly used” (R, C, L, D, sources, ground).
- * Session placements append after these, without duplicating them.
+ * Placement history from localStorage appends after these, without duplicating them.
  */
 export const COMMONLY_USED_PINNED: readonly ComponentKind[] = [
   "R",
@@ -25,28 +25,44 @@ function isRecordable(kind: ComponentKind): boolean {
   return Boolean(COMPONENT_SPECS[kind]);
 }
 
-/** Kinds placed this browser session (most recent first). */
+function parseKindList(raw: string | null): ComponentKind[] {
+  if (!raw) return [];
+  const parsed = JSON.parse(raw) as unknown;
+  if (!Array.isArray(parsed)) return [];
+  return parsed.filter(
+    (k): k is ComponentKind => typeof k === "string" && isRecordable(k as ComponentKind),
+  );
+}
+
+/** Kinds placed recently in this browser (most recent first). */
 export function readCommonlyUsed(): ComponentKind[] {
   try {
-    const raw = sessionStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (k): k is ComponentKind => typeof k === "string" && isRecordable(k as ComponentKind),
-    );
+    const local = parseKindList(localStorage.getItem(STORAGE_KEY));
+    if (local.length) return local;
+    // One-time migrate from the old sessionStorage key.
+    const legacy = parseKindList(sessionStorage.getItem(STORAGE_KEY));
+    if (legacy.length) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(legacy));
+      try {
+        sessionStorage.removeItem(STORAGE_KEY);
+      } catch {
+        /* ignore */
+      }
+      return legacy;
+    }
+    return [];
   } catch {
     return [];
   }
 }
 
 /**
- * Palette order: pinned basics first, then session history (excluding pinned duplicates).
+ * Palette order: pinned basics first, then placement history (excluding pinned duplicates).
  */
-export function mergeCommonlyUsed(session: readonly ComponentKind[]): ComponentKind[] {
+export function mergeCommonlyUsed(history: readonly ComponentKind[]): ComponentKind[] {
   const pinned = COMMONLY_USED_PINNED.filter(isRecordable);
   const pinnedSet = new Set(pinned);
-  const rest = session.filter((k) => isRecordable(k) && !pinnedSet.has(k));
+  const rest = history.filter((k) => isRecordable(k) && !pinnedSet.has(k));
   const dynamicSlots = Math.max(0, MAX - pinned.length);
   return [...pinned, ...rest.slice(0, dynamicSlots)];
 }
@@ -62,7 +78,7 @@ export function recordCommonlyUsed(...kinds: ComponentKind[]): ComponentKind[] {
   }
   if (!changed) return next;
   try {
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   } catch {
     /* ignore quota */
   }

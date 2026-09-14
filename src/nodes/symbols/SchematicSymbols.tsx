@@ -4,7 +4,7 @@ import { parseProductOps, parseSumSigns } from "../../model/mathBlocks";
 import { getSymbolLayout } from "./layout";
 
 const STROKE = "var(--symbol-stroke, #5eb0ff)";
-const SW = 2.05;
+const SW = 2.35;
 /** LTspice-like strokes: butt caps + miter joins — no gaps at vertices or past pins. */
 const STROKE_BUTT = {
   fill: "none" as const,

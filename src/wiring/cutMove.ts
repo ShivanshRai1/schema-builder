@@ -119,6 +119,120 @@ export function edgesCoveredByRect(
     .map((e) => e.id);
 }
 
+function pointInRect(p: Point, r: FlowRect, pad = 0.5): boolean {
+  return (
+    p.x >= r.x - pad &&
+    p.x <= r.x + r.w + pad &&
+    p.y >= r.y - pad &&
+    p.y <= r.y + r.h + pad
+  );
+}
+
+/** Intersection of segment AB with segment CD, or null. */
+function segIntersect(a: Point, b: Point, c: Point, d: Point): Point | null {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const ex = d.x - c.x;
+  const ey = d.y - c.y;
+  const den = dx * ey - dy * ex;
+  if (Math.abs(den) < 1e-9) return null;
+  const t = ((c.x - a.x) * ey - (c.y - a.y) * ex) / den;
+  const u = ((c.x - a.x) * dy - (c.y - a.y) * dx) / den;
+  if (t < -1e-6 || t > 1 + 1e-6 || u < -1e-6 || u > 1 + 1e-6) return null;
+  return { x: a.x + t * dx, y: a.y + t * dy };
+}
+
+/** Where AB crosses the border of `r`, ordered from A toward B. */
+function crossingsAlongSegment(a: Point, b: Point, r: FlowRect): Point[] {
+  const borders: [Point, Point][] = [
+    [
+      { x: r.x, y: r.y },
+      { x: r.x + r.w, y: r.y },
+    ],
+    [
+      { x: r.x, y: r.y + r.h },
+      { x: r.x + r.w, y: r.y + r.h },
+    ],
+    [
+      { x: r.x, y: r.y },
+      { x: r.x, y: r.y + r.h },
+    ],
+    [
+      { x: r.x + r.w, y: r.y },
+      { x: r.x + r.w, y: r.y + r.h },
+    ],
+  ];
+  const hits: { p: Point; t: number }[] = [];
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy || 1;
+  for (const [c, d] of borders) {
+    const p = segIntersect(a, b, c, d);
+    if (!p) continue;
+    const t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq;
+    hits.push({ p, t });
+  }
+  hits.sort((u, v) => u.t - v.t);
+  const out: Point[] = [];
+  for (const h of hits) {
+    if (
+      out.length === 0 ||
+      Math.hypot(h.p.x - out[out.length - 1]!.x, h.p.y - out[out.length - 1]!.y) > 0.5
+    ) {
+      out.push(h.p);
+    }
+  }
+  return out;
+}
+
+/**
+ * Contiguous polyline runs lying outside `r`. Segments that cross the border
+ * are clipped so outside stubs survive a ≥70% box-delete.
+ */
+export function clipPolylineOutsideRect(poly: Point[], r: FlowRect): Point[][] {
+  if (poly.length < 2) return [];
+  const runs: Point[][] = [];
+  let cur: Point[] = [];
+
+  const add = (p: Point) => {
+    if (
+      cur.length === 0 ||
+      Math.hypot(p.x - cur[cur.length - 1]!.x, p.y - cur[cur.length - 1]!.y) > 0.5
+    ) {
+      cur.push(p);
+    }
+  };
+  const endRun = () => {
+    if (cur.length >= 2) runs.push(cur);
+    cur = [];
+  };
+
+  for (let i = 0; i < poly.length - 1; i++) {
+    const a = poly[i]!;
+    const b = poly[i + 1]!;
+    const chain = [a, ...crossingsAlongSegment(a, b, r), b];
+    for (let j = 0; j < chain.length - 1; j++) {
+      const p0 = chain[j]!;
+      const p1 = chain[j + 1]!;
+      const mid = { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 };
+      if (pointInRect(mid, r, 0)) {
+        endRun();
+      } else {
+        add(p0);
+        add(p1);
+      }
+    }
+  }
+  endRun();
+  return runs.filter((run) => {
+    let len = 0;
+    for (let i = 0; i < run.length - 1; i++) {
+      len += Math.hypot(run[i + 1]!.x - run[i]!.x, run[i + 1]!.y - run[i]!.y);
+    }
+    return len >= 8;
+  });
+}
+
 export function grabSideFromPoint(node: Node<ComponentData>, p: Point): PinSide {
   const { w, h } = nodeSize(node);
   const left = node.position.x;
@@ -198,6 +312,82 @@ export function detachPartForMove(
 
   if (!connected.length) {
     return { nodes: nextNodes, edges, moveIds: [partId], didCut: false, cutCount: 0 };
+  }
+
+  // Net names only stamp a net — drop their invisible stubs. Do not freeze tip
+  // litter (that jogs the rail). If a label was wrongly series-spliced into a
+  // wire (A—label—B), restore A—B so the rail stays continuous.
+  if (part.data.kind === "WIRELABEL") {
+    const removeIds = new Set(connected.map((e) => e.id));
+    let nextEdges = edges.filter((e) => !removeIds.has(e.id));
+
+    if (connected.length === 2) {
+      const endOf = (
+        e: Edge,
+      ): { nodeId: string; handle: string } | null => {
+        if (e.source === partId) {
+          if (!e.targetHandle) return null;
+          return { nodeId: e.target, handle: e.targetHandle };
+        }
+        if (!e.sourceHandle) return null;
+        return { nodeId: e.source, handle: e.sourceHandle };
+      };
+      const a = endOf(connected[0]!);
+      const b = endOf(connected[1]!);
+      if (
+        a &&
+        b &&
+        !(a.nodeId === b.nodeId && a.handle === b.handle)
+      ) {
+        const towardLabel = (e: Edge): Point[] => {
+          const poly = computeEdgePolyline(nodes, e);
+          // other→label already ends at label; label→other must be reversed.
+          if (e.source === partId) return [...poly].reverse();
+          return poly;
+        };
+        const awayFromLabel = (e: Edge): Point[] => {
+          const poly = computeEdgePolyline(nodes, e);
+          if (e.source === partId) return poly;
+          return [...poly].reverse();
+        };
+        const p1 = towardLabel(connected[0]!);
+        const p2 = awayFromLabel(connected[1]!);
+        if (p1.length >= 2 && p2.length >= 2) {
+          const merged = [...p1.slice(0, -1), ...p2].filter(
+            (p, i, arr) =>
+              i === 0 ||
+              Math.hypot(p.x - arr[i - 1]!.x, p.y - arr[i - 1]!.y) > 0.5,
+          );
+          if (merged.length >= 2) {
+            const newEdge: Edge = {
+              id: `${a.nodeId}${a.handle}-${b.nodeId}${b.handle}`,
+              type: "schematic",
+              source: a.nodeId,
+              sourceHandle: a.handle,
+              target: b.nodeId,
+              targetHandle: b.handle,
+              data: {
+                waypoints: merged.length > 2 ? merged.slice(1, -1) : [],
+                directPath: true,
+              },
+              selected: false,
+            };
+            if (nextEdges.some((e) => e.id === newEdge.id)) {
+              newEdge.id = `${newEdge.id}-lbl`;
+            }
+            nextEdges = [...nextEdges, newEdge];
+          }
+        }
+      }
+    }
+
+    return {
+      nodes: nextNodes,
+      edges: nextEdges,
+      moveIds: [partId],
+      didCut: true,
+      cutCount: connected.length,
+    };
   }
 
   // Pin's current world point; the freezing tip sits exactly here so the wire
@@ -386,7 +576,9 @@ export function reconnectPartsOnTips(
 
   for (const id of movedIds) {
     const part0 = nextNodes.find((n) => n.id === id);
-    if (!part0 || part0.data.kind === "TIP") continue;
+    // Net names use attachWireLabelToWire — never absorb a dangling tip into the label
+    // (that would put the label in series and hide the rail).
+    if (!part0 || part0.data.kind === "TIP" || part0.data.kind === "WIRELABEL") continue;
     const spec = COMPONENT_SPECS[part0.data.kind];
     const consumed = new Set<string>();
     const singlePin = spec.pins.length === 1;

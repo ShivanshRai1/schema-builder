@@ -193,6 +193,10 @@ export function findWireJunctions(
   const pinPoints = new Map<string, Point>();
   for (const node of nodes) {
     if (node.data.kind === "TIP") continue;
+    // Net-name / node stamps sit on wires for naming only. Including their
+    // join pin here hides real T squares when the label rests on a junction
+    // (moving "vin" onto a tee made the filled square disappear).
+    if (node.data.kind === "WIRELABEL" || node.data.kind === "NODE") continue;
     for (const pin of COMPONENT_SPECS[node.data.kind].pins) {
       const pt = pinWorldPoint(node, pin.id);
       if (pt) {
@@ -266,14 +270,41 @@ export function findWireJunctions(
     crossings.push(edgeIds ? { ...p, edgeIds, hop } : { ...p, hop });
   };
 
-  // Shared TIP with 3+ *wire* edges → junction mark (not on a component pin).
-  // Degree 2 is an L-bend / through-splice — no filled square. Net-name stamps
-  // must not count (same as pinWireCount): otherwise label+L looks like a T.
+  // Shared TIP with 3+ *real* wire edges → junction mark.
+  // Short peel stubs (tip↔deg-1 free tip) must not inflate degree — they left
+  // "old" filled squares mid-rail after the branch moved.
+  const rawDeg = new Map<string, number>();
+  for (const e of edges) {
+    rawDeg.set(e.source, (rawDeg.get(e.source) ?? 0) + 1);
+    rawDeg.set(e.target, (rawDeg.get(e.target) ?? 0) + 1);
+  }
   const tipWireDegree = new Map<string, number>();
   for (const e of edges) {
-    const srcKind = nodes.find((n) => n.id === e.source)?.data.kind;
-    const tgtKind = nodes.find((n) => n.id === e.target)?.data.kind;
-    if (srcKind === "WIRELABEL" || tgtKind === "WIRELABEL") continue;
+    const src = nodes.find((n) => n.id === e.source);
+    const tgt = nodes.find((n) => n.id === e.target);
+    if (!src || !tgt) continue;
+    if (src.data.kind === "WIRELABEL" || tgt.data.kind === "WIRELABEL") continue;
+    const srcTip = src.data.kind === "TIP";
+    const tgtTip = tgt.data.kind === "TIP";
+    if (srcTip && tgtTip) {
+      const srcDeg = rawDeg.get(e.source) ?? 0;
+      const tgtDeg = rawDeg.get(e.target) ?? 0;
+      const freeIsSrc = srcDeg === 1 && tgtDeg >= 2;
+      const freeIsTgt = tgtDeg === 1 && srcDeg >= 2;
+      if (freeIsSrc || freeIsTgt) {
+        const poly = edgePolys.find((x) => x.edge.id === e.id)?.pts;
+        let len = 0;
+        if (poly) {
+          for (let i = 0; i < poly.length - 1; i++) {
+            len += Math.hypot(
+              poly[i + 1]!.x - poly[i]!.x,
+              poly[i + 1]!.y - poly[i]!.y,
+            );
+          }
+        }
+        if (len <= 40) continue;
+      }
+    }
     const bump = (id: string) =>
       tipWireDegree.set(id, (tipWireDegree.get(id) ?? 0) + 1);
     bump(e.source);
@@ -284,18 +315,45 @@ export function findWireJunctions(
     if (n.data.kind !== "TIP") continue;
     if ((tipWireDegree.get(n.id) ?? 0) < 3) continue;
     const pt = pinWorldPoint(n, "t");
-    if (pt) {
-      addJ(pt, n.id);
-      tipJunctionPts.push(pt);
-    }
+    if (!pt) continue;
+    // When a branch was Drag-slid, the tip node can stay put while the wire
+    // doglegs — the visual tee is where the shared stub ends (point 2), not
+    // the tip node (point 1). Same helper as multi-wire pins.
+    const related = edgePolys
+      .filter(
+        ({ edge: e }) => e.source === n.id || e.target === n.id,
+      )
+      .map((x) => x.pts);
+    const branch = branchPointFromPin(pt, related);
+    const markAt = branch ?? pt;
+    addJ(markAt, n.id, { allowPin: true });
+    tipJunctionPts.push(markAt);
+    // Also suppress ghosts at the tip node itself when the mark moved.
+    if (branch) tipJunctionPts.push(pt);
   }
-  // Geometric T detection can also fire on a short nub into the tip (draft
-  // finished a few px off the rail). One square at the tip is enough.
+  // Deg-2 leftover tips after peel — hide geometric marks that land on them.
+  const passThroughTipPts: Point[] = [];
+  for (const n of nodes) {
+    if (n.data.kind !== "TIP") continue;
+    if ((rawDeg.get(n.id) ?? 0) !== 2) continue;
+    if ((tipWireDegree.get(n.id) ?? 0) >= 3) continue;
+    const pt = pinWorldPoint(n, "t");
+    if (pt) passThroughTipPts.push(pt);
+  }
+  const nearPassThroughTip = (p: Point) =>
+    passThroughTipPts.some((t) => near(p, t, TOL + 4));
   const nearTipJunction = (p: Point) =>
     tipJunctionPts.some((t) => near(p, t, TOL + 6));
-  const addJGeom = (p: Point) => {
+  const addJGeom = (p: Point, opts?: { allowPin?: boolean }) => {
     if (nearTipJunction(p)) return;
-    addJ(p);
+    if (nearPassThroughTip(p)) return;
+    addJ(p, undefined, opts);
+  };
+
+  const tipDegreeOf = (edge: Edge, atStart: boolean) => {
+    const id = atStart ? edge.source : edge.target;
+    if (nodes.find((n) => n.id === id)?.data.kind !== "TIP") return -1;
+    return rawDeg.get(id) ?? 0;
   };
 
   // Multi-wire pin: mark the visual T where the shared stub splits into the
@@ -319,7 +377,8 @@ export function findWireJunctions(
       .map((x) => x.pts);
     const branch = branchPointFromPin(pin, related);
     if (branch) {
-      if (!nearTipJunction(branch)) addJ(branch);
+      // Branch may sit close to the pin (short stub into a tee) — still mark it.
+      if (!nearTipJunction(branch)) addJ(branch, undefined, { allowPin: true });
     } else addJ(pin, undefined, { allowPin: true });
   }
 
@@ -353,34 +412,62 @@ export function findWireJunctions(
       const bEnds = [B.pts[0]!, B.pts[B.pts.length - 1]!];
 
       // T-style: endpoint of one wire sits on the interior of the other.
-      // Same net → connected junction; different net → passing (not connected).
+      // Skip deg≥2 tip ends (real tee / pass-through). Allow pin ends and
+      // deg-1 free tips — the latter is the live Move-drag join square.
       if (!aIsLabel) {
-        for (const end of aEnds) {
-          if (onPolylineInterior(end, B.pts)) {
-            if (sameNet) addJGeom(end);
-            else addC(end, pair);
-          }
+        const d0 = tipDegreeOf(A.edge, true);
+        const d1 = tipDegreeOf(A.edge, false);
+        if ((d0 < 0 || d0 === 1) && onPolylineInterior(aEnds[0]!, B.pts)) {
+          if (sameNet) addJGeom(aEnds[0]!, { allowPin: true });
+          else addC(aEnds[0]!, pair);
+        }
+        if ((d1 < 0 || d1 === 1) && onPolylineInterior(aEnds[1]!, B.pts)) {
+          if (sameNet) addJGeom(aEnds[1]!, { allowPin: true });
+          else addC(aEnds[1]!, pair);
         }
       }
       if (!bIsLabel) {
-        for (const end of bEnds) {
-          if (onPolylineInterior(end, A.pts)) {
-            if (sameNet) addJGeom(end);
-            else addC(end, pair);
-          }
+        const d0 = tipDegreeOf(B.edge, true);
+        const d1 = tipDegreeOf(B.edge, false);
+        if ((d0 < 0 || d0 === 1) && onPolylineInterior(bEnds[0]!, A.pts)) {
+          if (sameNet) addJGeom(bEnds[0]!, { allowPin: true });
+          else addC(bEnds[0]!, pair);
+        }
+        if ((d1 < 0 || d1 === 1) && onPolylineInterior(bEnds[1]!, A.pts)) {
+          if (sameNet) addJGeom(bEnds[1]!, { allowPin: true });
+          else addC(bEnds[1]!, pair);
         }
       }
 
       // Same-net elbow on a rail: e.g. M1 source drops to the ground bus then
       // runs to GND — the corner is a visual T but not a polyline endpoint.
+      // Skip only when edges share a TIP node (Drag dogleg on a split rail).
+      // Shared *pin* endpoints must still mark the elbow — otherwise a
+      // cross-wire snapped onto M1/D1 pins loses its T squares near the part.
+      // Do NOT allowPin here: dogleg corners near pins were stacking ghost squares.
       if (sameNet && !aIsLabel && !bIsLabel) {
-        for (let vi = 1; vi < A.pts.length - 1; vi++) {
-          const v = A.pts[vi]!;
-          if (onPolylineInterior(v, B.pts)) addJGeom(v);
-        }
-        for (let vi = 1; vi < B.pts.length - 1; vi++) {
-          const v = B.pts[vi]!;
-          if (onPolylineInterior(v, A.pts)) addJGeom(v);
+        const shareTipNode =
+          (A.edge.source === B.edge.source ||
+            A.edge.source === B.edge.target ||
+            A.edge.target === B.edge.source ||
+            A.edge.target === B.edge.target) &&
+          (() => {
+            const sharedIds = [A.edge.source, A.edge.target].filter(
+              (id) => id === B.edge.source || id === B.edge.target,
+            );
+            return sharedIds.some(
+              (id) => nodes.find((n) => n.id === id)?.data.kind === "TIP",
+            );
+          })();
+        if (!shareTipNode) {
+          for (let vi = 1; vi < A.pts.length - 1; vi++) {
+            const v = A.pts[vi]!;
+            if (onPolylineInterior(v, B.pts)) addJGeom(v);
+          }
+          for (let vi = 1; vi < B.pts.length - 1; vi++) {
+            const v = B.pts[vi]!;
+            if (onPolylineInterior(v, A.pts)) addJGeom(v);
+          }
         }
       }
 
@@ -413,10 +500,20 @@ export function findWireJunctions(
           // Endpoint of one on interior of the other (caught above too, but
           // orthoCross can also hit exactly at the tip).
           if (onAEnd && onInterior(hit, b1, b2)) {
-            if (sameNet) addJGeom(hit);
+            const tipDeg =
+              near(hit, aEnds[0]!)
+                ? tipDegreeOf(A.edge, true)
+                : tipDegreeOf(A.edge, false);
+            if (tipDeg >= 2) continue;
+            if (sameNet) addJGeom(hit, { allowPin: true });
             else addC(hit, pair, hop);
           } else if (onBEnd && onInterior(hit, a1, a2)) {
-            if (sameNet) addJGeom(hit);
+            const tipDeg =
+              near(hit, bEnds[0]!)
+                ? tipDegreeOf(B.edge, true)
+                : tipDegreeOf(B.edge, false);
+            if (tipDeg >= 2) continue;
+            if (sameNet) addJGeom(hit, { allowPin: true });
             else addC(hit, pair, hop);
           }
         }

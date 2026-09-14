@@ -319,6 +319,15 @@ export function collapsePassThroughTips(
       continue;
     }
 
+    // Net-name stubs share the tip electrically but must not be collapsed into
+    // the rail (that series-splices the label and hides/jogs the wire).
+    const aKind = nextNodes.find((n) => n.id === a.nodeId)?.data.kind;
+    const bKind = nextNodes.find((n) => n.id === b.nodeId)?.data.kind;
+    if (aKind === "WIRELABEL" || bKind === "WIRELABEL") {
+      skipTips.add(tip.id);
+      continue;
+    }
+
     // Digon (two edges tip↔same end): keep the longer path, drop the shorter.
     // Never drop both — that wiped wires after tip-extend onto the same rail.
     if (a.nodeId === b.nodeId && a.handle === b.handle) {
@@ -383,27 +392,160 @@ export function collapsePassThroughTips(
   return { nodes: pruned.nodes, edges: pruned.edges, merged };
 }
 
+/**
+ * Merge TIP nodes that sit on top of each other (Move peel + reattach often
+ * leaves the old junction and a new one a few pixels apart).
+ */
+export function mergeCoincidentTips(
+  nodes: Node<ComponentData>[],
+  edges: Edge[],
+  tol = 12,
+): { nodes: Node<ComponentData>[]; edges: Edge[]; merged: number } {
+  let nextNodes = nodes;
+  let nextEdges = edges;
+  let merged = 0;
+  let guard = 0;
+
+  while (guard++ < 32) {
+    const tips = nextNodes.filter((n) => n.data.kind === "TIP");
+    let pair: [string, string] | null = null;
+    for (let i = 0; i < tips.length && !pair; i++) {
+      const a = tips[i]!;
+      const pa = pinWorldPoint(a, "t");
+      if (!pa) continue;
+      for (let j = i + 1; j < tips.length; j++) {
+        const b = tips[j]!;
+        const pb = pinWorldPoint(b, "t");
+        if (!pb) continue;
+        if (Math.hypot(pa.x - pb.x, pa.y - pb.y) <= tol) {
+          pair = [a.id, b.id];
+          break;
+        }
+      }
+    }
+    if (!pair) break;
+
+    const [idA, idB] = pair;
+    const deg = tipDegree(nextEdges);
+    const degA = deg.get(idA) ?? 0;
+    const degB = deg.get(idB) ?? 0;
+    // Keep the busier tip (real T); fold the other into it.
+    const keepId = degA >= degB ? idA : idB;
+    const dropId = keepId === idA ? idB : idA;
+
+    // Avoid creating a self-loop edge keep↔keep.
+    const remapped: Edge[] = [];
+    const seen = new Set<string>();
+    for (const e of nextEdges) {
+      let source = e.source === dropId ? keepId : e.source;
+      let target = e.target === dropId ? keepId : e.target;
+      if (source === dropId || target === dropId) continue;
+      if (source === target && e.sourceHandle === e.targetHandle) continue;
+      if (source === keepId && target === keepId) continue;
+      const key = `${source}:${e.sourceHandle ?? ""}>${target}:${e.targetHandle ?? ""}`;
+      const keyRev = `${target}:${e.targetHandle ?? ""}>${source}:${e.sourceHandle ?? ""}`;
+      if (seen.has(key) || seen.has(keyRev)) continue;
+      seen.add(key);
+      remapped.push(
+        source !== e.source || target !== e.target
+          ? {
+              ...e,
+              id: `${source}${e.sourceHandle}-${target}${e.targetHandle}`,
+              source,
+              target,
+              data: { ...(e.data as object), waypoints: [], directPath: true },
+            }
+          : e,
+      );
+    }
+    nextEdges = remapped;
+    nextNodes = nextNodes.filter((n) => n.id !== dropId);
+    merged++;
+  }
+
+  if (!merged) return { nodes, edges, merged: 0 };
+  const collapsed = collapsePassThroughTips(nextNodes, nextEdges);
+  const pruned = pruneOrphanTips(collapsed.nodes, collapsed.edges);
+  return {
+    nodes: pruned.nodes,
+    edges: pruned.edges,
+    merged: merged + collapsed.merged,
+  };
+}
+
+/**
+ * Peel leftover short branches off a junction tip (deg≥3 → free tip).
+ * Move peel + reattach often leaves a micro stub on the *old* T; that keeps
+ * tip degree at 3 so a filled square stays mid-rail after the real branch moved.
+ */
+export function pruneShortJunctionSpurs(
+  nodes: Node<ComponentData>[],
+  edges: Edge[],
+  maxLen = 40,
+): { nodes: Node<ComponentData>[]; edges: Edge[]; removed: number } {
+  const nodesById = new Map(nodes.map((n) => [n.id, n] as const));
+  const deg = tipDegree(edges);
+  const dropEdge = new Set<string>();
+  const dropTip = new Set<string>();
+
+  for (const n of nodes) {
+    if (n.data.kind !== "TIP") continue;
+    if ((deg.get(n.id) ?? 0) < 3) continue;
+    const incident = edges.filter((e) => e.source === n.id || e.target === n.id);
+    for (const e of incident) {
+      const otherId = e.source === n.id ? e.target : e.source;
+      const other = nodesById.get(otherId);
+      if (!other || other.data.kind !== "TIP") continue;
+      if ((deg.get(otherId) ?? 0) !== 1) continue;
+      if (other.data.params?.moveAnchor === "1") continue;
+      const poly = computeEdgePolyline(nodes, e);
+      if (poly.length < 2 || polyLen(poly) > maxLen) continue;
+      dropEdge.add(e.id);
+      dropTip.add(otherId);
+    }
+  }
+
+  if (!dropEdge.size) return { nodes, edges, removed: 0 };
+  const nextEdges = edges.filter((e) => !dropEdge.has(e.id));
+  const nextNodes = nodes.filter((n) => !dropTip.has(n.id));
+  const collapsed = collapsePassThroughTips(nextNodes, nextEdges);
+  const pruned = pruneOrphanTips(collapsed.nodes, collapsed.edges);
+  return {
+    nodes: pruned.nodes,
+    edges: pruned.edges,
+    removed: dropEdge.size,
+  };
+}
+
 /** True when poly1 ends at tip and poly2 starts at tip on one straight H/V run. */
 function isStraightPassThrough(poly1: Point[], poly2: Point[]): boolean {
   if (poly1.length < 2 || poly2.length < 2) return false;
   const tip = poly1[poly1.length - 1]!;
   const before = poly1[poly1.length - 2]!;
   const after = poly2[1]!;
+  // Tip pins often sit several px off the rail after Move peel/reattach —
+  // a tight tol left deg-2 tips behind and ghost squares mid-vertical under L1.
+  const tol = 8;
+  if (Math.abs(before.y - after.y) < tol) return true;
+  if (Math.abs(before.x - after.x) < tol) return true;
   const h =
-    Math.abs(before.y - tip.y) < 0.6 && Math.abs(after.y - tip.y) < 0.6;
+    Math.abs(before.y - tip.y) < tol && Math.abs(after.y - tip.y) < tol;
   const v =
-    Math.abs(before.x - tip.x) < 0.6 && Math.abs(after.x - tip.x) < 0.6;
+    Math.abs(before.x - tip.x) < tol && Math.abs(after.x - tip.x) < tol;
   return h || v;
 }
 
 /**
  * Merge one tip only, and only if it is a straight pass-through.
  * Used after wire-draw partial/extend so we never scan the whole mesh.
+ * `force`: after Move peel, always collapse deg-2 tips that aren't digons —
+ * the branch is gone; leaving the tip parks a square at the old tee (point 1).
  */
 export function collapseOnePassThroughTip(
   nodes: Node<ComponentData>[],
   edges: Edge[],
   tipId: string,
+  opts?: { force?: boolean },
 ): { nodes: Node<ComponentData>[]; edges: Edge[]; merged: number } {
   const tip = nodes.find((n) => n.id === tipId);
   if (!tip || tip.data.kind !== "TIP") {
@@ -424,6 +566,12 @@ export function collapseOnePassThroughTip(
     return { nodes, edges, merged: 0 };
   }
 
+  const aKind = nodes.find((n) => n.id === a.nodeId)?.data.kind;
+  const bKind = nodes.find((n) => n.id === b.nodeId)?.data.kind;
+  if (aKind === "WIRELABEL" || bKind === "WIRELABEL") {
+    return { nodes, edges, merged: 0 };
+  }
+
   if (a.nodeId === b.nodeId && a.handle === b.handle) {
     // Digon: keep longer edge, never wipe both.
     const p1 = computeEdgePolyline(nodes, e1);
@@ -441,7 +589,7 @@ export function collapseOnePassThroughTip(
 
   const poly1 = orientPolyTowardTip(poly1raw, e1.source === tipId);
   const poly2 = orientPolyFromTip(poly2raw, e2.source === tipId);
-  if (!isStraightPassThrough(poly1, poly2)) {
+  if (!opts?.force && !isStraightPassThrough(poly1, poly2)) {
     return { nodes, edges, merged: 0 };
   }
 

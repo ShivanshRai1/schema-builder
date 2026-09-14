@@ -1099,6 +1099,51 @@ export function findDanglingJunctionStubs(
 }
 
 /**
+ * Remove short free tails hanging off a component pin (pin↔deg-1 TIP).
+ * Move peel often leaves a D1 stub under the pin; with the real horizontal
+ * also on that pin, junction detection draws a filled square on the pin.
+ */
+export function pruneShortPinStubs(
+  nodes: Node<ComponentData>[],
+  edges: Edge[],
+  maxLen = 40,
+): { nodes: Node<ComponentData>[]; edges: Edge[]; removed: number } {
+  const nodesById = new Map(nodes.map((n) => [n.id, n] as const));
+  const deg = tipDegree(edges);
+  const dropEdge = new Set<string>();
+  const dropTip = new Set<string>();
+
+  for (const e of edges) {
+    const src = nodesById.get(e.source);
+    const tgt = nodesById.get(e.target);
+    if (!src || !tgt) continue;
+    const srcTip = src.data.kind === "TIP";
+    const tgtTip = tgt.data.kind === "TIP";
+    if (srcTip === tgtTip) continue; // need exactly one tip
+    const tip = srcTip ? src : tgt;
+    const tipDeg = deg.get(tip.id) ?? 0;
+    if (tipDeg !== 1) continue;
+    if (tip.data.params?.moveAnchor === "1") continue;
+    const poly = computeEdgePolyline(nodes, e);
+    if (poly.length < 2) continue;
+    if (polylineLength(poly) > maxLen) continue;
+    dropEdge.add(e.id);
+    dropTip.add(tip.id);
+  }
+
+  if (!dropEdge.size) return { nodes, edges, removed: 0 };
+  const nextEdges = edges.filter((e) => !dropEdge.has(e.id));
+  const nextNodes = nodes.filter((n) => !dropTip.has(n.id));
+  const pruned = pruneOrphanTips(nextNodes, nextEdges);
+  const collapsed = collapsePassThroughTips(pruned.nodes, pruned.edges);
+  return {
+    nodes: collapsed.nodes,
+    edges: collapsed.edges,
+    removed: dropEdge.size,
+  };
+}
+
+/**
  * Remove dangling junction stubs (and their free TIP), then prune orphans.
  * Does not change connectivity of the main net — only drops free tails.
  * If `atTipIds` is set, only stubs attached to those junction TIP ids are removed.

@@ -318,34 +318,201 @@ export function insertPartsOnWires(
   return { nodes: nextNodes, edges: nextEdges, inserted };
 }
 
+const TIP_SIZE = 8;
+
+function makeRailTip(tipId: string, at: Point): Node<ComponentData> {
+  return {
+    id: tipId,
+    type: "component",
+    position: { x: at.x, y: at.y - TIP_SIZE / 2 },
+    data: { kind: "TIP", refdes: "", params: {} },
+    style: { width: TIP_SIZE, height: TIP_SIZE },
+    selected: false,
+    draggable: false,
+  };
+}
+
+function tipConnectPoint(n: Node<ComponentData>): Point {
+  return {
+    x: n.position.x,
+    y: n.position.y + ((n.style?.height as number | undefined) ?? TIP_SIZE) / 2,
+  };
+}
+
+/**
+ * Net-name on a rail: keep the through-wire intact (A—TIP—B) and attach the
+ * label with an invisible stub (TIP—label). Never series-splice the label into
+ * the rail — that hid both halves and left jog/loop geometry when moved.
+ */
+export function attachWireLabelToWire(
+  nodes: Node<ComponentData>[],
+  edges: Edge[],
+  labelId: string,
+  newId: () => string,
+  hitTol = HIT_TOL,
+): { nodes: Node<ComponentData>[]; edges: Edge[]; attached: boolean } {
+  const label = nodes.find((n) => n.id === labelId);
+  if (!label || label.data.kind !== "WIRELABEL") {
+    return { nodes, edges, attached: false };
+  }
+  const pinId = COMPONENT_SPECS.WIRELABEL.pins[0]!.id;
+  if (!pinIsFree(edges, labelId, pinId)) {
+    return { nodes, edges, attached: false };
+  }
+  const pt = pinWorldPoint(label, pinId);
+  if (!pt) return { nodes, edges, attached: false };
+
+  // Prefer an existing rail tip under the join (already naming / pass-through).
+  let bestTip: { tipId: string; at: Point; dist: number } | null = null;
+  for (const n of nodes) {
+    if (n.data.kind !== "TIP" || n.id === labelId) continue;
+    const at = tipConnectPoint(n);
+    const dist = Math.hypot(at.x - pt.x, at.y - pt.y);
+    if (dist > hitTol) continue;
+    const wireDeg = edges.reduce((c, e) => {
+      if (e.source !== n.id && e.target !== n.id) return c;
+      const other = e.source === n.id ? e.target : e.source;
+      const ok = nodes.find((x) => x.id === other)?.data.kind !== "WIRELABEL";
+      return c + (ok ? 1 : 0);
+    }, 0);
+    if (wireDeg < 2) continue;
+    if (!bestTip || dist < bestTip.dist) {
+      bestTip = { tipId: n.id, at, dist };
+    }
+  }
+
+  if (bestTip) {
+    // Keep the chip where the user put it — only join electrically.
+    const nextEdges = [
+      ...edges,
+      {
+        id: `${labelId}${pinId}-${bestTip.tipId}t`,
+        type: "schematic" as const,
+        source: labelId,
+        sourceHandle: pinId,
+        target: bestTip.tipId,
+        targetHandle: "t",
+        data: { waypoints: [], directPath: true },
+      },
+    ];
+    return { nodes, edges: nextEdges, attached: true };
+  }
+
+  let best: {
+    edge: Edge;
+    poly: Point[];
+    hit: ReturnType<typeof projectOntoPolyline>;
+  } | null = null;
+  for (const edge of edges) {
+    if (
+      (edge.source === labelId && edge.sourceHandle === pinId) ||
+      (edge.target === labelId && edge.targetHandle === pinId)
+    ) {
+      continue;
+    }
+    // Skip pure label stubs — they are not the rail.
+    const srcK = nodes.find((n) => n.id === edge.source)?.data.kind;
+    const tgtK = nodes.find((n) => n.id === edge.target)?.data.kind;
+    if (srcK === "WIRELABEL" || tgtK === "WIRELABEL") continue;
+
+    const candidate = bestPinHitOnEdge(nodes, edge, pt, hitTol);
+    if (!candidate) continue;
+    if (best && candidate.hit.dist >= best.hit.dist) continue;
+    best = candidate;
+  }
+  if (!best) return { nodes, edges, attached: false };
+
+  // Project onto the rail; do not yank the label onto the wire.
+  const at = joinOnSegment(best.poly, best.hit.segIndex, pt);
+  const tipId = newId();
+  const tip = makeRailTip(tipId, at);
+  const before = pathUntil(best.poly, best.hit.segIndex, at);
+  const after = pathFrom(best.poly, best.hit.segIndex, at);
+  const edge = best.edge;
+
+  const nextNodes = [...nodes, tip];
+  const nextEdges = [
+    ...edges.filter((e) => e.id !== edge.id),
+    {
+      ...edge,
+      id: `${edge.source}${edge.sourceHandle}-${tipId}t`,
+      target: tipId,
+      targetHandle: "t",
+      data: { waypoints: interiorWaypoints(before), directPath: true },
+      selected: false,
+    },
+    {
+      ...edge,
+      id: `${tipId}t-${edge.target}${edge.targetHandle}`,
+      source: tipId,
+      sourceHandle: "t",
+      data: { waypoints: interiorWaypoints(after), directPath: true },
+      selected: false,
+    },
+    {
+      id: `${labelId}${pinId}-${tipId}t`,
+      type: "schematic" as const,
+      source: labelId,
+      sourceHandle: pinId,
+      target: tipId,
+      targetHandle: "t",
+      data: { waypoints: [], directPath: true },
+    },
+  ];
+  return { nodes: nextNodes, edges: nextEdges, attached: true };
+}
+
 /**
  * Wire-attach on place/drop:
  * 1) Two-pin parts: series break when both pins land on the same wire.
  * 2) Any remaining free pin on a rail: T-splice (I1 one leg, GND, IGBT gate, …).
+ * 3) Net names: invisible stub onto a mid-rail tip (never series-split the rail).
  */
 export function attachPartsToWires(
   nodes: Node<ComponentData>[],
   edges: Edge[],
   partIds: readonly string[],
   hitTol = HIT_TOL,
+  newId?: () => string,
 ): { nodes: Node<ComponentData>[]; edges: Edge[]; attached: number } {
-  const ins = insertPartsOnWires(nodes, edges, partIds, hitTol);
+  const labelIds = partIds.filter(
+    (id) => nodes.find((n) => n.id === id)?.data.kind === "WIRELABEL",
+  );
+  const partOnly = partIds.filter((id) => !labelIds.includes(id));
+
+  const ins = insertPartsOnWires(nodes, edges, partOnly, hitTol);
   let ns = ins.inserted ? ins.nodes : nodes;
   let es = ins.inserted ? ins.edges : edges;
 
-  const tee = splicePinsOntoWires(ns, es, partIds, hitTol);
+  const tee = splicePinsOntoWires(ns, es, partOnly, hitTol);
   if (tee.spliced) {
     ns = tee.nodes;
     es = tee.edges;
   }
 
-  if (ins.inserted || tee.spliced) {
+  let labelsAttached = 0;
+  if (newId) {
+    for (const labelId of labelIds) {
+      const r = attachWireLabelToWire(ns, es, labelId, newId, hitTol);
+      if (r.attached) {
+        ns = r.nodes;
+        es = r.edges;
+        labelsAttached++;
+      }
+    }
+  }
+
+  if (ins.inserted || tee.spliced || labelsAttached) {
     const collapsed = collapsePassThroughTips(ns, es);
     const pruned = pruneOrphanTips(collapsed.nodes, collapsed.edges);
     ns = pruned.nodes;
     es = pruned.edges;
   }
-  return { nodes: ns, edges: es, attached: ins.inserted + tee.spliced };
+  return {
+    nodes: ns,
+    edges: es,
+    attached: ins.inserted + tee.spliced + labelsAttached,
+  };
 }
 
 /**
@@ -420,12 +587,14 @@ export function splicePinsOntoWires(
   for (const partId of partIds) {
     const pins = (() => {
       const p = nextNodes.find((n) => n.id === partId);
-      return p && p.data.kind !== "TIP" ? COMPONENT_SPECS[p.data.kind].pins : [];
+      // Net names attach via attachWireLabelToWire — never T-split the rail.
+      if (!p || p.data.kind === "TIP" || p.data.kind === "WIRELABEL") return [];
+      return COMPONENT_SPECS[p.data.kind].pins;
     })();
 
     for (const pin of pins) {
       const part = nextNodes.find((n) => n.id === partId);
-      if (!part || part.data.kind === "TIP") continue;
+      if (!part || part.data.kind === "TIP" || part.data.kind === "WIRELABEL") continue;
       if (!pinIsFree(nextEdges, partId, pin.id)) continue;
       const pt = pinWorldPoint(part, pin.id);
       if (!pt) continue;
