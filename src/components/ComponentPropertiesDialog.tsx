@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Node } from "@xyflow/react";
 import { COMPONENT_SPECS } from "../model/componentSpecs";
 import type { ComponentData, ComponentRotation, LabelPosition } from "../model/types";
@@ -230,6 +230,7 @@ export function ComponentPropertiesDialog({
   const firstFieldRef = useRef<HTMLInputElement | HTMLSelectElement | null>(null);
 
   const dialogW = 340;
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const [offset, setOffset] = useState(() => {
     const pad = 12;
     const vw = typeof window !== "undefined" ? window.innerWidth : 1200;
@@ -240,8 +241,16 @@ export function ComponentPropertiesDialog({
     };
   });
 
+  // Sync draft when opening or after DC/AC/Pulse mode swap.
+  // Do NOT reset position here — that made the dialog jump back toward the
+  // open-anchor every time the user switched Mode after dragging it up.
   useEffect(() => {
     setDraft(draftFromNode(node));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only remount draft on id/kind
+  }, [node.id, node.data.kind]);
+
+  // Re-anchor only when opening for a new node / click position.
+  useEffect(() => {
     const pad = 12;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
@@ -249,7 +258,22 @@ export function ComponentPropertiesDialog({
       left: Math.max(pad, Math.min(anchor.x + 8, vw - dialogW - pad)),
       top: Math.max(pad, Math.min(anchor.y + 8, vh - 360 - pad)),
     });
-  }, [node.id, node.data.kind, anchor.x, anchor.y]);
+  }, [node.id, anchor.x, anchor.y]);
+
+  // After Mode swap the dialog can grow; nudge up if it would clip the bottom.
+  // Never snap back to the original click anchor.
+  useLayoutEffect(() => {
+    const el = dialogRef.current;
+    if (!el) return;
+    const pad = 8;
+    const vh = window.innerHeight;
+    const h = el.getBoundingClientRect().height;
+    setOffset((o) => {
+      const maxTop = Math.max(pad, vh - h - pad);
+      if (o.top <= maxTop) return o;
+      return { ...o, top: maxTop };
+    });
+  }, [node.data.kind]);
 
   useEffect(() => {
     const el = firstFieldRef.current;
@@ -309,6 +333,7 @@ export function ComponentPropertiesDialog({
   return (
     <div className="comp-props-backdrop" role="presentation" onMouseDown={onCancel}>
       <div
+        ref={dialogRef}
         className="comp-props-dialog"
         role="dialog"
         aria-modal="true"

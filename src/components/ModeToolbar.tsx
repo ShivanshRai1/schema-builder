@@ -483,8 +483,8 @@ export function ModeToolbar({
             <button
               type="button"
               className={`mode-toolbar-view-btn mode-toolbar-sim-toggle${simRunning ? " is-pause" : " is-play"}`}
-              title={simRunning ? "Pause simulation" : simRunState === "paused" ? "Resume simulation" : "Run simulation (opens waveform window)"}
-              aria-label={simRunning ? "Pause" : "Play"}
+              title={simRunning ? "Pause simulation" : simRunState === "paused" ? "Resume simulation" : "Open simulation panel (set run time, then press Run)"}
+              aria-label={simRunning ? "Pause" : simRunState === "paused" ? "Resume" : "Open simulation"}
               onClick={() => {
                 if (simRunning) simControlRef.current?.pause();
                 else if (simRunState === "paused") simControlRef.current?.play();

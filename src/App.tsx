@@ -408,14 +408,17 @@ export default function App() {
   /** Last successful/failed sim waveforms — enables canvas probe hover when ok. */
   const [simResult, setSimResult] = useState<SimResult | null>(null);
 
-  /** Open the floating simulation window and (optionally) start a run. */
-  const openSimWindow = useCallback((andPlay: boolean) => {
+  /** Open the floating simulation window. Pass true only to auto-start a run. */
+  const openSimWindow = useCallback((andPlay = false) => {
     if (andPlay) {
       if (simFloating) {
         simControlRef.current?.play();
         return;
       }
       pendingSimPlayRef.current = true;
+    } else {
+      // Toolbar Play: open panel so the user can set .tran, then click Run there.
+      pendingSimPlayRef.current = false;
     }
     setSimFloating(true);
   }, [simFloating]);
@@ -629,6 +632,23 @@ export default function App() {
     [flushActiveTab, restore, clearTransientUi, requestFitView],
   );
 
+  const onRenameTab = useCallback((id: string, title: string) => {
+    const clean = title.trim() || "Circuit";
+    setTabMetas((m) => m.map((t) => (t.id === id ? { ...t, title: clean } : t)));
+    const docs = tabsRef.current;
+    if (!docs) return;
+    const doc = docs.find((d) => d.id === id);
+    if (doc) doc.title = clean;
+    // If the project still has the default name, follow the active tab rename.
+    if (id === activeTabIdRef.current) {
+      setProjectName((prev) => {
+        const n = prev.trim();
+        if (!n || /^untitled(\s+project)?$/i.test(n)) return clean;
+        return prev;
+      });
+    }
+  }, []);
+
   const onClearSchematic = useCallback(() => {
     if (nodesRef.current.length === 0 && edgesRef.current.length === 0) {
       setNetlistStatus("schematic already empty");
@@ -657,9 +677,20 @@ export default function App() {
     flushActiveTab();
     const docs = tabsRef.current ?? [];
     const metas = new Map(tabMetas.map((m) => [m.id, m.title]));
+    const activeId = activeTabIdRef.current;
+    const activeTabTitle =
+      (metas.get(activeId) ?? docs.find((d) => d.id === activeId)?.title ?? "").trim();
+    const rawName = projectName.trim();
+    const isDefaultName =
+      !rawName ||
+      /^untitled(\s+project)?$/i.test(rawName);
+    // Prefer an explicit project name; otherwise use the active tab title on Save.
+    const name = isDefaultName
+      ? activeTabTitle || "Untitled project"
+      : rawName;
     return buildWorkspaceFile({
-      name: projectName.trim() || "Untitled project",
-      activeTabId: activeTabIdRef.current,
+      name,
+      activeTabId: activeId,
       tabs: docs.map((d) =>
         tabFromSnapshot(d.id, metas.get(d.id) ?? d.title, d.snap, {
           hiddenCrossingKeys: d.hiddenCrossingKeys,
@@ -730,7 +761,7 @@ export default function App() {
 
     const remote = await saveSharedWorkspace(ws);
     if (remote.ok) {
-      setNetlistStatus(`saved “${remote.name}” for everyone`);
+      setNetlistStatus(`saved “${remote.name}”`);
       setNetlistStatusError(false);
       return;
     }
@@ -4158,6 +4189,7 @@ export default function App() {
             onSelect={activateTab}
             onNew={onNewTab}
             onClose={onCloseTab}
+            onRename={onRenameTab}
           />
           <ModeToolbar
             mode={canvasMode}
@@ -4167,7 +4199,7 @@ export default function App() {
             labelActive={placeKind === "WIRELABEL"}
             simControlRef={simControlRef}
             simRunState={simRunState}
-            onRunRequest={() => openSimWindow(true)}
+            onRunRequest={() => openSimWindow(false)}
             onEnsureSimWindow={() => openSimWindow(false)}
             onCopy={triggerCopy}
             copyActive={copyMarquee}

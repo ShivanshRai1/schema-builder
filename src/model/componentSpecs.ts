@@ -4,6 +4,7 @@ import {
   productPinsFromOps,
   sumPinsFromSigns,
 } from "./mathBlocks";
+import { normalizeVoltageStimulus } from "./spiceValue";
 
 // ---------------------------------------------------------------------------
 // Component spec registry — the single extension point.
@@ -91,6 +92,15 @@ const subckt =
   (order: string[]) =>
   (refdes: string, netOf: (p: string) => string, p: Record<string, string>): string =>
     `${refdes} ${order.map(netOf).join(" ")} ${p.model ?? "GENERIC"}`;
+
+/** TVS: vendor .subckt names need an X instance; placeholder .model names stay as D. */
+function tvsToSpice(refdes: string, a: string, k: string, modelRaw: string): string {
+  const model = modelRaw.trim() || "DTVS";
+  const placeholder = /^(DTVS|DTVSBI)$/i.test(model);
+  if (placeholder) return `${refdes} ${a} ${k} ${model}`;
+  const xref = /^x/i.test(refdes) ? refdes : `X${refdes}`;
+  return `${xref} ${a} ${k} ${model}`;
+}
 
 // horizontal 2-terminal pins
 const LR: PinSpec[] = [pin("a", "a", "left"), pin("b", "b", "right")];
@@ -293,11 +303,11 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
       A("theta", "Theta", "text", "", { unit: "1/s" }),
       A("phi", "Phi", "text", "", { unit: "deg" }),
       A("stimulus", "Raw stimulus", "text", "", {
-        hint: "If set (e.g. PWL(...)), overrides SINE fields in the netlist",
+        hint: "PWL(...) or bare points like: 0 27.8 0.01 151 … (auto-wrapped as PWL)",
       }),
     ],
     toSpice: (r, n, p) => {
-      const raw = (p.stimulus ?? "").trim();
+      const raw = normalizeVoltageStimulus((p.stimulus ?? "").trim());
       if (raw) return `${r} ${n("p")} ${n("n")} ${raw}`;
       return `${r} ${n("p")} ${n("n")} SINE(${p.voffset || "0"} ${p.vamp || "V"} ${p.freq || "0"} ${p.tdelay || "0"} ${p.theta || "0"} ${p.phi || "0"})`;
     },
@@ -427,13 +437,13 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
     kind: "DTVS", category: "Semiconductor", refdesPrefix: "D", label: "TVS unidirectional", glyph: "TVS", emits: true,
     pins: [pin("a", "A", "left"), pin("k", "K", "right")],
     attributes: [modelAttr("DTVS")],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("k")} ${p.model ?? "DTVS"}`,
+    toSpice: (r, n, p) => tvsToSpice(r, n("a"), n("k"), p.model ?? "DTVS"),
   },
   DTVSBI: {
     kind: "DTVSBI", category: "Semiconductor", refdesPrefix: "D", label: "TVS bidirectional", glyph: "TVS↔", emits: true,
     pins: [pin("a", "A", "left"), pin("k", "K", "right")],
     attributes: [modelAttr("DTVSBI")],
-    toSpice: (r, n, p) => `${r} ${n("a")} ${n("k")} ${p.model ?? "DTVSBI"}`,
+    toSpice: (r, n, p) => tvsToSpice(r, n("a"), n("k"), p.model ?? "DTVSBI"),
   },
   SICMOS: {
     kind: "SICMOS", category: "Semiconductor", refdesPrefix: "XM", label: "SiC MOSFET", glyph: "SiC", emits: true,

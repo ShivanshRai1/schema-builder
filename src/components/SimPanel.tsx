@@ -253,8 +253,13 @@ function makeLineChart(
     hidden: Set<string>;
     colorOffset?: number;
     showXTitle?: boolean;
-    getCursors: () => { a: number | null; b: number | null; hover: number | null };
-    onHoverTime?: (t: number | null) => void;
+    chartId: string;
+    getCursors: (chartId: string) => {
+      a: number | null;
+      b: number | null;
+      hover: number | null;
+    };
+    onHoverTime?: (chartId: string, t: number | null) => void;
     onPickTime?: (t: number, which: "a" | "b") => void;
     navDisposers: MutableRefObject<Array<() => void>>;
   },
@@ -262,6 +267,7 @@ function makeLineChart(
   const tick = "#b0b8c0";
   const grid = "rgba(180,190,200,0.28)";
   const off = opts.colorOffset ?? 0;
+  const chartId = opts.chartId;
   const chart = new Chart(canvas, {
     type: "line",
     data: {
@@ -305,7 +311,11 @@ function makeLineChart(
             color: tick,
             maxTicksLimit: 8,
             font: { size: 10 },
-            callback: (v) => formatTimeAxis(Number(v)),
+            callback: function (this: { max?: number; min?: number }, v: string | number) {
+              const span =
+                this.max != null && this.min != null ? this.max - this.min : undefined;
+              return formatTimeAxis(Number(v), span);
+            },
           },
           grid: { color: grid, lineWidth: 1, tickBorderDash: [2, 2] },
           border: { color: tick, width: 1 },
@@ -328,6 +338,8 @@ function makeLineChart(
           ticks: {
             color: tick,
             font: { size: 10 },
+            maxTicksLimit: 8,
+            callback: (v) => formatYTick(Number(v)),
           },
           grid: { color: grid, lineWidth: 1 },
           border: { color: tick, width: 1 },
@@ -346,6 +358,8 @@ function makeLineChart(
                 ticks: {
                   color: tick,
                   font: { size: 10 },
+                  maxTicksLimit: 8,
+                  callback: (v: string | number) => formatYTick(Number(v)),
                 },
                 grid: { drawOnChartArea: false },
                 border: { color: tick, width: 1 },
@@ -354,15 +368,20 @@ function makeLineChart(
           : {}),
       },
     },
-    plugins: [buildTraceLabelsPlugin(), buildCursorPlugin(opts.getCursors)],
+    plugins: [
+      buildTraceLabelsPlugin(),
+      buildCursorPlugin(() => opts.getCursors(chartId)),
+    ],
   });
 
   opts.navDisposers.current.push(
     attachPlotNav(chart, {
-      onHoverTime: opts.onHoverTime,
+      onHoverTime: (t) => opts.onHoverTime?.(chartId, t),
       onPickTime: opts.onPickTime,
     }),
   );
+  // First paint then snap Y to readable limits (fixes 1e-26 autoscale).
+  queueMicrotask(() => applyNiceAxisLimits(chart));
   return chart;
 }
 
@@ -471,14 +490,171 @@ function autoScaleChart(chart: Chart) {
     delete y1.options.max;
   }
   chart.update();
+  // After Chart.js computes raw bounds, snap tiny/noisy spans to a readable range.
+  applyNiceAxisLimits(chart);
 }
 
-function formatTimeAxis(t: number): string {
-  const a = Math.abs(t);
-  if (a >= 1) return `${t.toPrecision(4)} s`;
-  if (a >= 1e-3) return `${(t * 1e3).toPrecision(4)} ms`;
-  if (a >= 1e-6) return `${(t * 1e6).toPrecision(4)} µs`;
-  return `${(t * 1e9).toPrecision(4)} ns`;
+/** Round axis limits so flat / noise-level signals don't get 1e-26 ticks. */
+function niceLinearRange(
+  rawMin: number,
+  rawMax: number,
+  kind: "V" | "A" | "t",
+): { min: number; max: number } {
+  let min = rawMin;
+  let max = rawMax;
+  if (!Number.isFinite(min) || !Number.isFinite(max)) {
+    return kind === "A" ? { min: -1e-6, max: 1e-6 } : { min: -1, max: 1 };
+  }
+  if (min > max) {
+    const t = min;
+    min = max;
+    max = t;
+  }
+  const mid = (min + max) / 2;
+  let span = max - min;
+  const noise =
+    kind === "A" ? 1e-12 : kind === "V" ? 1e-9 : Math.max(1e-15, Math.abs(mid) * 1e-12);
+
+  if (!(span > noise)) {
+    if (kind === "t") {
+      const pad = Math.max(Math.abs(mid) * 0.05, 1e-6);
+      min = mid - pad;
+      max = mid + pad;
+      span = max - min;
+    } else if (Math.abs(mid) <= noise) {
+      return kind === "A" ? { min: -1e-6, max: 1e-6 } : { min: -1, max: 1 };
+    } else {
+      const pad = Math.max(Math.abs(mid) * 0.1, kind === "A" ? 1e-6 : 0.5);
+      min = mid - pad;
+      max = mid + pad;
+      span = max - min;
+    }
+  } else {
+    const pad = span * 0.05;
+    min -= pad;
+    max += pad;
+    span = max - min;
+  }
+
+  const rough = span / 8;
+  const exp = Math.floor(Math.log10(Math.max(rough, Number.EPSILON)));
+  const base = Math.pow(10, exp);
+  const err = rough / base;
+  const step =
+    err <= 1.5 ? base : err <= 3 ? 2 * base : err <= 7 ? 5 * base : 10 * base;
+  const niceMin = Math.floor(min / step) * step;
+  const niceMax = Math.ceil(max / step) * step;
+  if (niceMax > niceMin) return { min: niceMin, max: niceMax };
+  return { min, max };
+}
+
+function datasetYBounds(
+  chart: Chart,
+  axisId: string,
+): { min: number; max: number } | null {
+  let min = Infinity;
+  let max = -Infinity;
+  for (let i = 0; i < chart.data.datasets.length; i++) {
+    if (!chart.isDatasetVisible(i)) continue;
+    const ds = chart.data.datasets[i] as { yAxisID?: string; data?: unknown };
+    if ((ds.yAxisID ?? "y") !== axisId) continue;
+    const data = ds.data;
+    if (!Array.isArray(data)) continue;
+    for (const pt of data) {
+      const y = typeof pt === "number" ? pt : Number((pt as { y?: number })?.y);
+      if (!Number.isFinite(y)) continue;
+      if (y < min) min = y;
+      if (y > max) max = y;
+    }
+  }
+  if (!(min < Infinity && max > -Infinity)) return null;
+  return { min, max };
+}
+
+function applyNiceAxisLimits(chart: Chart) {
+  const y = chart.scales.y;
+  const y1 = chart.scales.y1;
+  const x = chart.scales.x;
+  let changed = false;
+
+  if (y) {
+    const b = datasetYBounds(chart, "y");
+    if (b) {
+      const titleText = String(
+        (y.options as { title?: { text?: string } }).title?.text ?? "V",
+      );
+      const kind: "V" | "A" = titleText === "A" ? "A" : "V";
+      const nice = niceLinearRange(b.min, b.max, kind);
+      y.options.min = nice.min;
+      y.options.max = nice.max;
+      changed = true;
+    }
+  }
+  if (y1) {
+    const b = datasetYBounds(chart, "y1");
+    if (b) {
+      const nice = niceLinearRange(b.min, b.max, "A");
+      y1.options.min = nice.min;
+      y1.options.max = nice.max;
+      changed = true;
+    }
+  }
+  if (x && Number.isFinite(x.min) && Number.isFinite(x.max)) {
+    const span = x.max - x.min;
+    if (!(span > 0)) {
+      const nice = niceLinearRange(x.min, x.max, "t");
+      x.options.min = nice.min;
+      x.options.max = nice.max;
+      changed = true;
+    }
+  }
+  if (changed) chart.update("none");
+}
+
+/** Compact Y tick labels (avoid 1.23e-26 style noise). */
+function formatYTick(v: number): string {
+  if (!Number.isFinite(v)) return "";
+  const a = Math.abs(v);
+  if (a < 1e-15) return "0";
+  const fmt = (n: number, digits: number) => {
+    const s = n.toFixed(digits);
+    return s.replace(/\.?0+$/, "");
+  };
+  if (a >= 1e3) return `${fmt(v / 1e3, 2)}k`;
+  if (a >= 100) return fmt(v, 0);
+  if (a >= 10) return fmt(v, 1);
+  if (a >= 1) return fmt(v, 2);
+  if (a >= 1e-3) return `${fmt(v * 1e3, 2)}m`;
+  if (a >= 1e-6) return `${fmt(v * 1e6, 2)}µ`;
+  if (a >= 1e-9) return `${fmt(v * 1e9, 2)}n`;
+  if (a >= 1e-12) return `${fmt(v * 1e12, 2)}p`;
+  return "0";
+}
+
+/** Time ticks share one unit based on the visible span (not per-tick). */
+function formatTimeAxis(t: number, spanHint?: number): string {
+  if (!Number.isFinite(t)) return "";
+  const span = spanHint != null && spanHint > 0 ? spanHint : Math.abs(t) || 1;
+  let scale = 1;
+  let unit = "s";
+  if (span >= 1) {
+    scale = 1;
+    unit = "s";
+  } else if (span >= 1e-3) {
+    scale = 1e3;
+    unit = "ms";
+  } else if (span >= 1e-6) {
+    scale = 1e6;
+    unit = "µs";
+  } else {
+    scale = 1e9;
+    unit = "ns";
+  }
+  const v = t * scale;
+  const a = Math.abs(v);
+  const digits = a >= 100 ? 0 : a >= 10 ? 1 : 2;
+  const s = v.toFixed(digits).replace(/\.?0+$/, "");
+  return `${s} ${unit}`;
 }
 
 function nearestY(s: SimSeries, t: number): number | null {
@@ -528,6 +704,7 @@ export function SimPanel({
   const probeChartRef = useRef<Chart | null>(null);
   const stackedRefs = useRef<(HTMLCanvasElement | null)[]>([]);
   const stackedChartsRef = useRef<Chart[]>([]);
+  const panelRootRef = useRef<HTMLDivElement | null>(null);
   const navDisposersRef = useRef<Array<() => void>>([]);
   const abortRef = useRef<AbortController | null>(null);
   const abortReasonRef = useRef<"pause" | "stop" | null>(null);
@@ -539,6 +716,10 @@ export function SimPanel({
   const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(() => new Set());
   const hiddenSeriesRef = useRef(hiddenSeries);
   hiddenSeriesRef.current = hiddenSeries;
+  /** Trace names toggled off on the Probe / waveform graph. */
+  const [hiddenProbeSeries, setHiddenProbeSeries] = useState<Set<string>>(() => new Set());
+  const hiddenProbeSeriesRef = useRef(hiddenProbeSeries);
+  hiddenProbeSeriesRef.current = hiddenProbeSeries;
   /** Stack applies to the Probe graph only. */
   const [plotLayout, setPlotLayout] = useState<PlotLayout>("overlay");
   const [exprDraft, setExprDraft] = useState("");
@@ -546,6 +727,10 @@ export function SimPanel({
   const [cursorT, setCursorT] = useState<number | null>(null);
   const cursorTRef = useRef<number | null>(null);
   cursorTRef.current = cursorT;
+  /** Which plot owns the live hover readout (not synced across graphs). */
+  const [hoverChartId, setHoverChartId] = useState<string | null>(null);
+  const hoverChartIdRef = useRef<string | null>(null);
+  hoverChartIdRef.current = hoverChartId;
   const [cursorA, setCursorA] = useState<number | null>(null);
   const [cursorB, setCursorB] = useState<number | null>(null);
   const cursorARef = useRef<number | null>(null);
@@ -566,10 +751,19 @@ export function SimPanel({
 
   const tranLine = (directives ?? []).find((d) => /^\.tran\b/i.test(d));
   const { step: tranStep, stop: tranStop } = parseTranLine(tranLine);
+  const tranStopRef = useRef<HTMLInputElement | null>(null);
 
   const updateTran = (step: string, stop: string) => {
     onDirectivesChange?.(setTranInDirectives(directives, step, stop));
   };
+
+  /** Controlled preset — boxes stay editable for any custom step/stop. */
+  const tranPreset =
+    tranStep === "1u" && (tranStop === "1m" || tranStop === "0.001")
+      ? "fast"
+      : tranStep === "250u" && (tranStop === "1" || tranStop === "1s")
+        ? "loaddump"
+        : "custom";
 
   const publishResult = (next: SimResult | null) => {
     setResult(next);
@@ -656,18 +850,62 @@ export function SimPanel({
     };
   }, []);
 
+  // Keep Chart.js canvases filling the panel when the floating window is resized.
+  useEffect(() => {
+    const el = panelRootRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+
+    const resizeAll = () => {
+      chartRef.current?.resize();
+      probeChartRef.current?.resize();
+      for (const c of stackedChartsRef.current) c.resize();
+    };
+
+    let raf = 0;
+    const schedule = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        raf = requestAnimationFrame(resizeAll);
+      });
+    };
+
+    const ro = new ResizeObserver(schedule);
+    ro.observe(el);
+    window.addEventListener("resize", schedule);
+    el.addEventListener("fw-resize", schedule);
+    schedule();
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      window.removeEventListener("resize", schedule);
+      el.removeEventListener("fw-resize", schedule);
+    };
+  }, []);
+
   useLayoutEffect(() => {
     disposeCharts();
 
     if (!result?.series.length) return;
 
     const cursorOpts = {
-      getCursors: () => ({
+      getCursors: (id: string) => ({
         a: cursorARef.current,
         b: cursorBRef.current,
-        hover: cursorTRef.current,
+        hover: hoverChartIdRef.current === id ? cursorTRef.current : null,
       }),
-      onHoverTime: setCursorT,
+      onHoverTime: (id: string, t: number | null) => {
+        if (t == null) {
+          if (hoverChartIdRef.current === id) {
+            hoverChartIdRef.current = null;
+            setHoverChartId(null);
+            setCursorT(null);
+          }
+          return;
+        }
+        hoverChartIdRef.current = id;
+        setHoverChartId(id);
+        setCursorT(t);
+      },
       onPickTime: (t: number, which: "a" | "b") => {
         if (which === "b") setCursorB(t);
         else setCursorA(t);
@@ -685,6 +923,7 @@ export function SimPanel({
       chartRef.current = makeLineChart(canvasRef.current, simSeries, simLabels, {
         dualAxis: hasV && hasI,
         hidden,
+        chartId: "sim",
         ...cursorOpts,
       });
     }
@@ -697,15 +936,17 @@ export function SimPanel({
 
     if (probed.length && plotLayout === "stacked") {
       const charts: Chart[] = [];
+      const probeHidden = hiddenProbeSeriesRef.current;
       probed.forEach((s, paneIdx) => {
         const canvas = stackedRefs.current[paneIdx];
         if (!canvas) return;
         charts.push(
           makeLineChart(canvas, [s], [s.name], {
             dualAxis: false,
-            hidden: new Set(),
+            hidden: probeHidden,
             colorOffset: paneIdx,
             showXTitle: paneIdx === probed.length - 1,
+            chartId: `stack-${paneIdx}`,
             ...cursorOpts,
           }),
         );
@@ -723,7 +964,8 @@ export function SimPanel({
         probed.map((s) => s.name),
         {
           dualAxis: hasV && hasI,
-          hidden: new Set(),
+          hidden: hiddenProbeSeriesRef.current,
+          chartId: "probe",
           ...cursorOpts,
         },
       );
@@ -735,7 +977,7 @@ export function SimPanel({
     chartRef.current?.update("none");
     probeChartRef.current?.update("none");
     for (const c of stackedChartsRef.current) c.update("none");
-  }, [cursorA, cursorB, cursorT]);
+  }, [cursorA, cursorB, cursorT, hoverChartId]);
 
   const probeModeOn = Boolean(probeSel?.probeMode);
   const simSeries: SimSeries[] = result?.series.length ? result.series : [];
@@ -761,8 +1003,34 @@ export function SimPanel({
       return next;
     });
   };
+
+  const toggleProbeSeries = (name: string) => {
+    setHiddenProbeSeries((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      const visible = !next.has(name);
+      const probeChart = probeChartRef.current;
+      if (probeChart) {
+        const idx = probeSeries.findIndex((d) => d.name === name);
+        if (idx >= 0) {
+          probeChart.setDatasetVisibility(idx, visible);
+          probeChart.update("none");
+        }
+      }
+      stackedChartsRef.current.forEach((c, i) => {
+        if (probeSeries[i]?.name === name) {
+          c.setDatasetVisibility(0, visible);
+          c.update("none");
+        }
+      });
+      return next;
+    });
+  };
   const busy = runState === "running";
   const hasChart = Boolean(result?.ok && result.series.length);
+  /** Probe pane only after Probe ON (or if traces already exist so turning Probe off keeps the plot). */
+  const showProbePane = Boolean(probeSel && (probeModeOn || probes.length > 0));
   const badge =
     result?.source === "fleet"
       ? "fleet"
@@ -828,51 +1096,82 @@ export function SimPanel({
   })();
 
   return (
-    <div className="sim-panel">
+    <div
+      ref={panelRootRef}
+      className={`sim-panel${busy ? " is-running" : ""}`}
+      aria-busy={busy}
+    >
       <div className="panel-header">
         <span className="sim-tabs">
           <span className="sim-tab on">Waveforms</span>
         </span>
+        <button
+          type="button"
+          className={`sim-run-btn${busy ? " is-running" : ""}`}
+          disabled={busy}
+          onClick={() => play()}
+          title="Run simulation with the .tran time set on the right"
+        >
+          {busy ? "Running…" : runState === "paused" ? "Resume" : "Run"}
+        </button>
+        <button
+          type="button"
+          className="sim-stop-btn"
+          disabled={runState === "idle"}
+          onClick={() => stop()}
+          title={runState === "idle" ? "Stop (idle)" : "Stop simulation"}
+        >
+          Stop
+        </button>
         <div className="panel-header-right">
           <>
-              <label className="sim-tran-fields" title="Transient analysis — written as .tran automatically">
-                <span className="sim-tran-label">Sim time</span>
+              <div
+                className="sim-tran-fields"
+                title="Writes .tran <step> <stop> into the netlist. Set time, then click Run."
+              >
+                <span className="sim-tran-label">.tran</span>
                 <input
                   className="sim-tran-input"
                   value={tranStep}
                   disabled={busy || !onDirectivesChange}
                   aria-label="Time step"
-                  title="Time step (e.g. 1u or 0.000250)"
+                  title="Step (e.g. 1u or 250u) — not the end time"
                   onChange={(e) => updateTran(e.target.value, tranStop)}
                 />
                 <span className="sim-tran-sep">→</span>
                 <input
+                  ref={tranStopRef}
                   className="sim-tran-input sim-tran-input-stop"
                   value={tranStop}
                   disabled={busy || !onDirectivesChange}
                   aria-label="Stop time"
-                  title="Stop time (e.g. 1m or 1 for 1 second)"
+                  title="Stop time — type any value (1m, 1, 10, …)"
                   onChange={(e) => updateTran(tranStep, e.target.value)}
                 />
                 <select
                   className="sim-tran-preset"
                   disabled={busy || !onDirectivesChange}
-                  value=""
+                  value={tranPreset}
                   aria-label="Simulation duration preset"
+                  title="Presets fill the boxes; Custom = edit them yourself. Run does not start until you click Run."
                   onChange={(e) => {
                     const v = e.target.value;
-                    e.target.value = "";
                     if (v === "fast") updateTran("1u", "1m");
-                    if (v === "loaddump") updateTran("250u", "1");
+                    else if (v === "loaddump") updateTran("250u", "1");
+                    else if (v === "custom") {
+                      // Keep current values; focus stop so the user can type a custom end time.
+                      window.setTimeout(() => {
+                        tranStopRef.current?.focus();
+                        tranStopRef.current?.select();
+                      }, 0);
+                    }
                   }}
                 >
-                  <option value="" disabled>
-                    Preset…
-                  </option>
                   <option value="fast">Quick (1 ms)</option>
                   <option value="loaddump">Load dump (1 s)</option>
+                  <option value="custom">Custom…</option>
                 </select>
-              </label>
+              </div>
               <select
                 className="sim-engine"
                 value={engine}
@@ -888,10 +1187,11 @@ export function SimPanel({
                 <button
                   type="button"
                   className={`sim-probe-btn${probeSel.probeMode ? " is-on" : ""}`}
+                  disabled={busy}
                   title={
                     probeSel.probeMode
                       ? "Probe ON — click schematic: wire=V, part=I, Ctrl+wire=differential"
-                      : "Enable Probe, then click the schematic to add traces"
+                      : "Show Probe / waveform pane and click the schematic to add traces"
                   }
                   aria-pressed={probeSel.probeMode}
                   onClick={() => probeSel.setProbeMode(!probeSel.probeMode)}
@@ -900,14 +1200,6 @@ export function SimPanel({
                   <span>{probeSel.probeMode ? "Probe ON" : "Probe"}</span>
                 </button>
               )}
-              <button
-                type="button"
-                className="ghost-btn ghost-btn-primary"
-                disabled={busy}
-                onClick={() => play()}
-              >
-                {busy ? "Running…" : runState === "paused" ? "Resume" : "Run"}
-              </button>
             </>
           {onPopOut && (
             <button
@@ -922,7 +1214,13 @@ export function SimPanel({
         </div>
       </div>
       <div className="sim-body">
-        {result && (
+        {busy && (
+          <div className="netlist-status sim-running-status" role="status" aria-live="polite">
+            <span className="sim-running-spinner" aria-hidden />
+            Simulating with {engine}… results will appear when finished
+          </div>
+        )}
+        {result && !busy && (
           <div className={`netlist-status${result.ok ? "" : " netlist-status-error"}`}>
             {result.message}
           </div>
@@ -937,14 +1235,6 @@ export function SimPanel({
         )}
         {runState === "paused" && !result && (
           <div className="netlist-status">Simulation paused</div>
-        )}
-        {hasChart && (
-          <div className="sim-howto" role="note">
-            <strong>Probe like LTspice:</strong> click wire = V · click part = I · drag
-            wire→wire = V(a,b) · plot: drag box = zoom · wheel = zoom time ·{" "}
-            <kbd>Alt</kbd>-drag = pan · click = cursor A · <kbd>Shift</kbd>+click = B ·
-            legend right-click removes a trace.
-          </div>
         )}
         {hasChart && (
           <div className="sim-chart-toolbar" role="toolbar" aria-label="Waveform zoom">
@@ -966,20 +1256,22 @@ export function SimPanel({
             >
               <AutoScaleIcon />
             </button>
-            <button
-              type="button"
-              className={`sim-zoom-btn${plotLayout === "stacked" ? " is-on" : ""}`}
-              title="Stack probe traces (bottom graph)"
-              aria-pressed={plotLayout === "stacked"}
-              onClick={() =>
-                setPlotLayout((p) => (p === "stacked" ? "overlay" : "stacked"))
-              }
-            >
-              <span className="sim-zoom-lab">
-                {plotLayout === "stacked" ? "Stacked" : "Stack"}
-              </span>
-            </button>
-            {probes.length > 0 && probeSel && (
+            {showProbePane && (
+              <button
+                type="button"
+                className={`sim-zoom-btn${plotLayout === "stacked" ? " is-on" : ""}`}
+                title="Stack probe traces (bottom graph)"
+                aria-pressed={plotLayout === "stacked"}
+                onClick={() =>
+                  setPlotLayout((p) => (p === "stacked" ? "overlay" : "stacked"))
+                }
+              >
+                <span className="sim-zoom-lab">
+                  {plotLayout === "stacked" ? "Stacked" : "Stack"}
+                </span>
+              </button>
+            )}
+            {showProbePane && probes.length > 0 && probeSel && (
               <button
                 type="button"
                 className="sim-zoom-btn"
@@ -1020,7 +1312,7 @@ export function SimPanel({
             )}
           </div>
         )}
-        {hasChart && probeSel && (
+        {hasChart && showProbePane && (
           <div className="sim-expr-row" role="group" aria-label="Plot expression">
             <input
               className="sim-expr-input"
@@ -1050,7 +1342,7 @@ export function SimPanel({
           </div>
         )}
 
-        <div className="sim-charts-split has-probe">
+        <div className={`sim-charts-split${showProbePane ? " has-probe" : ""}`}>
           <section className="sim-chart-section" aria-label="Simulation results">
             <div className="sim-chart-section-head">Simulation results (all signals)</div>
             {hasChart && simSeries.length ? (
@@ -1077,35 +1369,52 @@ export function SimPanel({
             ) : null}
             <div className="sim-chart-wrap sim-chart-ltspice">
               {simSeries.length ? <canvas ref={canvasRef} /> : null}
+              {busy && (
+                <div className="sim-running-overlay" role="status">
+                  <span className="sim-running-spinner" aria-hidden />
+                  <span>Simulating with {engine}…</span>
+                </div>
+              )}
               {!result && !busy && runState !== "paused" && (
                 <div className="sim-placeholder">Press Run to simulate</div>
               )}
             </div>
           </section>
 
+          {showProbePane && (
           <section className="sim-chart-section is-probe" aria-label="Probe waveform">
             <div className="sim-chart-section-head">
               Probe / waveform
               {probeSeries.length ? (
                 <span className="sim-legend sim-legend-inline">
-                  {probeSeries.map((s) => (
-                    <button
-                      key={s.name}
-                      type="button"
-                      className="sim-legend-chip"
-                      title="Right-click to remove this probe"
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        probeSel?.removeProbeByKey(s.name);
-                      }}
-                    >
-                      <span
-                        className="sim-legend-swatch"
-                        style={{ background: colorForSignalName(s.name) }}
-                      />
-                      <span className="sim-legend-name">{s.name}</span>
-                    </button>
-                  ))}
+                  {probeSeries.map((s) => {
+                    const on = !hiddenProbeSeries.has(s.name);
+                    const color = colorForSignalName(s.name);
+                    return (
+                      <button
+                        key={s.name}
+                        type="button"
+                        className={`sim-legend-chip${on ? "" : " is-off"}`}
+                        aria-pressed={on}
+                        title={
+                          on
+                            ? `Hide ${s.name} (right-click to remove probe)`
+                            : `Show ${s.name} (right-click to remove probe)`
+                        }
+                        onClick={() => toggleProbeSeries(s.name)}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          probeSel?.removeProbeByKey(s.name);
+                        }}
+                      >
+                        <span
+                          className="sim-legend-swatch"
+                          style={{ background: color }}
+                        />
+                        <span className="sim-legend-name">{s.name}</span>
+                      </button>
+                    );
+                  })}
                 </span>
               ) : null}
             </div>
@@ -1139,6 +1448,7 @@ export function SimPanel({
               )}
             </div>
           </section>
+          )}
         </div>
 
         {hasChart && (cursorA != null || cursorB != null) && (

@@ -11,6 +11,8 @@
  * Never throws to the UI.
  */
 
+import { sanitizeNetlistForAccuracy } from "./sanitizeNetlist";
+
 export type SimEngine = "D1SPICE" | "D2SPICE";
 
 export interface SimSeries {
@@ -524,22 +526,26 @@ export async function runSimulation(
   opts: RunSimulationOptions = {},
 ): Promise<SimResult> {
   const engine = opts.engine ?? "D2SPICE";
-  const job = await runFleetJob(netlist, opts);
+  const cleaned = sanitizeNetlistForAccuracy(netlist);
+  const job = await runFleetJob(cleaned.netlist, opts);
+  const hint = [...cleaned.notes, ...cleaned.warnings].filter(Boolean).join(" · ");
   if (!job.ok) {
     return {
       ok: false,
       source: "demo",
-      message: job.error,
+      message: hint ? `${job.error} · ${hint}` : job.error,
       series: [],
       engine,
     };
   }
-  const series = formatSeriesForChart(normalizeSeries(job.data), netlist);
+  const series = formatSeriesForChart(normalizeSeries(job.data), cleaned.netlist);
   if (!series.length) {
     return {
       ok: false,
       source: "demo",
-      message: "Simulation returned no waveform data",
+      message: hint
+        ? `Simulation returned no waveform data · ${hint}`
+        : "Simulation returned no waveform data",
       series: [],
       engine,
     };
@@ -547,7 +553,9 @@ export async function runSimulation(
   return {
     ok: true,
     source: "fleet",
-    message: `Simulation complete (${engine})`,
+    message: hint
+      ? `Simulation complete (${engine}) · ${hint}`
+      : `Simulation complete (${engine})`,
     series,
     engine,
   };

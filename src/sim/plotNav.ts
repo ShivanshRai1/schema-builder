@@ -100,6 +100,7 @@ function applyBoxZoom(
   const t0 = x.getValueForPixel(left) as number;
   const t1 = x.getValueForPixel(right) as number;
   if (Number.isFinite(t0) && Number.isFinite(t1) && t1 !== t0) {
+    // Keep the dragged window (LTspice-like); ticks format from span.
     setAxisRange(chart, "x", Math.min(t0, t1), Math.max(t0, t1));
   }
   if (y) {
@@ -290,9 +291,6 @@ export function attachPlotNav(chart: Chart, handlers: PlotNavHandlers = {}): () 
   canvas.addEventListener("pointerleave", onPointerLeave);
   canvas.addEventListener("lostpointercapture", onLostCapture);
   canvas.style.touchAction = "none";
-  canvas.title =
-    (canvas.title ? canvas.title + " · " : "") +
-    "Drag box=zoom · Wheel=zoom time · Alt-drag=pan · Click=cursor A · Shift+click=cursor B";
 
   return () => {
     clearBox();

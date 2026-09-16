@@ -769,30 +769,38 @@ function ProbePinMarkers({
   red,
   black,
   voltagePins = [],
+  onRemoveNet,
 }: {
   red: { x: number; y: number; net: string } | null;
   black: { x: number; y: number; net: string } | null;
   voltagePins?: { x: number; y: number; net: string }[];
+  onRemoveNet?: (net: string) => void;
 }) {
   if (!red && !black && !voltagePins.length) return null;
   const pin = (
-    role: "probe" | "red" | "black",
+    role: "red" | "black",
     p: { x: number; y: number; net: string },
     key: string,
+    signal: string,
   ) => {
-    const signal =
-      role === "black" && red
-        ? `V(${red.net},${p.net})`
-        : `V(${p.net})`;
     const color = colorForSignalName(signal);
-    const img =
-      role === "black" ? "/icons/probe-black.png" : "/icons/probe-red.png";
+    const img = role === "black" ? "/icons/probe-black.png" : "/icons/probe-red.png";
     return (
       <div
         key={key}
-        className={`probe-pin-marker probe-pin-marker-${role === "black" ? "black" : "red"}`}
+        className={`probe-pin-marker probe-pin-marker-${role}`}
         style={{ left: p.x, top: p.y, ["--probe-color" as string]: color }}
-        title={`${signal}`}
+        title={`${signal} — right-click to remove`}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onRemoveNet?.(p.net);
+        }}
+        onClick={(e) => {
+          // Don't start a new probe when clicking an existing pin.
+          e.preventDefault();
+          e.stopPropagation();
+        }}
       >
         <span className="probe-pin-swatch" style={{ background: color }} />
         <img src={img} alt="" draggable={false} />
@@ -801,10 +809,24 @@ function ProbePinMarkers({
   };
   return (
     <ViewportPortal>
-      <div className="probe-pin-layer" aria-hidden>
-        {voltagePins.map((p, i) => pin("probe", p, `v-${p.net}-${i}`))}
-        {red ? pin("red", red, "diff-red") : null}
-        {black ? pin("black", black, "diff-black") : null}
+      <div className="probe-pin-layer">
+        {voltagePins.map((p, i) =>
+          pin(
+            i % 2 === 0 ? "red" : "black",
+            p,
+            `v-${p.net}-${i}`,
+            `V(${p.net})`,
+          ),
+        )}
+        {red ? pin("red", red, "diff-red", `V(${red.net})`) : null}
+        {black
+          ? pin(
+              "black",
+              black,
+              "diff-black",
+              red ? `V(${red.net},${black.net})` : `V(${black.net})`,
+            )
+          : null}
       </div>
     </ViewportPortal>
   );
@@ -3110,18 +3132,20 @@ export function Canvas({
     return () => root.removeEventListener("click", onClick, true);
   }, [mode]);
 
-  // Probe mode: right-click removes black pin, then red pin.
+  // Probe mode: empty-canvas right-click turns Probe OFF (pins stay until removed).
   useEffect(() => {
     if (mode !== "explore") return;
     const root = canvasElRef.current;
     if (!root) return;
     const onContextMenu = (e: MouseEvent) => {
-      if (!canClickProbe() || !probeSelRef.current) return;
-      if (probeSelRef.current.popProbePin()) {
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-      }
+      if (!probeSelRef.current?.probeMode) return;
+      const t = e.target as HTMLElement | null;
+      // Pin markers handle their own remove; don't also exit probe mode.
+      if (t?.closest?.(".probe-pin-marker")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      probeSelRef.current.setProbeMode(false);
     };
     root.addEventListener("contextmenu", onContextMenu, true);
     return () => root.removeEventListener("contextmenu", onContextMenu, true);
@@ -4043,6 +4067,9 @@ export function Canvas({
           red={probeSel?.redPin ?? null}
           black={probeSel?.blackPin ?? null}
           voltagePins={probeSel?.voltagePins ?? []}
+          onRemoveNet={(net) => {
+            probeSel?.removeVoltagePin(net);
+          }}
         />
         {placeKind ? (
           <PlaceGhostOverlay
@@ -4069,9 +4096,9 @@ export function Canvas({
           />
           <strong>Probe ON</strong>
           <span>
-            Click <em>wire</em> = V · click <em>part</em> = I · drag wire→wire = V(a,b)
+            Click <em>wire</em> = V · click <em>part</em> = I · drag = V(a,b)
             {" · "}
-            <kbd>Ctrl</kbd>+wire = differential pins · click again removes · right-click pops last
+            pins: red, black, red… · right-click pin = remove · right-click canvas = Probe OFF
           </span>
         </div>
       ) : null}

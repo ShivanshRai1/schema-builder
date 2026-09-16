@@ -62,6 +62,8 @@ type ProbeContextValue = {
   ) => void;
   /** Right-click: remove black, then red, then last voltage pin. */
   popProbePin: () => boolean;
+  /** Remove a placed voltage pin / V(net) by net name (pin right-click). */
+  removeVoltagePin: (net: string) => boolean;
   /** Remove any probe matching V()/I()/expr key (legend right-click). */
   removeProbeByKey: (key: string) => void;
   /** Click / Shift+click part → toggle I(refdes). */
@@ -259,6 +261,31 @@ export function ProbeProvider({ children }: { children: ReactNode }) {
     return false;
   }, []);
 
+  const removeVoltagePin = useCallback((net: string) => {
+    const n = net.trim();
+    if (!n) return false;
+    const nu = n.toUpperCase();
+    const black = blackRef.current;
+    if (black && black.net.toUpperCase() === nu) {
+      setBlackPin(null);
+      setFeedback({ ok: true, message: `Removed black pin V(…,${n})` });
+      return true;
+    }
+    const red = redRef.current;
+    if (red && red.net.toUpperCase() === nu) {
+      setRedPin(null);
+      setBlackPin(null);
+      setFeedback({ ok: true, message: `Removed red pin V(${n})` });
+      return true;
+    }
+    const pins = voltageRef.current;
+    const idx = pins.findIndex((p) => p.net.toUpperCase() === nu);
+    if (idx < 0) return false;
+    setVoltagePins(pins.filter((_, i) => i !== idx));
+    setFeedback({ ok: true, message: `Removed V(${n})` });
+    return true;
+  }, []);
+
   const toggleCurrent = useCallback((refdes: string) => {
     const r = refdes.trim();
     if (!r) return;
@@ -358,6 +385,7 @@ export function ProbeProvider({ children }: { children: ReactNode }) {
       placeVoltagePin,
       setDifferential,
       popProbePin,
+      removeVoltagePin,
       toggleCurrent,
       addExpression,
       updateExpression,
@@ -380,6 +408,7 @@ export function ProbeProvider({ children }: { children: ReactNode }) {
       placeVoltagePin,
       setDifferential,
       popProbePin,
+      removeVoltagePin,
       toggleCurrent,
       addExpression,
       updateExpression,
@@ -392,7 +421,7 @@ export function ProbeProvider({ children }: { children: ReactNode }) {
   return <ProbeContext.Provider value={value}>{children}</ProbeContext.Provider>;
 }
 
-/** Reset probes when a new sim result arrives; enable Probe when the run succeeded. */
+/** Reset probes when a new sim result arrives — keep Probe mode off until the user enables it. */
 export function ClearProbesOnSimChange({ result }: { result: SimResult | null }) {
   const { clearProbes, setProbeMode } = useProbeSelection();
   const prev = useRef<SimResult | null | undefined>(undefined);
@@ -403,8 +432,7 @@ export function ClearProbesOnSimChange({ result }: { result: SimResult | null })
     }
     if (prev.current !== result) {
       clearProbes();
-      // LTspice-like: after a successful run, Probe is ready for click-to-plot.
-      setProbeMode(Boolean(result?.ok));
+      setProbeMode(false);
       prev.current = result;
     }
   }, [result, clearProbes, setProbeMode]);

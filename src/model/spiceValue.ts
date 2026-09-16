@@ -22,6 +22,26 @@ function looksLikeStimulusOrName(raw: string): boolean {
   return false;
 }
 
+/**
+ * Ensure voltage-source stimulus is valid SPICE.
+ * Bare `0 27.8 0.01 151 …` (common paste) → `PWL(0 27.8 0.01 151 …)`.
+ */
+export function normalizeVoltageStimulus(raw: string): string {
+  const t = raw.trim();
+  if (!t) return t;
+  if (/^(PWL|PULSE|SIN|SINE|EXP|SFFM|AM|DC|AC)\b/i.test(t)) return t;
+  // time-value pairs only (engineering suffixes allowed)
+  const parts = t.split(/\s+/).filter(Boolean);
+  if (
+    parts.length >= 4 &&
+    parts.length % 2 === 0 &&
+    parts.every((p) => /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?[a-zA-Zµμ]*$/.test(p))
+  ) {
+    return `PWL(${t})`;
+  }
+  return t;
+}
+
 function suffixMultiplier(sufRaw: string): number | null {
   const suf = sufRaw.toUpperCase().replace(/µ|μ/g, "U");
   if (!suf) return 1;

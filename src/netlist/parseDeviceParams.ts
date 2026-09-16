@@ -308,6 +308,16 @@ export function extractParamsFromRest(
       out.stimulus = raw;
       return out;
     }
+    // Bare time/value pairs (missing PWL(...)) — still treat as stimulus
+    const parts = withoutIc;
+    if (
+      parts.length >= 4 &&
+      parts.length % 2 === 0 &&
+      parts.every((p) => /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?[a-zA-Zµμ]*$/.test(p))
+    ) {
+      out.stimulus = parts.join(" ");
+      return out;
+    }
   }
 
   // Structured stimuli
