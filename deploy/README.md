@@ -1,12 +1,12 @@
 # Always-on SimulAI on :8088 (DigitalOcean)
 
-Makes [http://HOST:8088/](http://HOST:8088/) serve the UI and proxy `/sim_api.php` so any visitor can Run simulation without SSH.
+Makes [http://HOST:8088/](http://HOST:8088/) serve the UI and proxy `/sim_api.php` + `/workspace_api.php` so any visitor can Run and share one global Save without SSH.
 
 ## What these units do
 
 | Unit | Role | Port |
 |------|------|------|
-| `simulai-php.service` | PHP `sim_api.php` | `127.0.0.1:18091` only |
+| `simulai-php.service` | PHP `sim_api.php` + `workspace_api.php` | `127.0.0.1:18091` only |
 | `simulai-static.service` | Static `dist/` + proxy to PHP | `0.0.0.0:8088` |
 
 They restart on crash and start on boot. They do **not** change nginx or other apps.
@@ -17,6 +17,10 @@ They restart on crash and start on boot. They do **not** change nginx or other a
 # 1) Ensure files exist
 ls /home/reactfe/simulai-php/sim_api.php
 ls /home/reactfe/simulai-php/sim_config.php
+ls /home/reactfe/simulai-php/workspace_api.php
+# writable store for shared Save (created automatically if PHP can mkdir)
+mkdir -p /home/reactfe/simulai-php/data
+chmod 775 /home/reactfe/simulai-php/data
 ls /var/www/simulai-schematic/dist/index.html
 ls /home/reactfe/schema-builder-build/repo/scripts/serve-static-with-sim.mjs
 
@@ -35,10 +39,12 @@ sudo systemctl enable --now simulai-static.service
 systemctl status simulai-php.service --no-pager
 systemctl status simulai-static.service --no-pager
 curl -s http://127.0.0.1:18091/sim_api.php | head
+curl -s 'http://127.0.0.1:18091/workspace_api.php?action=get' | head
 curl -s http://127.0.0.1:8088/sim_api.php | head
+curl -s 'http://127.0.0.1:8088/workspace_api.php?action=get' | head
 ```
 
-Both curls should return JSON (not HTML).
+Sim curls should return JSON. Workspace GET returns `{"ok":false,"error":"empty"}` until the first Save.
 
 ## After a reboot
 
@@ -56,6 +62,13 @@ No restart required for static files (they are read from disk). If the proxy scr
 ```bash
 cd /home/reactfe/schema-builder-build/repo && git pull origin main
 sudo systemctl restart simulai-static.service
+```
+
+Also copy `workspace_api.php` into the PHP docroot when deploying PHP changes:
+
+```bash
+cp /home/reactfe/schema-builder-build/repo/php-sim/workspace_api.php /home/reactfe/simulai-php/
+sudo systemctl restart simulai-php.service   # only if PHP files changed
 ```
 
 ## Disable later (if needed)

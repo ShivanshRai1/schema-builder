@@ -768,20 +768,23 @@ function JunctionOverlay({
 function ProbePinMarkers({
   red,
   black,
+  voltagePins = [],
 }: {
   red: { x: number; y: number; net: string } | null;
   black: { x: number; y: number; net: string } | null;
+  voltagePins?: { x: number; y: number; net: string }[];
 }) {
-  if (!red && !black) return null;
+  if (!red && !black && !voltagePins.length) return null;
   const pin = (
     color: "red" | "black",
     p: { x: number; y: number; net: string },
+    key: string,
   ) => (
     <div
-      key={color}
+      key={key}
       className={`probe-pin-marker probe-pin-marker-${color}`}
       style={{ left: p.x, top: p.y }}
-      title={`${color === "red" ? "Red" : "Black"} pin · V(${p.net})`}
+      title={`${color === "red" ? "Probe" : "Black"} · V(${p.net})`}
     >
       <img
         src={color === "red" ? "/icons/probe-red.png" : "/icons/probe-black.png"}
@@ -793,8 +796,9 @@ function ProbePinMarkers({
   return (
     <ViewportPortal>
       <div className="probe-pin-layer" aria-hidden>
-        {red ? pin("red", red) : null}
-        {black ? pin("black", black) : null}
+        {voltagePins.map((p, i) => pin("red", p, `v-${p.net}-${i}`))}
+        {red ? pin("red", red, "diff-red") : null}
+        {black ? pin("black", black, "diff-black") : null}
       </div>
     </ViewportPortal>
   );
@@ -2767,14 +2771,14 @@ export function Canvas({
   }, [mode]);
 
   // Explore / Move / Drag: generous hit-test so tiny wire stubs still select (then Delete removes them).
-  // Probe mode: click wire → red pin, then black pin (voltage / differential).
+  // Probe mode: click wire → V(net); Ctrl+click → differential; drag wire→wire → V(a,b).
   useEffect(() => {
     if (mode !== "move" && mode !== "drag" && mode !== "explore") return;
     const root = canvasElRef.current;
     if (!root) return;
 
     const placeV = (net: string, flow: { x: number; y: number }, event: MouseEvent) => {
-      if (!canClickProbe() || event.ctrlKey || event.metaKey || event.shiftKey) return false;
+      if (!canClickProbe() || event.shiftKey) return false;
       const sel = probeSelRef.current;
       const series = simResultRef.current?.series;
       if (!sel || !series?.length) return false;
@@ -2782,8 +2786,102 @@ export function Canvas({
         sel.reportMissing(`V(${net})`);
         return true; // consumed (show error), don't select
       }
-      sel.placeVoltagePin(net, flow.x, flow.y);
+      // Ctrl/⌘+click = differential red/black pins (existing workflow).
+      // Plain click = LTspice multi-probe toggle V(net).
+      if (event.ctrlKey || event.metaKey) {
+        sel.placeVoltagePin(net, flow.x, flow.y);
+      } else {
+        sel.toggleVoltage(net, flow.x, flow.y);
+      }
       return true;
+    };
+
+    const netAtFlow = (
+      nodes: Node<ComponentData>[],
+      edges: Edge[],
+      cursor: { x: number; y: number },
+    ): { net: string; flow: { x: number; y: number } } | null => {
+      let edgeId: string | null = null;
+      const hit = wireHitAtCursor(nodes, edges, cursor);
+      if (hit) edgeId = hit.edgeId;
+      else {
+        const near = findNearestWireHit(nodes, edges, cursor, 14, SCHEMATIC_GRID);
+        if (near && near.dist <= 12) edgeId = near.edgeId;
+      }
+      if (!edgeId) return null;
+      const edge = edges.find((e) => e.id === edgeId);
+      if (!edge?.sourceHandle) return null;
+      const nets = extractNets(nodes, edges);
+      return {
+        net: nets.netOf(edge.source, edge.sourceHandle),
+        flow: cursor,
+      };
+    };
+
+    type DiffDrag = {
+      net: string;
+      x: number;
+      y: number;
+      sx: number;
+      sy: number;
+    };
+    let diffDrag: DiffDrag | null = null;
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      if (!canClickProbe() || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (placingRef.current || copyMarqueeRef.current) return;
+      const rf = rfRef.current;
+      if (!rf) return;
+      const cursor = rf.screenToFlowPosition({
+        x: event.clientX,
+        y: event.clientY,
+      });
+      const hit = netAtFlow(nodesRef.current, edgesRef.current, cursor);
+      if (!hit) return;
+      diffDrag = {
+        net: hit.net,
+        x: hit.flow.x,
+        y: hit.flow.y,
+        sx: event.clientX,
+        sy: event.clientY,
+      };
+    };
+
+    const onPointerUp = (event: PointerEvent) => {
+      const drag = diffDrag;
+      diffDrag = null;
+      if (!drag || !canClickProbe()) return;
+      const dist = Math.hypot(event.clientX - drag.sx, event.clientY - drag.sy);
+      if (dist < 10) return; // short click → handled by onClick toggle
+      const rf = rfRef.current;
+      const sel = probeSelRef.current;
+      const series = simResultRef.current?.series;
+      if (!rf || !sel || !series?.length) return;
+      const cursor = rf.screenToFlowPosition({
+        x: event.clientX,
+        y: event.clientY,
+      });
+      const hit = netAtFlow(nodesRef.current, edgesRef.current, cursor);
+      if (!hit || hit.net.toUpperCase() === drag.net.toUpperCase()) return;
+      if (!probeAvailable(series, { kind: "V", net: drag.net })) {
+        sel.reportMissing(`V(${drag.net})`);
+        return;
+      }
+      if (!probeAvailable(series, { kind: "V", net: hit.net })) {
+        sel.reportMissing(`V(${hit.net})`);
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      sel.setDifferential(
+        drag.net,
+        drag.x,
+        drag.y,
+        hit.net,
+        hit.flow.x,
+        hit.flow.y,
+      );
     };
 
     const onClick = (event: MouseEvent) => {
@@ -2905,12 +3003,18 @@ export function Canvas({
       onSelectEdgeRef.current(hit.edgeId, cursor);
     };
 
+    root.addEventListener("pointerdown", onPointerDown, true);
+    root.addEventListener("pointerup", onPointerUp, true);
     root.addEventListener("click", onClick, true);
-    return () => root.removeEventListener("click", onClick, true);
+    return () => {
+      root.removeEventListener("pointerdown", onPointerDown, true);
+      root.removeEventListener("pointerup", onPointerUp, true);
+      root.removeEventListener("click", onClick, true);
+    };
   }, [mode]);
 
   // Explore / Move / Drag: capture part clicks before React Flow can single-select.
-  // Probe mode: Shift+click part → I(refdes); plain click still selects.
+  // Probe mode: click part → I(refdes); otherwise select the part.
   useEffect(() => {
     if (mode !== "move" && mode !== "drag" && mode !== "explore") return;
     const root = canvasElRef.current;
@@ -2932,12 +3036,12 @@ export function Canvas({
 
       if (
         canClickProbe() &&
-        event.shiftKey &&
         !event.ctrlKey &&
         !event.metaKey &&
         probeSelRef.current &&
         simResultRef.current?.series.length
       ) {
+        // Probe ON: click part → I(refdes). Shift still works (same action).
         event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation();
@@ -3929,7 +4033,11 @@ export function Canvas({
           crossings={wireMarks.crossings}
           interactive={mode === "delete"}
         />
-        <ProbePinMarkers red={probeSel?.redPin ?? null} black={probeSel?.blackPin ?? null} />
+        <ProbePinMarkers
+          red={probeSel?.redPin ?? null}
+          black={probeSel?.blackPin ?? null}
+          voltagePins={probeSel?.voltagePins ?? []}
+        />
         {placeKind ? (
           <PlaceGhostOverlay
             kind={placeKind}
@@ -3955,17 +4063,9 @@ export function Canvas({
           />
           <strong>Probe ON</strong>
           <span>
-            {probeSel.nextPin === "red" && (
-              <>Click a <em>wire</em> to place the <strong style={{ color: "#c62828" }}>red</strong> pin</>
-            )}
-            {probeSel.nextPin === "black" && (
-              <>Click another <em>wire</em> for the <strong>black</strong> pin (reference)</>
-            )}
-            {probeSel.nextPin === "done" && (
-              <>V({probeSel.redPin?.net},{probeSel.blackPin?.net}) · click moves black · right-click removes pins</>
-            )}
+            Click <em>wire</em> = V · click <em>part</em> = I · drag wire→wire = V(a,b)
             {" · "}
-            <kbd>Shift</kbd>+click part = current · <kbd>Ctrl</kbd>+click = select
+            <kbd>Ctrl</kbd>+wire = differential pins · click again removes · right-click pops last
           </span>
         </div>
       ) : null}

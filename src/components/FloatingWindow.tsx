@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export type WindowRect = { x: number; y: number; w: number; h: number };
 
@@ -102,6 +102,15 @@ export function FloatingWindow({
         zIndex: z,
       };
 
+  // After restore / maximize / resize, ask Chart.js to reflow (it was display:none or grew).
+  useEffect(() => {
+    if (minimized) return;
+    const id = window.requestAnimationFrame(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [minimized, maximized, rect.w, rect.h]);
+
   return (
     <div
       className={`floating-window${minimized ? " fw-minimized" : ""}${maximized ? " fw-maximized" : ""}`}
@@ -135,12 +144,13 @@ export function FloatingWindow({
           </button>
         </div>
       </div>
-      {!minimized && (
-        <div className="fw-body">
-          {children}
-          {!maximized && <div className="fw-resize" onPointerDown={startResize} />}
-        </div>
-      )}
+      {/* Keep children mounted while minimized so SimPanel / charts keep their state. */}
+      <div className="fw-body" hidden={minimized} aria-hidden={minimized}>
+        {children}
+        {!maximized && !minimized && (
+          <div className="fw-resize" onPointerDown={startResize} />
+        )}
+      </div>
     </div>
   );
 }

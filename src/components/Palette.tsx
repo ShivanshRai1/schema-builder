@@ -97,6 +97,10 @@ export function Palette({
   const [openSections, setOpenSections] = useState<Set<string>>(
     () => new Set(["Commonly used"]),
   );
+  /** Semiconductor subsections start expanded when the parent opens. */
+  const [openSubsections, setOpenSubsections] = useState<Set<string>>(
+    () => new Set(["1. Diodes", "2. Transistors"]),
+  );
   const groups = useMemo(() => buildPalette(commonlyUsed), [commonlyUsed]);
   const q = query.trim().toLowerCase();
 
@@ -128,6 +132,15 @@ export function Palette({
       const next = new Set(prev);
       if (next.has(category)) next.delete(category);
       else next.add(category);
+      return next;
+    });
+  };
+
+  const toggleSubsection = (title: string) => {
+    setOpenSubsections((prev) => {
+      const next = new Set(prev);
+      if (next.has(title)) next.delete(title);
+      else next.add(title);
       return next;
     });
   };
@@ -205,6 +218,38 @@ export function Palette({
                   <p className="palette-empty-hint">
                     Basics stay here; other parts you place this session appear after them
                   </p>
+                ) : group.subsections && group.subsections.length > 0 ? (
+                  group.subsections.map((sub) => {
+                    const subOpen = openSubsections.has(sub.title);
+                    return (
+                      <div className="palette-subgroup" key={sub.title}>
+                        <button
+                          type="button"
+                          className="palette-subtitle"
+                          aria-expanded={subOpen}
+                          onClick={() => toggleSubsection(sub.title)}
+                        >
+                          <span className="palette-subtitle-caret" aria-hidden>
+                            {subOpen ? "▾" : "▸"}
+                          </span>
+                          <span>{sub.title}</span>
+                          <span className="palette-subtitle-count">{sub.kinds.length}</span>
+                        </button>
+                        {subOpen && (
+                          <div className="palette-grid">
+                            {sub.kinds.map((kind) => (
+                              <PaletteItem
+                                key={kind}
+                                kind={kind}
+                                active={activeKind === kind}
+                                onPick={onPick}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
                 ) : (
                   <div className="palette-grid">
                     {group.kinds.map((kind) => (

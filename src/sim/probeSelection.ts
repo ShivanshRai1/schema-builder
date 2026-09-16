@@ -1,16 +1,19 @@
 import type { SimSeries } from "./runSimulation";
 import { cleanSignalName } from "./runSimulation";
 import { currentThrough, seriesByNameLoose } from "./probeHover";
+import { evaluateProbeExpression } from "./probeExpressions";
 
 /** User-selected LTspice-style probes (click-to-plot). */
 export type ProbeSpec =
   | { kind: "V"; net: string }
   | { kind: "I"; refdes: string }
-  | { kind: "Vd"; a: string; b: string };
+  | { kind: "Vd"; a: string; b: string }
+  | { kind: "Expr"; expr: string; id: string };
 
 export function probeKey(p: ProbeSpec): string {
   if (p.kind === "V") return `V(${p.net})`;
   if (p.kind === "I") return `I(${p.refdes})`;
+  if (p.kind === "Expr") return p.expr.trim().replace(/\s+/g, "") || p.id;
   return `V(${p.a},${p.b})`;
 }
 
@@ -19,6 +22,7 @@ export function probeLabel(p: ProbeSpec): string {
 }
 
 export function sameProbe(a: ProbeSpec, b: ProbeSpec): boolean {
+  if (a.kind === "Expr" && b.kind === "Expr") return a.id === b.id;
   return probeKey(a).toUpperCase() === probeKey(b).toUpperCase();
 }
 
@@ -31,7 +35,6 @@ export function differentialVoltage(
 ): SimSeries | null {
   const n = Math.min(va.x.length, va.y.length, vb.x.length, vb.y.length);
   if (n < 2) return null;
-  // Prefer identical time base; otherwise sample vb by nearest index.
   const sameX =
     n > 0 &&
     va.x.length === vb.x.length &&
@@ -49,7 +52,6 @@ export function differentialVoltage(
     for (let i = 0; i < va.x.length; i++) {
       const xi = va.x[i]!;
       const yi = va.y[i] ?? 0;
-      // Nearest sample in vb
       let best = 0;
       let bestD = Infinity;
       for (let j = 0; j < vb.x.length; j++) {
@@ -68,7 +70,6 @@ export function differentialVoltage(
 
 export type ResolveProbesResult = {
   series: SimSeries[];
-  /** Probe keys that could not be resolved from sim data. */
   missing: string[];
 };
 
@@ -120,7 +121,17 @@ export function resolveProbedSeries(
       continue;
     }
 
-    // Differential
+    if (p.kind === "Expr") {
+      const ev = evaluateProbeExpression(p.expr, all);
+      if (ev.series) {
+        seen.add(uk);
+        series.push(ev.series);
+      } else {
+        missing.push(ev.error || key);
+      }
+      continue;
+    }
+
     const fa = seriesByNameLoose(all, `V(${p.a})`);
     const fb = seriesByNameLoose(all, `V(${p.b})`);
     if (fa && fb) {
@@ -148,7 +159,6 @@ export function isCurrentSignalName(name: string): boolean {
   return /^I\(/i.test(cleanSignalName(name));
 }
 
-/** Whether this probe can be resolved from current sim results. */
 export function probeAvailable(all: readonly SimSeries[], p: ProbeSpec): boolean {
   if (p.kind === "V") {
     if (p.net === "0" || /^gnd$/i.test(p.net)) return true;
@@ -156,6 +166,9 @@ export function probeAvailable(all: readonly SimSeries[], p: ProbeSpec): boolean
   }
   if (p.kind === "I") {
     return Boolean(currentThrough(all, p.refdes));
+  }
+  if (p.kind === "Expr") {
+    return !evaluateProbeExpression(p.expr, all).error;
   }
   return Boolean(
     seriesByNameLoose(all, `V(${p.a})`) && seriesByNameLoose(all, `V(${p.b})`),

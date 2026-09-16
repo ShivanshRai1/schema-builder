@@ -55,11 +55,12 @@ function sendFile(res, filePath) {
 function proxyToPhp(req, res) {
   const headers = { ...req.headers, host: `127.0.0.1:${PHP_PORT}` };
   delete headers["accept-encoding"];
+  const reqUrl = new URL(req.url || "/", "http://127.0.0.1");
   const p = http.request(
     {
       hostname: "127.0.0.1",
       port: PHP_PORT,
-      path: "/sim_api.php",
+      path: reqUrl.pathname + reqUrl.search,
       method: req.method,
       headers,
     },
@@ -72,7 +73,7 @@ function proxyToPhp(req, res) {
     res.writeHead(502, { "Content-Type": "application/json" });
     res.end(
       JSON.stringify({
-        error: "Simulation PHP proxy is down. Is php -S running on 127.0.0.1:" +
+        error: "PHP proxy is down. Is php -S running on 127.0.0.1:" +
           PHP_PORT +
           "? (" +
           e.message +
@@ -87,7 +88,7 @@ const server = http.createServer((req, res) => {
   const host = req.headers.host || "127.0.0.1";
   const url = new URL(req.url || "/", `http://${host}`);
 
-  if (url.pathname === "/sim_api.php") {
+  if (url.pathname === "/sim_api.php" || url.pathname === "/workspace_api.php") {
     proxyToPhp(req, res);
     return;
   }
@@ -112,6 +113,6 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(
-    `[simulai] static ${DIST} on :${PORT}; /sim_api.php → 127.0.0.1:${PHP_PORT}`,
+    `[simulai] static ${DIST} on :${PORT}; /sim_api.php + /workspace_api.php → 127.0.0.1:${PHP_PORT}`,
   );
 });

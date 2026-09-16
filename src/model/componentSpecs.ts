@@ -882,8 +882,14 @@ const SOURCE_KINDS: ComponentKind[] = [
   "GND",
 ];
 
-/** Category sections after Commonly used — A→Z by category, parts A→Z inside. */
-const PALETTE_SECTIONS: { category: Category; kinds: ComponentKind[] }[] = [
+/** Category sections after Commonly used — A→Z by category (Semiconductor has diode/transistor subs). */
+type PaletteSection = {
+  category: Category;
+  kinds: ComponentKind[];
+  subsections?: { title: string; kinds: ComponentKind[] }[];
+};
+
+const PALETTE_SECTIONS: PaletteSection[] = [
   { category: "Capacitor", kinds: paletteAlpha(["C", "CFIXED", "CPOL", "CVAR"]) },
   { category: "Control", kinds: paletteAlpha(["COMP", "GATEDRV"]) },
   {
@@ -917,16 +923,53 @@ const PALETTE_SECTIONS: { category: Category; kinds: ComponentKind[] }[] = [
   },
   {
     category: "Semiconductor",
-    kinds: paletteAlpha([
+    kinds: [
       "D",
+      "DZ",
       "DS",
       "DTVS",
       "DTVSBI",
-      "DZ",
       "LED",
+      "NPN",
+      "PNP",
+      "NJFET",
+      "PJFET",
+      "NMOS",
+      "PMOS",
+      "NMOS_D",
+      "PMOS_D",
+      "IGBT",
+      "UJT",
       "SICMOS",
       "SICMOS_K",
-    ]),
+      "GANHEMT",
+      "IGBT_K",
+    ],
+    subsections: [
+      {
+        title: "1. Diodes",
+        kinds: ["D", "DZ", "DS", "DTVS", "DTVSBI", "LED"],
+      },
+      {
+        title: "2. Transistors",
+        kinds: [
+          "NPN",
+          "PNP",
+          "NJFET",
+          "PJFET",
+          "NMOS",
+          "PMOS",
+          "NMOS_D",
+          "PMOS_D",
+          "IGBT",
+          "UJT",
+          "SICMOS",
+          "SICMOS_K",
+          "GANHEMT",
+          "IGBT_K",
+        ],
+      },
+    ],
   },
   {
     category: "Sense / Probe",
@@ -938,23 +981,6 @@ const PALETTE_SECTIONS: { category: Category; kinds: ComponentKind[] }[] = [
   {
     category: "Thyristor",
     kinds: paletteAlpha(["DIAC", "GTO", "SCR", "SCR_PH", "SCS", "SIDAC", "TRIAC"]),
-  },
-  {
-    category: "Transistor",
-    kinds: paletteAlpha([
-      "GANHEMT",
-      "IGBT",
-      "IGBT_K",
-      "NJFET",
-      "NMOS",
-      "NMOS_D",
-      "NPN",
-      "PJFET",
-      "PMOS",
-      "PMOS_D",
-      "PNP",
-      "UJT",
-    ]),
   },
 ];
 
@@ -1016,9 +1042,15 @@ export function isPaletteHidden(kind: ComponentKind): boolean {
  * Build the left palette: Commonly used (session) first, then A→Z categories.
  * `commonlyUsed` is ordered most-recent-first (callers may prepend pinned basics).
  */
+export type PaletteGroup = {
+  category: Category;
+  kinds: ComponentKind[];
+  subsections?: { title: string; kinds: ComponentKind[] }[];
+};
+
 export function buildPalette(
   commonlyUsed: readonly ComponentKind[] = [],
-): { category: Category; kinds: ComponentKind[] }[] {
+): PaletteGroup[] {
   const seen = new Set<ComponentKind>();
   const common: ComponentKind[] = [];
   for (const k of commonlyUsed) {
@@ -1028,10 +1060,20 @@ export function buildPalette(
     seen.add(k);
     common.push(k);
   }
-  const sections = PALETTE_SECTIONS.map((sec) => ({
-    ...sec,
-    kinds: sec.kinds.filter((k) => !PALETTE_HIDDEN.has(k)),
-  })).filter((sec) => sec.kinds.length > 0);
+  const sections = PALETTE_SECTIONS.map((sec) => {
+    const kinds = sec.kinds.filter((k) => !PALETTE_HIDDEN.has(k));
+    const subsections = sec.subsections
+      ?.map((sub) => ({
+        title: sub.title,
+        kinds: sub.kinds.filter((k) => !PALETTE_HIDDEN.has(k)),
+      }))
+      .filter((sub) => sub.kinds.length > 0);
+    return {
+      category: sec.category,
+      kinds,
+      ...(subsections && subsections.length > 0 ? { subsections } : {}),
+    };
+  }).filter((sec) => sec.kinds.length > 0);
   return [
     { category: "Commonly used", kinds: common },
     ...sections,

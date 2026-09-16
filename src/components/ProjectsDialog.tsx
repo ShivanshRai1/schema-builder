@@ -81,7 +81,7 @@ export function ProjectsDialog({
           <div>
             <h2>Projects</h2>
             <p className="projects-dialog-sub">
-              Saved in this browser for now. Same file format will sync when login arrives.
+              Save writes a shared project on the server (everyone sees it). Login-based private saves come later.
             </p>
           </div>
           <button type="button" className="ghost-btn" onClick={onClose}>
@@ -123,12 +123,12 @@ export function ProjectsDialog({
                 />
               </label>
               <p className="projects-hint">
-                Saves all schematic tabs, models, and sim settings into this browser
-                {currentProjectId ? " (updating the current project)." : "."}
+                Saves all schematic tabs, models, and settings to the shared server store
+                {currentProjectId ? " (also keeps a local backup)." : " (plus a local backup)."}
               </p>
               <div className="projects-actions">
                 <button type="button" className="ghost-btn ghost-btn-primary" onClick={onSaveProgress}>
-                  Save progress
+                  Save for everyone
                 </button>
                 <button type="button" className="ghost-btn" onClick={onExportFile}>
                   Download file…

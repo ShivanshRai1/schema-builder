@@ -44,11 +44,14 @@ import {
 } from "./persistence/workspaceFile";
 import {
   getLocalProject,
-  loadDraftWorkspace,
   saveDraftWorkspace,
   saveLocalProject,
 } from "./persistence/localProjects";
 import { tryParseShareFromLocation } from "./persistence/shareLink";
+import {
+  fetchSharedWorkspace,
+  saveSharedWorkspace,
+} from "./persistence/remoteWorkspace";
 import {
   createTabDoc,
   emptySchematic,
@@ -229,7 +232,6 @@ export default function App() {
   const [projectsOpen, setProjectsOpen] = useState(false);
   const [projectName, setProjectName] = useState("Untitled project");
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
-  const bootstrapDone = useRef(false);
   const dragOrigin = useRef<CircuitSnapshot | null>(null);
   const connectedMoveRef = useRef(false);
   const moveSeverGuard = useRef<{ nodeId: string; at: number } | null>(null);
@@ -310,7 +312,9 @@ export default function App() {
   const [library, setLibrary] = useState(() => STARTER.library ?? "");
   const [showLibrary, setShowLibrary] = useState(false);
   const [netlistFloating, setNetlistFloating] = useState(false);
+  /** Simulation always opens as a floating waveform window (LTspice-style). */
   const [simFloating, setSimFloating] = useState(false);
+  const pendingSimPlayRef = useRef(false);
   /** desktop ≥1480 · laptop ≥1100 · compact (phones/small laptops) <1100 */
   const [viewport, setViewport] = useState<"desktop" | "laptop" | "compact">(() => {
     if (typeof window === "undefined") return "desktop";
@@ -403,6 +407,27 @@ export default function App() {
   const [simRunState, setSimRunState] = useState<SimRunState>("idle");
   /** Last successful/failed sim waveforms — enables canvas probe hover when ok. */
   const [simResult, setSimResult] = useState<SimResult | null>(null);
+
+  /** Open the floating simulation window and (optionally) start a run. */
+  const openSimWindow = useCallback((andPlay: boolean) => {
+    if (andPlay) {
+      if (simFloating) {
+        simControlRef.current?.play();
+        return;
+      }
+      pendingSimPlayRef.current = true;
+    }
+    setSimFloating(true);
+  }, [simFloating]);
+
+  useEffect(() => {
+    if (!simFloating || !pendingSimPlayRef.current) return;
+    pendingSimPlayRef.current = false;
+    const id = window.setTimeout(() => {
+      simControlRef.current?.play();
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [simFloating]);
   const [placeKind, setPlaceKind] = useState<ComponentKind | null>(null);
   const [placeParams, setPlaceParams] = useState<Record<string, string> | null>(null);
   /** Session palette “Commonly used” (pinned basics + most recent). */
@@ -688,21 +713,31 @@ export default function App() {
     [restore, clearTransientUi, requestFitView],
   );
 
-  const onSaveProgress = useCallback(() => {
+  const onSaveProgress = useCallback(async () => {
+    const ws = captureWorkspace();
+    setNetlistStatus("saving shared project…");
+    setNetlistStatusError(false);
+
+    // Always keep a local backup so a flaky network doesn't lose work.
     try {
-      const ws = captureWorkspace();
       const rec = saveLocalProject(ws, currentProjectId);
       setCurrentProjectId(rec.id);
       setProjectName(rec.name);
       saveDraftWorkspace(rec.workspace);
-      setNetlistStatus(`saved “${rec.name}” in this browser`);
-      setNetlistStatusError(false);
-    } catch (e) {
-      setNetlistStatusError(true);
-      setNetlistStatus(
-        `save failed: ${e instanceof Error ? e.message : "storage full or blocked"}`,
-      );
+    } catch {
+      /* local backup optional */
     }
+
+    const remote = await saveSharedWorkspace(ws);
+    if (remote.ok) {
+      setNetlistStatus(`saved “${remote.name}” for everyone`);
+      setNetlistStatusError(false);
+      return;
+    }
+    setNetlistStatusError(true);
+    setNetlistStatus(
+      `shared save failed (${remote.error}) — kept a copy in this browser only`,
+    );
   }, [captureWorkspace, currentProjectId]);
 
   const onExportWorkspaceFile = useCallback(() => {
@@ -744,10 +779,10 @@ export default function App() {
     [applyWorkspace],
   );
 
-  // Share-link / draft bootstrap (once). Prefer #share= over draft.
+  // Share-link / shared-server bootstrap. Prefer #share= over server.
+  // Note: do NOT set a "done" flag before the async fetch finishes — React StrictMode
+  // remounts once in dev and would cancel the first fetch then skip the second.
   useEffect(() => {
-    if (bootstrapDone.current) return;
-    bootstrapDone.current = true;
     const shared = tryParseShareFromLocation();
     if (shared) {
       try {
@@ -756,14 +791,27 @@ export default function App() {
         window.history.replaceState(null, "", window.location.pathname + window.location.search);
         return;
       } catch {
-        /* fall through to draft */
+        /* fall through to remote */
       }
     }
-    const draft = loadDraftWorkspace();
-    if (draft && (draft.tabs.some((t) => t.nodes.length > 0) || draft.tabs.length > 1)) {
-      // Soft restore: only if draft looks like real progress
-      // Skip auto-load to avoid surprising overwrite of starter — user opens Projects.
-    }
+
+    const ac = new AbortController();
+    void (async () => {
+      const remote = await fetchSharedWorkspace(ac.signal);
+      if (ac.signal.aborted) return;
+      if (remote.ok) {
+        applyWorkspace(remote.workspace, { projectId: null });
+        const when = remote.updatedAt ? ` (${remote.updatedAt})` : "";
+        setNetlistStatus(`loaded shared project “${remote.workspace.name}”${when}`);
+        setNetlistStatusError(false);
+        return;
+      }
+      if (remote.empty) return;
+      setNetlistStatusError(true);
+      setNetlistStatus(`shared load failed: ${remote.error}`);
+    })();
+
+    return () => ac.abort();
   }, [applyWorkspace]);
 
   // Autosave draft while working (crash safety; not a named project).
@@ -3527,7 +3575,7 @@ export default function App() {
       }
       else if (mod && e.key.toLowerCase() === "s") {
         e.preventDefault();
-        onSaveProgress();
+        void onSaveProgress();
       }
       else if (mod && e.key.toLowerCase() === "o") {
         e.preventDefault();
@@ -3765,7 +3813,7 @@ export default function App() {
   );
 
   const onSave = useCallback(() => {
-    onSaveProgress();
+    void onSaveProgress();
   }, [onSaveProgress]);
 
   const onRestoreStarter = useCallback(() => {
@@ -4119,6 +4167,8 @@ export default function App() {
             labelActive={placeKind === "WIRELABEL"}
             simControlRef={simControlRef}
             simRunState={simRunState}
+            onRunRequest={() => openSimWindow(true)}
+            onEnsureSimWindow={() => openSimWindow(false)}
             onCopy={triggerCopy}
             copyActive={copyMarquee}
             onUndo={undo}
@@ -4139,7 +4189,7 @@ export default function App() {
                   type="button"
                   className={`ghost-btn${rightCollapsed ? "" : " ghost-btn-active"}`}
                   onClick={toggleRightPanel}
-                  title={rightCollapsed ? "Show netlist / sim / chat" : "Hide right panels"}
+                  title={rightCollapsed ? "Show netlist / chat" : "Hide right panels"}
                 >
                   {rightCollapsed ? "Panels" : "Hide panels"}
                 </button>
@@ -4147,7 +4197,7 @@ export default function App() {
                   type="button"
                   className="ghost-btn"
                   onClick={onSave}
-                  title="Save all tabs to this browser (Ctrl+S)"
+                  title="Save all tabs for everyone (Ctrl+S)"
                 >
                   Save
                 </button>
@@ -4262,7 +4312,7 @@ export default function App() {
             <button
               type="button"
               className="panel-rail-btn panel-rail-btn-right"
-              title="Show netlist, simulation, and assistant"
+              title="Show netlist and assistant"
               onClick={toggleRightPanel}
             >
               Panels
@@ -4322,40 +4372,11 @@ export default function App() {
               </div>
             </>
           )}
-          {!simFloating && (
-            <>
-              {(showLibrary || !netlistFloating) && (
-                <div
-                  className="panel-split"
-                  title="Drag to resize"
-                  onPointerDown={(e) =>
-                    beginRowSplit(showLibrary ? "library" : "netlist", "sim", e)
-                  }
-                />
-              )}
-              <div className="right-slot" style={{ flex: `${slotFr.sim} 1 80px` }}>
-                <SimPanel
-                  netlist={netlist}
-                  uiTheme={uiTheme}
-                  controlRef={simControlRef}
-                  onRunStateChange={setSimRunState}
-                  onSimResult={setSimResult}
-                  directives={directives}
-                  onDirectivesChange={setDirectives}
-                  onPopOut={() => setSimFloating(true)}
-                />
-              </div>
-            </>
-          )}
           <div
             className="panel-split"
             title="Drag to resize"
             onPointerDown={(e) =>
-              beginRowSplit(
-                simFloating ? (showLibrary ? "library" : "netlist") : "sim",
-                "chat",
-                e,
-              )
+              beginRowSplit(showLibrary ? "library" : "netlist", "chat", e)
             }
           />
           <div className="right-slot" style={{ flex: `${slotFr.chat} 1 80px` }}>
@@ -4414,8 +4435,10 @@ export default function App() {
       )}
       {simFloating && (
         <FloatingWindow
-          title="simulation"
-          defaultRect={{ x: 200, y: 140, w: 720, h: 460 }}
+          title="Waveforms — Probe"
+          defaultRect={{ x: 100, y: 56, w: 900, h: 620 }}
+          minWidth={520}
+          minHeight={420}
           onClose={() => setSimFloating(false)}
         >
           <SimPanel
@@ -4424,6 +4447,7 @@ export default function App() {
             controlRef={simControlRef}
             onRunStateChange={setSimRunState}
             onSimResult={setSimResult}
+            retainedResult={simResult}
             directives={directives}
             onDirectivesChange={setDirectives}
           />
@@ -4438,7 +4462,7 @@ export default function App() {
           currentProjectId={currentProjectId}
           workspace={captureWorkspace()}
           onSaveProgress={() => {
-            onSaveProgress();
+            void onSaveProgress();
           }}
           onLoadProject={onLoadLocalProject}
           onExportFile={onExportWorkspaceFile}

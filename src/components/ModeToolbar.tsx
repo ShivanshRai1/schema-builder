@@ -268,6 +268,8 @@ export function ModeToolbar({
   labelActive = false,
   simControlRef,
   simRunState = "idle",
+  onRunRequest,
+  onEnsureSimWindow,
   onCut,
   onCopy,
   copyActive = false,
@@ -288,6 +290,10 @@ export function ModeToolbar({
   /** Simulation Play / Pause / Stop. */
   simControlRef?: MutableRefObject<SimControlApi | null>;
   simRunState?: SimRunState;
+  /** Open floating waveform window and start a run (LTspice-style). */
+  onRunRequest?: () => void;
+  /** Ensure the floating waveform window is open (e.g. when enabling Probe). */
+  onEnsureSimWindow?: () => void;
   onCut?: () => void;
   onCopy?: () => void;
   /** True while Ctrl+C copy-marquee / copy tool is active. */
@@ -477,10 +483,12 @@ export function ModeToolbar({
             <button
               type="button"
               className={`mode-toolbar-view-btn mode-toolbar-sim-toggle${simRunning ? " is-pause" : " is-play"}`}
-              title={simRunning ? "Pause simulation" : simRunState === "paused" ? "Resume simulation" : "Run simulation"}
+              title={simRunning ? "Pause simulation" : simRunState === "paused" ? "Resume simulation" : "Run simulation (opens waveform window)"}
               aria-label={simRunning ? "Pause" : "Play"}
               onClick={() => {
                 if (simRunning) simControlRef.current?.pause();
+                else if (simRunState === "paused") simControlRef.current?.play();
+                else if (onRunRequest) onRunRequest();
                 else simControlRef.current?.play();
               }}
             >
@@ -502,12 +510,16 @@ export function ModeToolbar({
                 className={`mode-toolbar-view-btn mode-toolbar-probe${probeOn ? " is-active" : ""}`}
                 title={
                   probeOn
-                    ? "Probe ON — click a wire for voltage, a part for current (click again to turn off)"
-                    : "Probe — click to plot voltages/currents on the schematic"
+                    ? "Probe ON — click wire = V(net), click part = I(ref); Ctrl+wire = V(a,b)"
+                    : "Probe — after Run, click schematic nets/parts to plot (LTspice-style)"
                 }
                 aria-label={probeOn ? "Probe on" : "Probe"}
                 aria-pressed={probeOn}
-                onClick={() => probeSel?.setProbeMode(!probeOn)}
+                onClick={() => {
+                  const next = !probeOn;
+                  if (next) onEnsureSimWindow?.();
+                  probeSel?.setProbeMode(next);
+                }}
               >
                 <ProbeNeedleIcon active={probeOn} />
               </button>
