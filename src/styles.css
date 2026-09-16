@@ -1474,6 +1474,18 @@ body { background: var(--bg); color: var(--text); }
   object-fit: contain;
   display: block;
 }
+.probe-pin-swatch {
+  position: absolute;
+  left: 50%;
+  bottom: -3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  transform: translateX(-50%);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--probe-color, #00e676) 70%, #000);
+  z-index: 1;
+}
 
 .probe-mode-banner {
   position: absolute;
@@ -2630,6 +2642,51 @@ body { background: var(--bg); color: var(--text); }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.sim-plot-zoom-box {
+  position: absolute;
+  pointer-events: none;
+  z-index: 5;
+  border: 1.5px solid #ffd740;
+  background: rgba(255, 215, 64, 0.12);
+  box-sizing: border-box;
+}
+.sim-cursor-table-wrap {
+  margin-top: 8px;
+  overflow: auto;
+  max-height: 140px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2, #111);
+}
+.sim-cursor-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+.sim-cursor-table th,
+.sim-cursor-table td {
+  padding: 4px 8px;
+  text-align: left;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  white-space: nowrap;
+}
+.sim-cursor-table th {
+  position: sticky;
+  top: 0;
+  background: var(--panel, #1a1a1a);
+  font-weight: 600;
+  color: var(--muted);
+}
+.sim-cursor-table td .sim-legend-swatch {
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+.sim-cursor-table-delta td {
+  font-weight: 600;
+  color: var(--text);
 }
 .sim-zoom-btn.is-on {
   border-color: var(--accent);

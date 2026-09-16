@@ -19,11 +19,14 @@ import {
   isCurrentSignalName,
   isVoltageSignalName,
   resolveProbedSeries,
+  colorForSignalName,
+  PROBE_TRACE_COLORS,
 } from "../sim/probeSelection";
 import { evaluateProbeExpression } from "../sim/probeExpressions";
 import { formatProbeValue } from "../sim/probeHover";
+import { attachPlotNav } from "../sim/plotNav";
 import { type UiTheme } from "../theme";
-import type { ChartEvent, ActiveElement, Plugin } from "chart.js";
+import type { Plugin } from "chart.js";
 
 Chart.register(
   LineController,
@@ -64,17 +67,7 @@ function setTranInDirectives(
 
 type ZoomMode = "x" | "y" | "xy";
 
-/** LTspice-like high-contrast trace colors (green / blue / red / cyan / …). */
-const SERIES_COLORS = [
-  "#00e676",
-  "#40c4ff",
-  "#ff5252",
-  "#ffd740",
-  "#e040fb",
-  "#64ffda",
-  "#ffab40",
-  "#82b1ff",
-];
+const SERIES_COLORS = PROBE_TRACE_COLORS;
 
 function seriesColor(i: number): string {
   return SERIES_COLORS[i % SERIES_COLORS.length]!;
@@ -263,20 +256,22 @@ function makeLineChart(
     getCursors: () => { a: number | null; b: number | null; hover: number | null };
     onHoverTime?: (t: number | null) => void;
     onPickTime?: (t: number, which: "a" | "b") => void;
+    navDisposers: MutableRefObject<Array<() => void>>;
   },
 ): Chart {
   const tick = "#b0b8c0";
   const grid = "rgba(180,190,200,0.28)";
   const off = opts.colorOffset ?? 0;
-  return new Chart(canvas, {
+  const chart = new Chart(canvas, {
     type: "line",
     data: {
       datasets: plotSeries.map((s, i) => {
         const isI = isCurrentSignalName(s.name);
+        const color = colorForSignalName(s.name) || seriesColor(i + off);
         return {
           label: labels[i] ?? s.name,
           data: s.x.map((x, j) => ({ x, y: s.y[j] ?? 0 })),
-          borderColor: seriesColor(i + off),
+          borderColor: color,
           backgroundColor: "transparent",
           pointRadius: 0,
           borderWidth: 1.75,
@@ -294,36 +289,6 @@ function makeLineChart(
       animation: false,
       layout: { padding: { top: 22, right: 8, left: 4, bottom: 2 } },
       interaction: { mode: "index", intersect: false },
-      onHover: (_e: ChartEvent, _els: ActiveElement[], chart: Chart) => {
-        if (!opts.onHoverTime) return;
-        const xScale = chart.scales.x;
-        if (!xScale) return;
-        const ev = _e.native as MouseEvent | undefined;
-        if (!ev) {
-          opts.onHoverTime(null);
-          return;
-        }
-        const rect = chart.canvas.getBoundingClientRect();
-        const x = ev.clientX - rect.left;
-        if (x < chart.chartArea.left || x > chart.chartArea.right) {
-          opts.onHoverTime(null);
-          return;
-        }
-        opts.onHoverTime(xScale.getValueForPixel(x) as number);
-      },
-      onClick: (_e: ChartEvent, _els: ActiveElement[], chart: Chart) => {
-        if (!opts.onPickTime) return;
-        const xScale = chart.scales.x;
-        if (!xScale) return;
-        const ev = _e.native as MouseEvent | undefined;
-        if (!ev) return;
-        const rect = chart.canvas.getBoundingClientRect();
-        const x = ev.clientX - rect.left;
-        if (x < chart.chartArea.left || x > chart.chartArea.right) return;
-        const t = xScale.getValueForPixel(x) as number;
-        if (!Number.isFinite(t)) return;
-        opts.onPickTime(t, ev.shiftKey || ev.button === 2 ? "b" : "a");
-      },
       plugins: {
         legend: { display: false },
       },
@@ -391,6 +356,14 @@ function makeLineChart(
     },
     plugins: [buildTraceLabelsPlugin(), buildCursorPlugin(opts.getCursors)],
   });
+
+  opts.navDisposers.current.push(
+    attachPlotNav(chart, {
+      onHoverTime: opts.onHoverTime,
+      onPickTime: opts.onPickTime,
+    }),
+  );
+  return chart;
 }
 
 /** Magnifying-glass zoom icons — bold at 100% UI scale. */
@@ -555,6 +528,7 @@ export function SimPanel({
   const probeChartRef = useRef<Chart | null>(null);
   const stackedRefs = useRef<(HTMLCanvasElement | null)[]>([]);
   const stackedChartsRef = useRef<Chart[]>([]);
+  const navDisposersRef = useRef<Array<() => void>>([]);
   const abortRef = useRef<AbortController | null>(null);
   const abortReasonRef = useRef<"pause" | "stop" | null>(null);
   const [runState, setRunState] = useState<SimRunState>("idle");
@@ -664,25 +638,26 @@ export function SimPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [controlRef]);
 
-  useEffect(() => {
-    return () => {
-      abortRef.current?.abort();
-      chartRef.current?.destroy();
-      chartRef.current = null;
-      probeChartRef.current?.destroy();
-      probeChartRef.current = null;
-      for (const c of stackedChartsRef.current) c.destroy();
-      stackedChartsRef.current = [];
-    };
-  }, []);
-
-  useLayoutEffect(() => {
+  const disposeCharts = () => {
+    for (const d of navDisposersRef.current) d();
+    navDisposersRef.current = [];
     chartRef.current?.destroy();
     chartRef.current = null;
     probeChartRef.current?.destroy();
     probeChartRef.current = null;
     for (const c of stackedChartsRef.current) c.destroy();
     stackedChartsRef.current = [];
+  };
+
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+      disposeCharts();
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    disposeCharts();
 
     if (!result?.series.length) return;
 
@@ -697,6 +672,7 @@ export function SimPanel({
         if (which === "b") setCursorB(t);
         else setCursorA(t);
       },
+      navDisposers: navDisposersRef,
     };
     const hidden = hiddenSeriesRef.current;
 
@@ -752,7 +728,14 @@ export function SimPanel({
         },
       );
     }
-  }, [result, uiTheme, probes, plotLayout, hiddenSeries, cursorA, cursorB]);
+  }, [result, uiTheme, probes, plotLayout, hiddenSeries]);
+
+  // Redraw cursor overlays without rebuilding charts (keeps box-zoom).
+  useEffect(() => {
+    chartRef.current?.update("none");
+    probeChartRef.current?.update("none");
+    for (const c of stackedChartsRef.current) c.update("none");
+  }, [cursorA, cursorB, cursorT]);
 
   const probeModeOn = Boolean(probeSel?.probeMode);
   const simSeries: SimSeries[] = result?.series.length ? result.series : [];
@@ -958,8 +941,9 @@ export function SimPanel({
         {hasChart && (
           <div className="sim-howto" role="note">
             <strong>Probe like LTspice:</strong> click wire = V · click part = I · drag
-            wire→wire = V(a,b) · <kbd>Ctrl</kbd>+click pins · plot click = cursor A ·{" "}
-            <kbd>Shift</kbd>+click = cursor B · legend right-click removes a trace.
+            wire→wire = V(a,b) · plot: drag box = zoom · wheel = zoom time ·{" "}
+            <kbd>Alt</kbd>-drag = pan · click = cursor A · <kbd>Shift</kbd>+click = B ·
+            legend right-click removes a trace.
           </div>
         )}
         {hasChart && (
@@ -1073,7 +1057,7 @@ export function SimPanel({
               <div className="sim-legend" role="group" aria-label="Simulation traces">
                 {simSeries.map((s, i) => {
                   const on = !hiddenSeries.has(s.name);
-                  const color = seriesColor(i);
+                  const color = colorForSignalName(s.name) || seriesColor(i);
                   const label = simLabels[i] ?? s.name;
                   return (
                     <button
@@ -1104,7 +1088,7 @@ export function SimPanel({
               Probe / waveform
               {probeSeries.length ? (
                 <span className="sim-legend sim-legend-inline">
-                  {probeSeries.map((s, i) => (
+                  {probeSeries.map((s) => (
                     <button
                       key={s.name}
                       type="button"
@@ -1117,7 +1101,7 @@ export function SimPanel({
                     >
                       <span
                         className="sim-legend-swatch"
-                        style={{ background: seriesColor(i) }}
+                        style={{ background: colorForSignalName(s.name) }}
                       />
                       <span className="sim-legend-name">{s.name}</span>
                     </button>
@@ -1156,6 +1140,52 @@ export function SimPanel({
             </div>
           </section>
         </div>
+
+        {hasChart && (cursorA != null || cursorB != null) && (
+          <div className="sim-cursor-table-wrap" role="region" aria-label="Cursor readout">
+            <table className="sim-cursor-table">
+              <thead>
+                <tr>
+                  <th>Trace</th>
+                  <th>A{cursorA != null ? ` @ ${formatTimeAxis(cursorA)}` : ""}</th>
+                  <th>B{cursorB != null ? ` @ ${formatTimeAxis(cursorB)}` : ""}</th>
+                  <th>Δ (B−A)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(probeSeries.length ? probeSeries : simSeries)
+                  .filter((s) => !hiddenSeries.has(s.name))
+                  .map((s) => {
+                    const ya = cursorA != null ? nearestY(s, cursorA) : null;
+                    const yb = cursorB != null ? nearestY(s, cursorB) : null;
+                    const unit = isCurrentSignalName(s.name) ? "A" : "V";
+                    const color = colorForSignalName(s.name);
+                    return (
+                      <tr key={s.name}>
+                        <td>
+                          <span className="sim-legend-swatch" style={{ background: color }} />
+                          <span style={{ color }}>{s.name}</span>
+                        </td>
+                        <td>{ya == null ? "—" : formatProbeValue(ya, unit)}</td>
+                        <td>{yb == null ? "—" : formatProbeValue(yb, unit)}</td>
+                        <td>
+                          {ya == null || yb == null
+                            ? "—"
+                            : formatProbeValue(yb - ya, unit)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                {cursorA != null && cursorB != null && (
+                  <tr className="sim-cursor-table-delta">
+                    <td colSpan={3}>Δt</td>
+                    <td>{formatTimeAxis(Math.abs(cursorB - cursorA))}</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

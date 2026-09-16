@@ -21,6 +21,28 @@ export function probeLabel(p: ProbeSpec): string {
   return probeKey(p);
 }
 
+/** Stable LTspice-like colors so schematic pins match plot traces. */
+export const PROBE_TRACE_COLORS = [
+  "#00e676",
+  "#40c4ff",
+  "#ff5252",
+  "#ffd740",
+  "#e040fb",
+  "#64ffda",
+  "#ffab40",
+  "#82b1ff",
+] as const;
+
+export function colorForSignalName(name: string): string {
+  const s = name.trim().toUpperCase();
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)!;
+    h = Math.imul(h, 16777619);
+  }
+  return PROBE_TRACE_COLORS[(h >>> 0) % PROBE_TRACE_COLORS.length]!;
+}
+
 export function sameProbe(a: ProbeSpec, b: ProbeSpec): boolean {
   if (a.kind === "Expr" && b.kind === "Expr") return a.id === b.id;
   return probeKey(a).toUpperCase() === probeKey(b).toUpperCase();

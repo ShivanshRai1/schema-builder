@@ -28,7 +28,7 @@ import {
 } from "../sim/probeHover";
 import { useSimResult } from "../sim/SimResultContext";
 import { useProbeSelectionOptional } from "../sim/ProbeContext";
-import { probeAvailable } from "../sim/probeSelection";
+import { probeAvailable, colorForSignalName } from "../sim/probeSelection";
 import {
   SchematicWireEdge,
   type SchematicWireData,
@@ -776,27 +776,33 @@ function ProbePinMarkers({
 }) {
   if (!red && !black && !voltagePins.length) return null;
   const pin = (
-    color: "red" | "black",
+    role: "probe" | "red" | "black",
     p: { x: number; y: number; net: string },
     key: string,
-  ) => (
-    <div
-      key={key}
-      className={`probe-pin-marker probe-pin-marker-${color}`}
-      style={{ left: p.x, top: p.y }}
-      title={`${color === "red" ? "Probe" : "Black"} · V(${p.net})`}
-    >
-      <img
-        src={color === "red" ? "/icons/probe-red.png" : "/icons/probe-black.png"}
-        alt=""
-        draggable={false}
-      />
-    </div>
-  );
+  ) => {
+    const signal =
+      role === "black" && red
+        ? `V(${red.net},${p.net})`
+        : `V(${p.net})`;
+    const color = colorForSignalName(signal);
+    const img =
+      role === "black" ? "/icons/probe-black.png" : "/icons/probe-red.png";
+    return (
+      <div
+        key={key}
+        className={`probe-pin-marker probe-pin-marker-${role === "black" ? "black" : "red"}`}
+        style={{ left: p.x, top: p.y, ["--probe-color" as string]: color }}
+        title={`${signal}`}
+      >
+        <span className="probe-pin-swatch" style={{ background: color }} />
+        <img src={img} alt="" draggable={false} />
+      </div>
+    );
+  };
   return (
     <ViewportPortal>
       <div className="probe-pin-layer" aria-hidden>
-        {voltagePins.map((p, i) => pin("red", p, `v-${p.net}-${i}`))}
+        {voltagePins.map((p, i) => pin("probe", p, `v-${p.net}-${i}`))}
         {red ? pin("red", red, "diff-red") : null}
         {black ? pin("black", black, "diff-black") : null}
       </div>
