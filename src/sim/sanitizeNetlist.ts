@@ -1,5 +1,3 @@
-import { applyLiveXpulseStimulus } from "./loadDumpPulseInc";
-
 /**
  * Accuracy helpers applied immediately before a fleet Run.
  * Fixes common netlist mistakes that produce flat/zero or truncated waveforms
@@ -310,11 +308,10 @@ export function sanitizeNetlistForAccuracy(netlist: string): SanitizeNetlistResu
   text = remap.text;
   notes.push(...remap.notes);
 
-  // Email wiring: live XPULSE replaces V1 PWL + R1 on the Run deck only.
-  const xpulse = applyLiveXpulseStimulus(text);
-  text = xpulse.text;
-  notes.push(...xpulse.notes);
-
+  // Live XPULSE-at-Run is intentionally not applied here: on D2SPICE the
+  // ISO *.subckt often shows a healthy internal `src` wave while clamp `out`
+  // stays ~0 (param `{Ri}` / B-source quirks). Working Conditions still drive
+  // V1 PWL + R1 (proven). Pulse profiles + * XPULSE comments remain in the deck.
   const tran = ensureTranCoversPwl(text);
   text = tran.text;
   if (tran.note) notes.push(tran.note);
