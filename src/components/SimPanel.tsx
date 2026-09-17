@@ -30,6 +30,11 @@ import {
   parseLoadDumpFromNetlist,
   type LoadDumpConditions,
 } from "../sim/loadDumpConditions";
+import {
+  findLoadDumpPreset,
+  LOAD_DUMP_PRESETS,
+  type LoadDumpDiodeSlot,
+} from "../sim/loadDumpPresets";
 import { type UiTheme } from "../theme";
 import type { Plugin } from "chart.js";
 
@@ -704,7 +709,16 @@ export function SimPanel({
   /** Last run kept in App — restores waveforms if this panel remounts. */
   retainedResult?: SimResult | null;
   /** Apply load-dump working conditions to schematic + directives. */
-  onLoadDumpConditionsChange?: (c: LoadDumpConditions) => void;
+  onLoadDumpConditionsChange?: (
+    c: LoadDumpConditions,
+    opts?: {
+      diodeModel?: {
+        pn: string;
+        slot: LoadDumpDiodeSlot;
+        kind: "DTVS" | "DTVSBI";
+      };
+    },
+  ) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
@@ -790,6 +804,28 @@ export function SimPanel({
     if (!onLoadDumpConditionsChange) return;
     wcApplyingRef.current = true;
     onLoadDumpConditionsChange(wcRef.current);
+    window.setTimeout(() => {
+      wcApplyingRef.current = false;
+    }, 0);
+  };
+
+  const [conditionId, setConditionId] = useState("");
+
+  const applyConditionPreset = (id: string) => {
+    setConditionId(id);
+    if (!id || !onLoadDumpConditionsChange) return;
+    const preset = findLoadDumpPreset(id);
+    if (!preset) return;
+    wcApplyingRef.current = true;
+    setWc(preset.conditions);
+    wcRef.current = preset.conditions;
+    onLoadDumpConditionsChange(preset.conditions, {
+      diodeModel: {
+        pn: preset.pn,
+        slot: preset.diodeSlot,
+        kind: preset.diodeKind,
+      },
+    });
     window.setTimeout(() => {
       wcApplyingRef.current = false;
     }, 0);
@@ -1165,6 +1201,23 @@ export function SimPanel({
           className="sim-wc-fields"
           title="Load-dump working conditions — edits update schematic + netlist"
         >
+          <label className="sim-wc-field sim-wc-preset" title="ISO 16750-2 Test A condition table">
+            <span className="sim-wc-lab">Condition</span>
+            <select
+              className="sim-wc-select"
+              value={conditionId}
+              disabled={busy || !onLoadDumpConditionsChange}
+              aria-label="Load-dump condition preset"
+              onChange={(e) => applyConditionPreset(e.target.value)}
+            >
+              <option value="">Preset…</option>
+              {LOAD_DUMP_PRESETS.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </label>
           {(
             [
               ["usPeak", "Us", "V", "Peak voltage Us"],
@@ -1185,7 +1238,10 @@ export function SimPanel({
                 value={wc[key]}
                 disabled={busy || !onLoadDumpConditionsChange}
                 aria-label={tip}
-                onChange={(e) => patchWc({ [key]: e.target.value })}
+                onChange={(e) => {
+                  setConditionId("");
+                  patchWc({ [key]: e.target.value });
+                }}
                 onBlur={() => commitWc()}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {

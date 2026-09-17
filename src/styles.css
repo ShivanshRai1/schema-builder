@@ -2931,6 +2931,24 @@ body { background: var(--bg); color: var(--text); }
   outline: none;
   border-color: var(--accent);
 }
+.sim-wc-preset {
+  min-width: 118px;
+}
+.sim-wc-select {
+  width: 128px;
+  max-width: 148px;
+  font-size: 11px;
+  font-family: ui-monospace, Menlo, monospace;
+  padding: 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+}
+.sim-wc-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 .pop-out-btn { padding: 2px 6px; line-height: 1; font-size: 13px; }
 
 /* Floating windows (pop-out panels) ------------------------------------- */

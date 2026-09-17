@@ -27,6 +27,7 @@ import {
   setWcInDirectives,
   type LoadDumpConditions,
 } from "./sim/loadDumpConditions";
+import type { LoadDumpDiodeSlot } from "./sim/loadDumpPresets";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { FloatingWindow } from "./components/FloatingWindow";
 import { COMPONENT_SPECS, defaultParams, getComponentPins, isGroundKind } from "./model/componentSpecs";
@@ -657,11 +658,22 @@ export default function App() {
   /**
    * Apply load-dump working conditions to graph + directives (keeps schematic
    * and netlist aligned). Updates V1 stimulus, R1 value, *.wc marker, .tran.
+   * Optional diodeModel binds a PN (XFD→D1 / SM→D2) without touching other parts.
    */
   const applyLoadDumpConditions = useCallback(
-    (c: LoadDumpConditions) => {
+    (
+      c: LoadDumpConditions,
+      opts?: {
+        diodeModel?: {
+          pn: string;
+          slot: LoadDumpDiodeSlot;
+          kind: "DTVS" | "DTVSBI";
+        };
+      },
+    ) => {
       const pwl = buildLoadDumpPwl(c);
       const ri = (c.ri.trim() || "2").replace(/ohm$/i, "");
+      const diode = opts?.diodeModel;
 
       pushHistory();
       setNodes((ns) => {
@@ -673,10 +685,41 @@ export default function App() {
           const pfx = COMPONENT_SPECS[n.data.kind]?.refdesPrefix;
           return pfx === "R";
         });
+        const dNodes = ns.filter((n) => {
+          const k = n.data.kind;
+          return (
+            k === "D" ||
+            k === "DZ" ||
+            k === "DS" ||
+            k === "LED" ||
+            k === "DTVS" ||
+            k === "DTVSBI"
+          );
+        });
         const vTarget =
           vNodes.find((n) => /^v1$/i.test(n.data.refdes)) ?? vNodes[0];
         const rTarget =
           rNodes.find((n) => /^r1$/i.test(n.data.refdes)) ?? rNodes[0];
+
+        let dTarget: (typeof ns)[number] | undefined;
+        if (diode) {
+          if (diode.slot === "D1") {
+            dTarget =
+              dNodes.find((n) => /^d1$/i.test(n.data.refdes)) ??
+              dNodes.find((n) => /^x1$/i.test(n.data.refdes)) ??
+              dNodes.find((n) => n.data.kind === "DTVSBI") ??
+              dNodes.find((n) => /^xfd/i.test(String(n.data.params.model ?? ""))) ??
+              dNodes[0];
+          } else {
+            dTarget =
+              dNodes.find((n) => /^d2$/i.test(n.data.refdes)) ??
+              dNodes.find((n) => /^x2$/i.test(n.data.refdes)) ??
+              dNodes.find((n) => n.data.kind === "DTVS") ??
+              dNodes.find((n) => /^sm/i.test(String(n.data.params.model ?? ""))) ??
+              dNodes[1] ??
+              dNodes[0];
+          }
+        }
 
         return ns.map((n) => {
           if (vTarget && n.id === vTarget.id) {
@@ -709,12 +752,30 @@ export default function App() {
               },
             };
           }
+          if (diode && dTarget && n.id === dTarget.id) {
+            const nextKind = diode.kind;
+            const base =
+              nextKind !== n.data.kind ? defaultParams(nextKind) : { ...n.data.params };
+            return {
+              ...n,
+              data: {
+                ...n.data,
+                kind: nextKind,
+                // Keep existing refdes (D1/D2); only bind the PN model name.
+                params: { ...base, model: diode.pn },
+              },
+            };
+          }
           return n;
         });
       });
 
       setDirectives((dirs) => setWcInDirectives(dirs, c));
-      setNetlistStatus("working conditions updated (schematic + netlist)");
+      setNetlistStatus(
+        diode
+          ? `condition applied (${diode.slot}=${diode.pn})`
+          : "working conditions updated (schematic + netlist)",
+      );
       setNetlistStatusError(false);
     },
     [setNodes, pushHistory],
