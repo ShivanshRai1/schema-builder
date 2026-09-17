@@ -7,19 +7,34 @@
  * Also updates V* PWL stimulus, R* value, and .tran stop when applying.
  */
 
-/** Selectable test-pulse id (email #1 / #3). Stimulus stays PWL until XPULSE .inc lands. */
+import { formatXpulseComment } from "./loadDumpPulseInc";
+
+/** Selectable test-pulse id (email point 3). */
 export type LoadDumpPulseId = "ISO16750_A" | "ISO7637_5A";
 
 export const LOAD_DUMP_PULSES: readonly {
   id: LoadDumpPulseId;
   label: string;
+  /** Short tip for the Pulse dropdown. */
+  tip: string;
 }[] = [
-  { id: "ISO16750_A", label: "ISO 16750-2 A" },
-  { id: "ISO7637_5A", label: "ISO 7637-5a" },
+  {
+    id: "ISO16750_A",
+    label: "ISO 16750-2 A",
+    tip: "Us = absolute peak (Uspk). Shape matches ISO16750_TESTA.",
+  },
+  {
+    id: "ISO7637_5A",
+    label: "ISO 7637-5a",
+    tip: "Us = amplitude above UA (peak = UA+Us). Shape matches ISO7637_5A.",
+  },
 ];
 
 export type LoadDumpConditions = {
-  /** Absolute peak voltage Us (V). */
+  /**
+   * Peak / pulse voltage Us (V).
+   * ISO16750_A: absolute peak. ISO7637_5A: amplitude above UA.
+   */
   usPeak: string;
   /** Supply / battery UA (V). */
   uaSupply: string;
@@ -31,7 +46,7 @@ export type LoadDumpConditions = {
   tdMs: string;
   /** Simulation stop time (ms). */
   simStopMs: string;
-  /** Test pulse profile (stored in *.wc; drives future XPULSE). */
+  /** Test pulse profile (stored in *.wc). */
   pulse: LoadDumpPulseId;
 };
 
@@ -109,8 +124,9 @@ export function normalizePulseId(raw: string | undefined | null): LoadDumpPulseI
 }
 
 /**
- * Sample ISO-like load-dump (absolute peak Us — matches email table / ISO16750 Uspk).
- * Pulse id is recorded on *.wc for selectable profiles; PWL shape stays shared until XPULSE .inc.
+ * ISO load-dump PWL matching the email B-source formulas.
+ * ISO16750_A: Us = absolute peak (Uspk). ISO7637_5A: Us = amplitude above UA.
+ * Applied to V1; R1 still carries Ri (same electrical idea as XPULSE+internal R).
  */
 export function buildLoadDumpPwl(c: LoadDumpConditions): string {
   const ua = parseNumber(c.uaSupply, 27.8);
@@ -121,9 +137,9 @@ export function buildLoadDumpPwl(c: LoadDumpConditions): string {
   const ln10 = 2.302585093;
   const tpk = Math.max(1e-9, 1.25 * tr);
   const tau = Math.max(1e-9, (td - 1.125 * tr) / ln10);
-  // UI Us is always absolute peak. ISO7637_5A .subckt uses amplitude-above-UA;
-  // when XPULSE lands we convert; PWL path keeps absolute peak for both.
-  const usa = us - ua;
+  const pulse = normalizePulseId(c.pulse);
+  // 16750: absolute peak → amplitude = Us-UA. 7637: Us is already amplitude.
+  const usa = pulse === "ISO7637_5A" ? us : us - ua;
 
   const times = new Set<number>([0, tpk]);
   for (const f of [0.05, 0.1, 0.2, 0.35, 0.5, 0.7, 1.0]) {
@@ -145,7 +161,8 @@ export function buildLoadDumpPwl(c: LoadDumpConditions): string {
 
 export function formatWcDirective(c: LoadDumpConditions): string {
   const pulse = normalizePulseId(c.pulse);
-  return `* .wc UA=${c.uaSupply.trim() || "27.8"} Us=${c.usPeak.trim() || "151"} Ri=${c.ri.trim() || "2"} tr=${c.trMs.trim() || "10"}m td=${c.tdMs.trim() || "350"}m stop=${msToSpiceTime(c.simStopMs)} pulse=${pulse}`;
+  const base = `* .wc UA=${c.uaSupply.trim() || "27.8"} Us=${c.usPeak.trim() || "151"} Ri=${c.ri.trim() || "2"} tr=${c.trMs.trim() || "10"}m td=${c.tdMs.trim() || "350"}m stop=${msToSpiceTime(c.simStopMs)} pulse=${pulse}`;
+  return base;
 }
 
 function parseWcLine(line: string): Partial<LoadDumpConditions> | null {
@@ -239,14 +256,21 @@ export function setWcInDirectives(
   dirs: string[] | undefined,
   c: LoadDumpConditions,
 ): string[] {
-  const withoutWc = [...(dirs ?? [])].filter((d) => !/^\*\s*\.wc\b/i.test(d.trim()));
+  const withoutWc = [...(dirs ?? [])].filter(
+    (d) => !/^\*\s*\.wc\b/i.test(d.trim()) && !/^\*\s*XPULSE\b/i.test(d.trim()),
+  );
   const withoutTran = withoutWc.filter((d) => !/^\.tran\b/i.test(d.trim()));
   const step =
     parseNumber(c.simStopMs, 1000) >= 100
       ? "250u"
       : "1u";
   const stop = msToSpiceTime(c.simStopMs);
-  return [...withoutTran, formatWcDirective(c), `.tran ${step} ${stop}`];
+  return [
+    ...withoutTran,
+    formatWcDirective(c),
+    formatXpulseComment(c),
+    `.tran ${step} ${stop}`,
+  ];
 }
 
 export function conditionsEqual(a: LoadDumpConditions, b: LoadDumpConditions): boolean {

@@ -1246,7 +1246,10 @@ export function SimPanel({
           </label>
           <label
             className="sim-wc-field sim-wc-pulse"
-            title="Test pulse profile (stored in *.wc; PWL until XPULSE .inc)"
+            title={
+              LOAD_DUMP_PULSES.find((p) => p.id === normalizePulseId(wc.pulse))?.tip ??
+              "Test pulse profile"
+            }
           >
             <span className="sim-wc-lab">Pulse</span>
             <select
@@ -1257,7 +1260,7 @@ export function SimPanel({
               onChange={(e) => applyPulse(e.target.value as LoadDumpPulseId)}
             >
               {LOAD_DUMP_PULSES.map((p) => (
-                <option key={p.id} value={p.id}>
+                <option key={p.id} value={p.id} title={p.tip}>
                   {p.label}
                 </option>
               ))}
@@ -1265,7 +1268,14 @@ export function SimPanel({
           </label>
           {(
             [
-              ["usPeak", "Us", "V", "Peak voltage Us"],
+              [
+                "usPeak",
+                "Us",
+                "V",
+                normalizePulseId(wc.pulse) === "ISO7637_5A"
+                  ? "Us = amplitude above UA (ISO 7637-5a)"
+                  : "Us = absolute peak Uspk (ISO 16750-2 A)",
+              ],
               ["uaSupply", "Ua", "V", "Supply UA"],
               ["ri", "Ri", "Ω", "Source resistance"],
               ["trMs", "tr", "ms", "Rise time"],

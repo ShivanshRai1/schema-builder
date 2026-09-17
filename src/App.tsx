@@ -28,6 +28,7 @@ import {
   type LoadDumpConditions,
 } from "./sim/loadDumpConditions";
 import type { LoadDumpDiodeSlot } from "./sim/loadDumpPresets";
+import { ensureLoadDumpPulseLibrary } from "./sim/loadDumpPulseInc";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { FloatingWindow } from "./components/FloatingWindow";
 import { COMPONENT_SPECS, defaultParams, getComponentPins, isGroundKind } from "./model/componentSpecs";
@@ -787,10 +788,15 @@ export default function App() {
       });
 
       setDirectives((dirs) => setWcInDirectives(dirs, c));
+      setLibrary((prev) => ensureLoadDumpPulseLibrary(prev));
+      const pulseNote =
+        c.pulse === "ISO7637_5A"
+          ? "pulse=ISO7637_5A (Us=amplitude)"
+          : "pulse=ISO16750_A (Us=absolute peak)";
       setNetlistStatus(
         diode
-          ? `condition applied (${diode.slot}=${diode.pn})`
-          : "working conditions updated (schematic + netlist)",
+          ? `condition applied (${diode.slot}=${diode.pn}, ${pulseNote})`
+          : `working conditions updated (${pulseNote})`,
       );
       setNetlistStatusError(false);
     },

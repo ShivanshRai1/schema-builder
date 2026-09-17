@@ -8,6 +8,7 @@ import {
   parseDefinedSpiceNames,
 } from "./builtinLibrary";
 import { dedupeAnalysisDirectives } from "./parseDeviceParams";
+import { ensureLoadDumpPulseLibrary } from "../sim/loadDumpPulseInc";
 
 // ---------------------------------------------------------------------------
 // graph -> SPICE netlist. PURE FUNCTION: (nodes, edges) -> string.
@@ -49,13 +50,18 @@ export function toNetlist(
   lines.push(`* ${deviceCount} devices, ${nets.length} nets`);
   lines.push("");
 
-  const userLib = opts.library?.trim() ?? "";
+  const userLib = ensureLoadDumpPulseLibrary(opts.library?.trim() ?? "");
   const directiveBlock = (opts.directives ?? DEFAULT_DIRECTIVES).join("\n");
   const autoModels = opts.autoModels !== false;
 
+  // Only auto-inject pulse profiles when a load-dump *.wc marker is present
+  // (avoids changing unrelated schematics' Models panel / netlist size).
+  const wantsPulseLib = /\*\s*\.wc\b/i.test(directiveBlock);
+  const libForDeck = wantsPulseLib ? userLib : (opts.library?.trim() ?? "");
+
   if (autoModels) {
     const required = collectRequiredModelNames(nodes);
-    const defined = parseDefinedSpiceNames(`${userLib}\n${directiveBlock}`);
+    const defined = parseDefinedSpiceNames(`${libForDeck}\n${directiveBlock}`);
     const builtin = buildMissingBuiltinLibrary(required, defined);
     if (builtin) {
       lines.push(builtin);
@@ -63,9 +69,9 @@ export function toNetlist(
     }
   }
 
-  if (userLib) {
+  if (libForDeck) {
     lines.push("* --- .subckt library (user-attached) ---");
-    lines.push(userLib);
+    lines.push(libForDeck);
     lines.push("");
   }
 
