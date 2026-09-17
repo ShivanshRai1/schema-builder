@@ -284,3 +284,14 @@ export function conditionsEqual(a: LoadDumpConditions, b: LoadDumpConditions): b
     normalizePulseId(a.pulse) === normalizePulseId(b.pulse)
   );
 }
+
+/** One-line summary for saved-condition banners / lastSim metadata. */
+export function formatLoadDumpConditionsSummary(c: LoadDumpConditions): string {
+  const pulse = normalizePulseId(c.pulse);
+  const pulseLab = LOAD_DUMP_PULSES.find((p) => p.id === pulse)?.label ?? pulse;
+  return (
+    `${pulseLab} · Us=${c.usPeak.trim() || "—"}V · Ua=${c.uaSupply.trim() || "—"}V` +
+    ` · Ri=${c.ri.trim() || "—"}Ω · tr=${c.trMs.trim() || "—"}ms` +
+    ` · td=${c.tdMs.trim() || "—"}ms · stop=${c.simStopMs.trim() || "—"}ms`
+  );
+}

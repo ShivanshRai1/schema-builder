@@ -2295,6 +2295,21 @@ body { background: var(--bg); color: var(--text); }
 .netlist-panel, .chat-panel, .sim-panel, .library-panel { display: flex; flex-direction: column; min-height: 0; }
 .netlist-panel { flex: 1.1; border-bottom: 1px solid var(--border); }
 .sim-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.sim-panel .netlist-status {
+  margin: 0;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel-2) 65%, transparent);
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+.sim-saved-result-banner {
+  background: color-mix(in srgb, #c9a227 18%, var(--panel-2)) !important;
+  color: color-mix(in srgb, #8a6a00 55%, var(--text));
+  border-bottom: 1px solid color-mix(in srgb, #c9a227 45%, var(--border)) !important;
+  font-weight: 650;
+  line-height: 1.4;
+}
 .sim-charts-split {
   flex: 1;
   min-height: 0;
@@ -2784,11 +2799,12 @@ body { background: var(--bg); color: var(--text); }
 .sim-engine {
   font-size: 11px;
   color: var(--text);
-  background: var(--panel-2);
+  background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 2px 6px;
-  max-width: 96px;
+  border-radius: 7px;
+  padding: 5px 8px;
+  max-width: 104px;
+  height: 30px;
 }
 .sim-engine:focus { outline: none; border-color: var(--accent); }
 .sim-engine:disabled { opacity: 0.6; }
@@ -2796,32 +2812,47 @@ body { background: var(--bg); color: var(--text); }
 .sim-tran-fields {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   font-size: 11px;
   color: var(--muted);
-  margin-right: 4px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 70%, var(--panel-2));
+  border: 1px solid var(--border);
 }
-.sim-tran-label { white-space: nowrap; }
+.sim-tran-label {
+  white-space: nowrap;
+  font-weight: 700;
+  font-family: ui-monospace, Menlo, monospace;
+  color: var(--text);
+  opacity: 0.85;
+}
 .sim-tran-input {
-  width: 56px;
+  width: 58px;
   font-size: 11px;
   font-family: ui-monospace, Menlo, monospace;
-  padding: 2px 4px;
+  padding: 4px 6px;
   border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg);
+  border-radius: 6px;
+  background: var(--panel);
   color: var(--text);
+  height: 26px;
 }
-.sim-tran-input-stop { width: 56px; }
-.sim-tran-sep { opacity: 0.6; }
+.sim-tran-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.sim-tran-input-stop { width: 58px; }
+.sim-tran-sep { opacity: 0.55; font-weight: 600; }
 .sim-tran-preset {
   font-size: 10.5px;
-  max-width: 118px;
-  padding: 2px 2px;
+  max-width: 128px;
+  padding: 4px 6px;
   border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg);
+  border-radius: 6px;
+  background: var(--panel);
   color: var(--text);
+  height: 26px;
 }
 
 .library-textarea {
@@ -2838,76 +2869,142 @@ body { background: var(--bg); color: var(--text); }
   padding: 7px 12px; background: var(--panel); border-bottom: 1px solid var(--border);
   font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
+
+/* Simulation toolbar — grouped actions / conditions / setup */
+.sim-panel > .panel-header.sim-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 10px 12px;
+  padding: 10px 12px;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--panel-2) 88%, var(--accent) 12%) 0%,
+      var(--panel) 100%
+    );
+  border-bottom: 1px solid var(--border);
+  font-family: ui-sans-serif, system-ui, Segoe UI, sans-serif;
+}
+.sim-toolbar-actions {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+.sim-toolbar-run-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sim-toolbar-setup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-left: 0;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 55%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
 .panel-header-right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .sim-run-btn {
   flex: 0 0 auto;
-  margin-left: 4px;
-  padding: 6px 16px;
-  font-size: 13px;
+  margin-left: 0;
+  padding: 7px 18px;
+  font-size: 12.5px;
   font-weight: 800;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
   color: #fff;
-  background: #1a73e8;
-  border: 2px solid #0b57d0;
-  border-radius: 8px;
-  box-shadow: 0 2px 0 #0b57d0, 0 4px 14px rgba(26, 115, 232, 0.35);
+  background: linear-gradient(180deg, #2b7de9 0%, #1a73e8 100%);
+  border: 1px solid #0b57d0;
+  border-radius: 9px;
+  box-shadow: 0 1px 0 #0b57d0, 0 6px 16px rgba(26, 115, 232, 0.28);
   cursor: pointer;
 }
 .sim-run-btn:hover:not(:disabled) {
-  filter: brightness(1.08);
+  filter: brightness(1.06);
 }
 .sim-run-btn:disabled {
   opacity: 0.75;
   cursor: wait;
 }
 .sim-run-btn.is-running {
-  background: #1557b0;
+  background: linear-gradient(180deg, #1f6fd4 0%, #1557b0 100%);
 }
 .sim-stop-btn {
   flex: 0 0 auto;
-  margin-left: 2px;
-  padding: 6px 14px;
-  font-size: 13px;
+  margin-left: 0;
+  padding: 7px 14px;
+  font-size: 12.5px;
   font-weight: 800;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
   color: #fff;
-  background: #c62828;
-  border: 2px solid #8e0000;
-  border-radius: 8px;
-  box-shadow: 0 2px 0 #8e0000, 0 4px 14px rgba(198, 40, 40, 0.3);
+  background: linear-gradient(180deg, #d64545 0%, #c62828 100%);
+  border: 1px solid #8e0000;
+  border-radius: 9px;
+  box-shadow: 0 1px 0 #8e0000, 0 6px 16px rgba(198, 40, 40, 0.22);
   cursor: pointer;
 }
 .sim-stop-btn:hover:not(:disabled) {
-  filter: brightness(1.08);
+  filter: brightness(1.06);
 }
 .sim-stop-btn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
   box-shadow: none;
 }
+
+.sim-wc-card {
+  flex: 1 1 320px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px 10px 8px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 72%, var(--bg));
+  border: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 6%, transparent);
+}
+.sim-wc-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sim-wc-card-title {
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
 .sim-wc-fields {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-end;
   gap: 6px 8px;
-  flex: 1 1 220px;
+  flex: 1 1 auto;
   min-width: 0;
-  margin: 0 8px;
-  padding: 2px 0;
+  margin: 0;
+  padding: 0;
 }
 .sim-wc-field {
   display: inline-flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
   margin: 0;
   min-width: 52px;
 }
 .sim-wc-lab {
   font-size: 9.5px;
   font-weight: 700;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.03em;
   color: var(--muted);
   line-height: 1.1;
   white-space: nowrap;
@@ -2918,63 +3015,91 @@ body { background: var(--bg); color: var(--text); }
   opacity: 0.8;
 }
 .sim-wc-input {
-  width: 56px;
-  font-size: 11px;
+  width: 58px;
+  font-size: 11.5px;
   font-family: ui-monospace, Menlo, monospace;
-  padding: 2px 4px;
+  padding: 5px 6px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 6px;
   background: var(--bg);
   color: var(--text);
+  height: 28px;
+}
+.sim-wc-input:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 .sim-wc-input:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 .sim-wc-preset {
-  min-width: 118px;
+  min-width: 122px;
 }
 .sim-wc-select {
-  width: 128px;
-  max-width: 148px;
+  width: 132px;
+  max-width: 156px;
   font-size: 11px;
-  font-family: ui-monospace, Menlo, monospace;
-  padding: 2px 4px;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  padding: 5px 6px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 6px;
   background: var(--bg);
   color: var(--text);
+  height: 28px;
 }
 .sim-wc-select:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 .sim-wc-pulse {
-  min-width: 108px;
+  min-width: 112px;
 }
 .sim-wc-select-pulse {
-  width: 118px;
-  max-width: 132px;
+  width: 122px;
+  max-width: 140px;
 }
 .sim-wc-save-btn {
   align-self: flex-end;
-  margin-bottom: 1px;
-  padding: 3px 8px;
-  font-size: 11px;
-  font-weight: 600;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg);
-  color: var(--text);
+  margin-bottom: 0;
+  padding: 5px 12px;
+  font-size: 11.5px;
+  font-weight: 750;
+  letter-spacing: 0.01em;
+  height: 28px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent) 16%, var(--panel));
+  color: var(--accent);
   cursor: pointer;
   white-space: nowrap;
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--accent) 25%, transparent);
 }
 .sim-wc-save-btn:hover:not(:disabled) {
   border-color: var(--accent);
+  color: #fff;
+  background: var(--accent);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 .sim-wc-save-btn:disabled {
-  opacity: 0.4;
+  opacity: 0.5;
   cursor: not-allowed;
+  box-shadow: none;
+}
+
+.sim-panel .sim-toolbar-setup .badge {
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 8px;
+  padding: 0 10px;
+  font-weight: 600;
+}
+.sim-panel .sim-toolbar-setup .sim-probe-btn {
+  height: 30px;
+  border-radius: 8px;
+  padding: 4px 10px;
 }
 .pop-out-btn { padding: 2px 6px; line-height: 1; font-size: 13px; }
 

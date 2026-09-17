@@ -5,6 +5,9 @@ const SHARE_PREFIX = "#share=";
 /** Soft limit — beyond this, suggest file export instead of a URL. */
 export const SHARE_URL_SOFT_LIMIT = 90_000;
 
+/** Public app URL used in share links when developing on localhost. */
+const DEFAULT_PUBLIC_SHARE_ORIGIN = "http://165.22.212.92:8088/";
+
 function bytesToBase64Url(bytes: Uint8Array): string {
   let bin = "";
   for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]!);
@@ -32,12 +35,30 @@ export function decodeSharePayload(encoded: string): WorkspaceFile {
   return parseProjectPayload(JSON.parse(json));
 }
 
-export function buildShareUrl(ws: WorkspaceFile, origin = window.location.origin + window.location.pathname): {
+/** Origin for share links — prefers DO / env over localhost. */
+export function resolveShareOrigin(): string {
+  const fromEnv = (import.meta.env.VITE_SHARE_ORIGIN as string | undefined)?.trim();
+  if (fromEnv) {
+    return fromEnv.replace(/\/$/, "");
+  }
+  if (typeof window === "undefined") {
+    return DEFAULT_PUBLIC_SHARE_ORIGIN.replace(/\/$/, "");
+  }
+  const host = window.location.hostname;
+  if (host === "localhost" || host === "127.0.0.1") {
+    return DEFAULT_PUBLIC_SHARE_ORIGIN.replace(/\/$/, "");
+  }
+  const path = window.location.pathname || "/";
+  const base = `${window.location.origin}${path === "/" ? "" : path.replace(/\/$/, "")}`;
+  return base;
+}
+
+export function buildShareUrl(ws: WorkspaceFile, origin = resolveShareOrigin()): {
   url: string;
   tooLarge: boolean;
 } {
   const encoded = encodeSharePayload(ws);
-  const url = `${origin}${SHARE_PREFIX}${encoded}`;
+  const url = `${origin.replace(/\/$/, "")}${SHARE_PREFIX}${encoded}`;
   return { url, tooLarge: url.length > SHARE_URL_SOFT_LIMIT };
 }
 

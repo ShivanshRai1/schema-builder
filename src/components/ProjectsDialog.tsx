@@ -81,7 +81,7 @@ export function ProjectsDialog({
           <div>
             <h2>Projects</h2>
             <p className="projects-dialog-sub">
-              Save writes a shared project on the server (everyone sees it). Login-based private saves come later.
+              Save writes a shared project on the server (everyone sees it).
             </p>
           </div>
           <button type="button" className="ghost-btn" onClick={onClose}>

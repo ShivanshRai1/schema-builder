@@ -21,6 +21,8 @@ export type WorkspaceTabLastSim = {
   message: string;
   engine?: string;
   series: WorkspaceTabSimSeries[];
+  /** Pulse + Us/Ua/Ri/… at Save time (shown on restored-result banner). */
+  conditionsSummary?: string;
 };
 
 export type WorkspaceTabFile = {
@@ -123,6 +125,10 @@ function sanitizeLastSim(raw: unknown): WorkspaceTabLastSim | null | undefined {
     message: String(s.message ?? ""),
     engine: s.engine != null ? String(s.engine) : undefined,
     series,
+    conditionsSummary:
+      typeof s.conditionsSummary === "string" && s.conditionsSummary.trim()
+        ? s.conditionsSummary.trim()
+        : undefined,
   };
 }
 

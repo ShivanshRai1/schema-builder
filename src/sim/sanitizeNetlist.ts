@@ -308,15 +308,15 @@ export function sanitizeNetlistForAccuracy(netlist: string): SanitizeNetlistResu
   text = remap.text;
   notes.push(...remap.notes);
 
-  // Live XPULSE-at-Run stays off: D2SPICE still shows healthy `src` while clamp
-  // V(out)/V(2) stays ~mV. Keep V1 PWL + R1 (proven). * XPULSE comments remain.
+  // Live XPULSE-at-Run stays off: B+R numeric still left clamp V(2) ~mV on
+  // QSPICE while xp_src pulsed. Keep proven V1 PWL + R1. Library/docs unchanged.
   const tran = ensureTranCoversPwl(text);
   text = tran.text;
   if (tran.note) notes.push(tran.note);
 
   if (/delay\s*\(|\bTABLE\s*\(/i.test(text)) {
     warnings.push(
-      "Library uses LTspice-only constructs (delay/TABLE) — D2SPICE/QSPICE may reject those .subckt bodies",
+      "Library uses unsupported constructs (delay/TABLE) — D1SPICE/D2SPICE may reject those .subckt bodies",
     );
   }
 

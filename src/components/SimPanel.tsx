@@ -27,6 +27,7 @@ import { formatProbeValue } from "../sim/probeHover";
 import { attachPlotNav } from "../sim/plotNav";
 import {
   conditionsEqual,
+  formatLoadDumpConditionsSummary,
   LOAD_DUMP_PULSES,
   normalizePulseId,
   parseLoadDumpFromNetlist,
@@ -1201,202 +1202,207 @@ export function SimPanel({
       className={`sim-panel${busy ? " is-running" : ""}`}
       aria-busy={busy}
     >
-      <div className="panel-header">
-        <span className="sim-tabs">
-          <span className="sim-tab on">Waveforms</span>
-        </span>
-        <button
-          type="button"
-          className={`sim-run-btn${busy ? " is-running" : ""}`}
-          disabled={busy}
-          onClick={() => play()}
-          title="Run simulation with the .tran time set on the right"
-        >
-          {busy ? "Running…" : runState === "paused" ? "Resume" : "Run"}
-        </button>
-        <button
-          type="button"
-          className="sim-stop-btn"
-          disabled={runState === "idle"}
-          onClick={() => stop()}
-          title={runState === "idle" ? "Stop (idle)" : "Stop simulation"}
-        >
-          Stop
-        </button>
-        <div
-          className="sim-wc-fields"
-          title="Load-dump working conditions — edits update schematic + netlist"
-        >
-          <label className="sim-wc-field sim-wc-preset" title="ISO 16750-2 Test A condition table">
-            <span className="sim-wc-lab">Condition</span>
-            <select
-              className="sim-wc-select"
-              value={conditionId}
-              disabled={busy || !onLoadDumpConditionsChange}
-              aria-label="Load-dump condition preset"
-              onChange={(e) => applyConditionPreset(e.target.value)}
-            >
-              <option value="">Preset…</option>
-              {LOAD_DUMP_PRESETS.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label
-            className="sim-wc-field sim-wc-pulse"
-            title={
-              LOAD_DUMP_PULSES.find((p) => p.id === normalizePulseId(wc.pulse))?.tip ??
-              "Test pulse profile"
-            }
-          >
-            <span className="sim-wc-lab">Pulse</span>
-            <select
-              className="sim-wc-select sim-wc-select-pulse"
-              value={normalizePulseId(wc.pulse)}
-              disabled={busy || !onLoadDumpConditionsChange}
-              aria-label="Load-dump test pulse"
-              onChange={(e) => applyPulse(e.target.value as LoadDumpPulseId)}
-            >
-              {LOAD_DUMP_PULSES.map((p) => (
-                <option key={p.id} value={p.id} title={p.tip}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          {(
-            [
-              [
-                "usPeak",
-                "Us",
-                "V",
-                normalizePulseId(wc.pulse) === "ISO7637_5A"
-                  ? "Us = amplitude above UA (ISO 7637-5a)"
-                  : "Us = absolute peak Uspk (ISO 16750-2 A)",
-              ],
-              ["uaSupply", "Ua", "V", "Supply UA"],
-              ["ri", "Ri", "Ω", "Source resistance"],
-              ["trMs", "tr", "ms", "Rise time"],
-              ["tdMs", "td", "ms", "Decay td"],
-              ["simStopMs", "stop", "ms", "Simulation stop time"],
-            ] as const
-          ).map(([key, lab, unit, tip]) => (
-            <label key={key} className="sim-wc-field" title={tip}>
-              <span className="sim-wc-lab">
-                {lab}
-                <span className="sim-wc-unit">{unit}</span>
-              </span>
-              <input
-                className="sim-wc-input"
-                value={wc[key]}
-                disabled={busy || !onLoadDumpConditionsChange}
-                aria-label={tip}
-                onChange={(e) => {
-                  setConditionId("");
-                  patchWc({ [key]: e.target.value });
-                }}
-                onBlur={() => commitWc()}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    (e.target as HTMLInputElement).blur();
-                  }
-                }}
-              />
-            </label>
-          ))}
-          {onSaveLoadDumpCondition && (
+      <div className="panel-header sim-toolbar">
+        <div className="sim-toolbar-actions">
+          <div className="sim-toolbar-run-group" role="group" aria-label="Simulation controls">
             <button
               type="button"
-              className="sim-wc-save-btn"
+              className={`sim-run-btn${busy ? " is-running" : ""}`}
               disabled={busy}
-              title="Rename tab to this condition and Save (schematic + netlist + last Run)"
-              onClick={() => saveCondition()}
+              onClick={() => play()}
+              title="Run simulation with the .tran time set on the right"
             >
-              Save cond.
+              {busy ? "Running…" : runState === "paused" ? "Resume" : "Run"}
             </button>
-          )}
+            <button
+              type="button"
+              className="sim-stop-btn"
+              disabled={runState === "idle"}
+              onClick={() => stop()}
+              title={runState === "idle" ? "Stop (idle)" : "Stop simulation"}
+            >
+              Stop
+            </button>
+          </div>
         </div>
-        <div className="panel-header-right">
-          <>
-              <div
-                className="sim-tran-fields"
-                title="Writes .tran <step> <stop> into the netlist. Set time, then click Run."
+
+        <div
+          className="sim-wc-card"
+          title="Load-dump working conditions — edits update schematic + netlist"
+        >
+          <div className="sim-wc-card-head">
+            <span className="sim-wc-card-title">Conditions</span>
+          </div>
+          <div className="sim-wc-fields">
+            <label className="sim-wc-field sim-wc-preset" title="ISO 16750-2 Test A condition table">
+              <span className="sim-wc-lab">Condition</span>
+              <select
+                className="sim-wc-select"
+                value={conditionId}
+                disabled={busy || !onLoadDumpConditionsChange}
+                aria-label="Load-dump condition preset"
+                onChange={(e) => applyConditionPreset(e.target.value)}
               >
-                <span className="sim-tran-label">.tran</span>
+                <option value="">Custom</option>
+                {LOAD_DUMP_PRESETS.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label
+              className="sim-wc-field sim-wc-pulse"
+              title={
+                LOAD_DUMP_PULSES.find((p) => p.id === normalizePulseId(wc.pulse))?.tip ??
+                "Test pulse profile"
+              }
+            >
+              <span className="sim-wc-lab">Pulse</span>
+              <select
+                className="sim-wc-select sim-wc-select-pulse"
+                value={normalizePulseId(wc.pulse)}
+                disabled={busy || !onLoadDumpConditionsChange}
+                aria-label="Load-dump test pulse"
+                onChange={(e) => applyPulse(e.target.value as LoadDumpPulseId)}
+              >
+                {LOAD_DUMP_PULSES.map((p) => (
+                  <option key={p.id} value={p.id} title={p.tip}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {(
+              [
+                [
+                  "usPeak",
+                  "Us",
+                  "V",
+                  normalizePulseId(wc.pulse) === "ISO7637_5A"
+                    ? "Us = amplitude above UA (ISO 7637-5a)"
+                    : "Us = absolute peak Uspk (ISO 16750-2 A)",
+                ],
+                ["uaSupply", "Ua", "V", "Supply UA"],
+                ["ri", "Ri", "Ω", "Source resistance"],
+                ["trMs", "tr", "ms", "Rise time"],
+                ["tdMs", "td", "ms", "Decay td"],
+                ["simStopMs", "stop", "ms", "Simulation stop time"],
+              ] as const
+            ).map(([key, lab, unit, tip]) => (
+              <label key={key} className="sim-wc-field" title={tip}>
+                <span className="sim-wc-lab">
+                  {lab}
+                  <span className="sim-wc-unit">{unit}</span>
+                </span>
                 <input
-                  className="sim-tran-input"
-                  value={tranStep}
-                  disabled={busy || !onDirectivesChange}
-                  aria-label="Time step"
-                  title="Step (e.g. 1u or 250u) — not the end time"
-                  onChange={(e) => updateTran(e.target.value, tranStop)}
-                />
-                <span className="sim-tran-sep">→</span>
-                <input
-                  ref={tranStopRef}
-                  className="sim-tran-input sim-tran-input-stop"
-                  value={tranStop}
-                  disabled={busy || !onDirectivesChange}
-                  aria-label="Stop time"
-                  title="Stop time — type any value (1m, 1, 10, …)"
-                  onChange={(e) => updateTran(tranStep, e.target.value)}
-                />
-                <select
-                  className="sim-tran-preset"
-                  disabled={busy || !onDirectivesChange}
-                  value={tranPreset}
-                  aria-label="Simulation duration preset"
-                  title="Presets fill the boxes; Custom = edit them yourself. Run does not start until you click Run."
+                  className="sim-wc-input"
+                  value={wc[key]}
+                  disabled={busy || !onLoadDumpConditionsChange}
+                  aria-label={tip}
                   onChange={(e) => {
-                    const v = e.target.value;
-                    if (v === "fast") updateTran("1u", "1m");
-                    else if (v === "loaddump") updateTran("250u", "1");
-                    else if (v === "custom") {
-                      // Keep current values; focus stop so the user can type a custom end time.
-                      window.setTimeout(() => {
-                        tranStopRef.current?.focus();
-                        tranStopRef.current?.select();
-                      }, 0);
+                    setConditionId("");
+                    patchWc({ [key]: e.target.value });
+                  }}
+                  onBlur={() => commitWc()}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      (e.target as HTMLInputElement).blur();
                     }
                   }}
-                >
-                  <option value="fast">Quick (1 ms)</option>
-                  <option value="loaddump">Load dump (1 s)</option>
-                  <option value="custom">Custom…</option>
-                </select>
-              </div>
-              <select
-                className="sim-engine"
-                value={engine}
+                />
+              </label>
+            ))}
+            {onSaveLoadDumpCondition && (
+              <button
+                type="button"
+                className="sim-wc-save-btn"
                 disabled={busy}
-                title="D1SPICE = ngspice · D2SPICE = QSPICE (fleet aliases)"
-                onChange={(e) => setEngine(e.target.value as SimEngine)}
+                title="Save this condition: rename the tab and store schematic, netlist, and last Run"
+                onClick={() => saveCondition()}
               >
-                <option value="D2SPICE">D2SPICE</option>
-                <option value="D1SPICE">D1SPICE</option>
-              </select>
-              <span className="badge">{badge}</span>
-              {result?.ok && probeSel && (
-                <button
-                  type="button"
-                  className={`sim-probe-btn${probeSel.probeMode ? " is-on" : ""}`}
-                  disabled={busy}
-                  title={
-                    probeSel.probeMode
-                      ? "Probe ON — click schematic: wire=V, part=I, Ctrl+wire=differential"
-                      : "Show Probe / waveform pane and click the schematic to add traces"
-                  }
-                  aria-pressed={probeSel.probeMode}
-                  onClick={() => probeSel.setProbeMode(!probeSel.probeMode)}
-                >
-                  <img src="/icons/probe-red.png" alt="" width={12} height={24} />
-                  <span>{probeSel.probeMode ? "Probe ON" : "Probe"}</span>
-                </button>
-              )}
-            </>
+                Save condition
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="panel-header-right sim-toolbar-setup">
+          <div
+            className="sim-tran-fields"
+            title="Writes .tran <step> <stop> into the netlist. Set time, then click Run."
+          >
+            <span className="sim-tran-label">.tran</span>
+            <input
+              className="sim-tran-input"
+              value={tranStep}
+              disabled={busy || !onDirectivesChange}
+              aria-label="Time step"
+              title="Step (e.g. 1u or 250u) — not the end time"
+              onChange={(e) => updateTran(e.target.value, tranStop)}
+            />
+            <span className="sim-tran-sep">→</span>
+            <input
+              ref={tranStopRef}
+              className="sim-tran-input sim-tran-input-stop"
+              value={tranStop}
+              disabled={busy || !onDirectivesChange}
+              aria-label="Stop time"
+              title="Stop time — type any value (1m, 1, 10, …)"
+              onChange={(e) => updateTran(tranStep, e.target.value)}
+            />
+            <select
+              className="sim-tran-preset"
+              disabled={busy || !onDirectivesChange}
+              value={tranPreset}
+              aria-label="Simulation duration preset"
+              title="Presets fill the boxes; Custom = edit them yourself. Run does not start until you click Run."
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === "fast") updateTran("1u", "1m");
+                else if (v === "loaddump") updateTran("250u", "1");
+                else if (v === "custom") {
+                  window.setTimeout(() => {
+                    tranStopRef.current?.focus();
+                    tranStopRef.current?.select();
+                  }, 0);
+                }
+              }}
+            >
+              <option value="fast">Quick (1 ms)</option>
+              <option value="loaddump">Load dump (1 s)</option>
+              <option value="custom">Custom…</option>
+            </select>
+          </div>
+          <select
+            className="sim-engine"
+            value={engine}
+            disabled={busy}
+            title="D1SPICE = ngspice · D2SPICE = QSPICE (fleet aliases)"
+            onChange={(e) => setEngine(e.target.value as SimEngine)}
+          >
+            <option value="D2SPICE">D2SPICE</option>
+            <option value="D1SPICE">D1SPICE</option>
+          </select>
+          <span className="badge">{badge}</span>
+          {result?.ok && probeSel && (
+            <button
+              type="button"
+              className={`sim-probe-btn${probeSel.probeMode ? " is-on" : ""}`}
+              disabled={busy}
+              title={
+                probeSel.probeMode
+                  ? "Probe ON — click schematic: wire=V, part=I, Ctrl+wire=differential"
+                  : "Show Probe / waveform pane and click the schematic to add traces"
+              }
+              aria-pressed={probeSel.probeMode}
+              onClick={() => probeSel.setProbeMode(!probeSel.probeMode)}
+            >
+              <img src="/icons/probe-red.png" alt="" width={12} height={24} />
+              <span>{probeSel.probeMode ? "Probe ON" : "Probe"}</span>
+            </button>
+          )}
           {onPopOut && (
             <button
               type="button"
@@ -1416,7 +1422,19 @@ export function SimPanel({
             Simulating with {engine}… results will appear when finished
           </div>
         )}
-        {result && !busy && (
+        {result && !busy && result.fromSavedCondition && (
+          <div className="netlist-status sim-saved-result-banner" role="status">
+            Result from a saved condition
+            {(() => {
+              const summary =
+                result.conditionsSummary?.trim() ||
+                formatLoadDumpConditionsSummary(wc);
+              return summary ? ` — ${summary}` : "";
+            })()}
+            . Not from this Run. Click Run to simulate again.
+          </div>
+        )}
+        {result && !busy && !result.fromSavedCondition && (
           <div className={`netlist-status${result.ok ? "" : " netlist-status-error"}`}>
             {result.message}
           </div>

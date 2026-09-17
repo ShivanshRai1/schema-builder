@@ -24,6 +24,8 @@ import { ClearProbesOnSimChange, ProbeProvider } from "./sim/ProbeContext";
 import type { SimResult } from "./sim/runSimulation";
 import {
   buildLoadDumpPwl,
+  formatLoadDumpConditionsSummary,
+  parseLoadDumpFromNetlist,
   setWcInDirectives,
   type LoadDumpConditions,
 } from "./sim/loadDumpConditions";
@@ -216,13 +218,18 @@ function partHasLiveWire(
 function activeTabLastSim(ws: WorkspaceFile, tabId: string): SimResult | null {
   const tab = ws.tabs.find((t) => t.id === tabId);
   const last = tab?.lastSim;
-  if (!last?.series?.length) return null;
+  if (!tab || !last?.series?.length) return null;
+  const fromDirs = formatLoadDumpConditionsSummary(
+    parseLoadDumpFromNetlist((tab.directives ?? []).join("\n")),
+  );
   return {
     ok: last.ok,
     source: last.source,
     message: last.message,
     engine: last.engine === "D1SPICE" || last.engine === "D2SPICE" ? last.engine : undefined,
     series: last.series.map((s) => ({ name: s.name, x: s.x, y: s.y })),
+    fromSavedCondition: true,
+    conditionsSummary: last.conditionsSummary?.trim() || fromDirs,
   };
 }
 
@@ -858,12 +865,24 @@ export default function App() {
         if (!opts?.includeLastSim) return undefined;
         const r = simResultRef.current;
         if (!r?.series?.length) return null;
+        const activeDoc = docs.find((d) => d.id === activeId);
+        const snap = activeDoc?.snap;
+        const deck = snap
+          ? toNetlist(snap.nodes, snap.edges, {
+              directives: snap.directives,
+              library: snap.library,
+            })
+          : (activeDoc?.snap.directives ?? []).join("\n");
+        const conditionsSummary =
+          r.conditionsSummary?.trim() ||
+          formatLoadDumpConditionsSummary(parseLoadDumpFromNetlist(deck));
         return {
           ok: r.ok,
           source: r.source,
           message: r.message,
           engine: r.engine,
           series: r.series.map((s) => ({ name: s.name, x: [...s.x], y: [...s.y] })),
+          conditionsSummary,
         };
       })();
 
@@ -4468,7 +4487,14 @@ export default function App() {
                 >
                   Save
                 </button>
-                {/* Temporarily hidden: Projects… */}
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={() => setProjectsOpen(true)}
+                  title="Open projects — load, save, or manage saved workspaces"
+                >
+                  Projects
+                </button>
                 <button type="button" className="ghost-btn" onClick={onLoadClick} title="Open circuit or project JSON (Ctrl+O)">
                   Open
                 </button>
@@ -4702,7 +4728,7 @@ export default function App() {
       )}
       {simFloating && (
         <FloatingWindow
-          title="Waveforms — Probe"
+          title="Simulation"
           defaultRect={{ x: 100, y: 56, w: 900, h: 620 }}
           minWidth={520}
           minHeight={420}

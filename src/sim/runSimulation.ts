@@ -27,6 +27,10 @@ export interface SimResult {
   message: string;
   series: SimSeries[];
   engine?: SimEngine;
+  /** True when waveforms were restored from a saved condition (not this Run). */
+  fromSavedCondition?: boolean;
+  /** Working-condition line for the saved-result banner. */
+  conditionsSummary?: string;
 }
 
 /** Override with VITE_SIM_API_URL when the API is not at ./sim_api.php. */
@@ -553,9 +557,7 @@ export async function runSimulation(
   return {
     ok: true,
     source: "fleet",
-    message: hint
-      ? `Simulation complete (${engine}) · ${hint}`
-      : `Simulation complete (${engine})`,
+    message: "Simulation complete",
     series,
     engine,
   };
