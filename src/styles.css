@@ -2887,6 +2887,50 @@ body { background: var(--bg); color: var(--text); }
   cursor: not-allowed;
   box-shadow: none;
 }
+.sim-wc-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  flex: 1 1 220px;
+  min-width: 0;
+  margin: 0 8px;
+  padding: 2px 0;
+}
+.sim-wc-field {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  min-width: 52px;
+}
+.sim-wc-lab {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  line-height: 1.1;
+  white-space: nowrap;
+}
+.sim-wc-unit {
+  margin-left: 3px;
+  font-weight: 500;
+  opacity: 0.8;
+}
+.sim-wc-input {
+  width: 56px;
+  font-size: 11px;
+  font-family: ui-monospace, Menlo, monospace;
+  padding: 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+}
+.sim-wc-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 .pop-out-btn { padding: 2px 6px; line-height: 1; font-size: 13px; }
 
 /* Floating windows (pop-out panels) ------------------------------------- */

@@ -25,6 +25,11 @@ import {
 import { evaluateProbeExpression } from "../sim/probeExpressions";
 import { formatProbeValue } from "../sim/probeHover";
 import { attachPlotNav } from "../sim/plotNav";
+import {
+  conditionsEqual,
+  parseLoadDumpFromNetlist,
+  type LoadDumpConditions,
+} from "../sim/loadDumpConditions";
 import { type UiTheme } from "../theme";
 import type { Plugin } from "chart.js";
 
@@ -684,6 +689,7 @@ export function SimPanel({
   directives,
   onDirectivesChange,
   retainedResult = null,
+  onLoadDumpConditionsChange,
 }: {
   netlist: string;
   onPopOut?: () => void;
@@ -697,6 +703,8 @@ export function SimPanel({
   onDirectivesChange?: (dirs: string[]) => void;
   /** Last run kept in App — restores waveforms if this panel remounts. */
   retainedResult?: SimResult | null;
+  /** Apply load-dump working conditions to schematic + directives. */
+  onLoadDumpConditionsChange?: (c: LoadDumpConditions) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
@@ -755,6 +763,36 @@ export function SimPanel({
 
   const updateTran = (step: string, stop: string) => {
     onDirectivesChange?.(setTranInDirectives(directives, step, stop));
+  };
+
+  const [wc, setWc] = useState<LoadDumpConditions>(() =>
+    parseLoadDumpFromNetlist(netlist),
+  );
+  const wcApplyingRef = useRef(false);
+  const wcRef = useRef(wc);
+  wcRef.current = wc;
+
+  useEffect(() => {
+    if (wcApplyingRef.current) return;
+    const parsed = parseLoadDumpFromNetlist(netlist);
+    setWc((prev) => (conditionsEqual(prev, parsed) ? prev : parsed));
+  }, [netlist]);
+
+  const patchWc = (patch: Partial<LoadDumpConditions>) => {
+    setWc((prev) => {
+      const next = { ...prev, ...patch };
+      wcRef.current = next;
+      return next;
+    });
+  };
+
+  const commitWc = () => {
+    if (!onLoadDumpConditionsChange) return;
+    wcApplyingRef.current = true;
+    onLoadDumpConditionsChange(wcRef.current);
+    window.setTimeout(() => {
+      wcApplyingRef.current = false;
+    }, 0);
   };
 
   /** Controlled preset — boxes stay editable for any custom step/stop. */
@@ -1123,6 +1161,42 @@ export function SimPanel({
         >
           Stop
         </button>
+        <div
+          className="sim-wc-fields"
+          title="Load-dump working conditions — edits update schematic + netlist"
+        >
+          {(
+            [
+              ["usPeak", "Us", "V", "Peak voltage Us"],
+              ["uaSupply", "Ua", "V", "Supply UA"],
+              ["ri", "Ri", "Ω", "Source resistance"],
+              ["trMs", "tr", "ms", "Rise time"],
+              ["tdMs", "td", "ms", "Decay td"],
+              ["simStopMs", "stop", "ms", "Simulation stop time"],
+            ] as const
+          ).map(([key, lab, unit, tip]) => (
+            <label key={key} className="sim-wc-field" title={tip}>
+              <span className="sim-wc-lab">
+                {lab}
+                <span className="sim-wc-unit">{unit}</span>
+              </span>
+              <input
+                className="sim-wc-input"
+                value={wc[key]}
+                disabled={busy || !onLoadDumpConditionsChange}
+                aria-label={tip}
+                onChange={(e) => patchWc({ [key]: e.target.value })}
+                onBlur={() => commitWc()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    (e.target as HTMLInputElement).blur();
+                  }
+                }}
+              />
+            </label>
+          ))}
+        </div>
         <div className="panel-header-right">
           <>
               <div

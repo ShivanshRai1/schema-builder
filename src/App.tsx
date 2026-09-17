@@ -22,6 +22,11 @@ import { SimPanel, type SimControlApi, type SimRunState } from "./components/Sim
 import { SimResultContext } from "./sim/SimResultContext";
 import { ClearProbesOnSimChange, ProbeProvider } from "./sim/ProbeContext";
 import type { SimResult } from "./sim/runSimulation";
+import {
+  buildLoadDumpPwl,
+  setWcInDirectives,
+  type LoadDumpConditions,
+} from "./sim/loadDumpConditions";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { FloatingWindow } from "./components/FloatingWindow";
 import { COMPONENT_SPECS, defaultParams, getComponentPins, isGroundKind } from "./model/componentSpecs";
@@ -648,6 +653,72 @@ export default function App() {
       });
     }
   }, []);
+
+  /**
+   * Apply load-dump working conditions to graph + directives (keeps schematic
+   * and netlist aligned). Updates V1 stimulus, R1 value, *.wc marker, .tran.
+   */
+  const applyLoadDumpConditions = useCallback(
+    (c: LoadDumpConditions) => {
+      const pwl = buildLoadDumpPwl(c);
+      const ri = (c.ri.trim() || "2").replace(/ohm$/i, "");
+
+      pushHistory();
+      setNodes((ns) => {
+        const vNodes = ns.filter((n) => {
+          const pfx = COMPONENT_SPECS[n.data.kind]?.refdesPrefix;
+          return pfx === "V";
+        });
+        const rNodes = ns.filter((n) => {
+          const pfx = COMPONENT_SPECS[n.data.kind]?.refdesPrefix;
+          return pfx === "R";
+        });
+        const vTarget =
+          vNodes.find((n) => /^v1$/i.test(n.data.refdes)) ?? vNodes[0];
+        const rTarget =
+          rNodes.find((n) => /^r1$/i.test(n.data.refdes)) ?? rNodes[0];
+
+        return ns.map((n) => {
+          if (vTarget && n.id === vTarget.id) {
+            const nextKind =
+              n.data.kind === "VAC" || n.data.kind === "V" || n.data.kind === "BATTERY" || n.data.kind === "VPULSE"
+                ? ("VAC" as ComponentKind)
+                : n.data.kind;
+            const base =
+              nextKind !== n.data.kind ? defaultParams(nextKind) : { ...n.data.params };
+            return {
+              ...n,
+              data: {
+                ...n.data,
+                kind: nextKind,
+                params: {
+                  ...base,
+                  vamp: c.usPeak.trim() || base.vamp || "V",
+                  voffset: c.uaSupply.trim() || "0",
+                  stimulus: pwl,
+                },
+              },
+            };
+          }
+          if (rTarget && n.id === rTarget.id) {
+            return {
+              ...n,
+              data: {
+                ...n.data,
+                params: { ...n.data.params, value: ri },
+              },
+            };
+          }
+          return n;
+        });
+      });
+
+      setDirectives((dirs) => setWcInDirectives(dirs, c));
+      setNetlistStatus("working conditions updated (schematic + netlist)");
+      setNetlistStatusError(false);
+    },
+    [setNodes, pushHistory],
+  );
 
   const onClearSchematic = useCallback(() => {
     if (nodesRef.current.length === 0 && edgesRef.current.length === 0) {
@@ -4482,6 +4553,7 @@ export default function App() {
             retainedResult={simResult}
             directives={directives}
             onDirectivesChange={setDirectives}
+            onLoadDumpConditionsChange={applyLoadDumpConditions}
           />
         </FloatingWindow>
       )}

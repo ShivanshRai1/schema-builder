@@ -377,7 +377,12 @@ export function extractDirectives(text: string): string[] {
   const raw: string[] = [];
   let inSubckt = false;
   for (const line of text.split(/\r?\n/).map((l) => l.trim())) {
-    if (!line || line.startsWith("*")) continue;
+    if (!line) continue;
+    // Keep load-dump working-conditions marker (bidirectional with Sim panel).
+    if (line.startsWith("*")) {
+      if (/^\*\s*\.wc\b/i.test(line)) raw.push(line);
+      continue;
+    }
     if (/^\.subckt\b/i.test(line)) {
       inSubckt = true;
       continue;
