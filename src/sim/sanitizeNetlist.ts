@@ -1,3 +1,5 @@
+import { applyLiveXpulseStimulus } from "./loadDumpPulseInc";
+
 /**
  * Accuracy helpers applied immediately before a fleet Run.
  * Fixes common netlist mistakes that produce flat/zero or truncated waveforms
@@ -307,6 +309,11 @@ export function sanitizeNetlistForAccuracy(netlist: string): SanitizeNetlistResu
   const remap = remapModelRefsToDefinedSubckts(text);
   text = remap.text;
   notes.push(...remap.notes);
+
+  // Email wiring: live XPULSE replaces V1 PWL + R1 on the Run deck only.
+  const xpulse = applyLiveXpulseStimulus(text);
+  text = xpulse.text;
+  notes.push(...xpulse.notes);
 
   const tran = ensureTranCoversPwl(text);
   text = tran.text;
