@@ -200,8 +200,8 @@ export function bindTvsPlaceholdersToLibrary(netlist: string): {
   let biName: string | null = null;
   let uniName: string | null = null;
   for (const [upper, orig] of subNames) {
-    if (/XFD11K33CA/i.test(upper)) biName = orig;
-    if (/SM8S18A/i.test(upper)) uniName = orig;
+    if (/^XFD/i.test(upper) || /TVSBI|BIDIR/i.test(upper)) biName = biName ?? orig;
+    if (/^SM\d/i.test(upper) || /SM8S|SM5S/i.test(upper)) uniName = uniName ?? orig;
   }
   if (!biName && !uniName) return { text: netlist, notes: [] };
 
@@ -220,6 +220,59 @@ export function bindTvsPlaceholdersToLibrary(netlist: string): {
       const indent = raw.match(/^\s*/)?.[0] ?? "";
       notes.push(`${m[1]} ${placeholder} → ${xref} … ${target}`);
       return `${indent}${xref} ${m[2]} ${m[3]} ${target}`;
+    })
+    .join("\n");
+
+  return { text, notes: [...new Set(notes)] };
+}
+
+/**
+ * Map instance model tokens onto defined .subckt names (case / P_ prefix).
+ * QSPICE treats subckt names as case-sensitive; UI often uses SM8S36A while
+ * the file defines sm8s36a.
+ */
+export function remapModelRefsToDefinedSubckts(netlist: string): {
+  text: string;
+  notes: string[];
+} {
+  const defined = new Map<string, string>(); // upper → original spelling
+  for (const line of netlist.split(/\r?\n/)) {
+    const s = /^\.subckt\s+(\S+)/i.exec(line.trim());
+    if (s) defined.set(s[1]!.toUpperCase(), s[1]!);
+  }
+  if (!defined.size) return { text: netlist, notes: [] };
+
+  const resolve = (want: string): string | null => {
+    const key = want.toUpperCase();
+    if (defined.has(key)) return defined.get(key)!;
+    const stripped = key.replace(/^P_/, "");
+    if (defined.has(stripped)) return defined.get(stripped)!;
+    for (const [upper, orig] of defined) {
+      if (upper.includes(stripped) || stripped.includes(upper)) return orig;
+    }
+    return null;
+  };
+
+  const notes: string[] = [];
+  const text = netlist
+    .split(/\r?\n/)
+    .map((raw) => {
+      const t = raw.trim();
+      if (!t || t.startsWith("*") || t.startsWith(".")) return raw;
+      const m = /^([DQJMX]\S*)\s+(.+)$/i.exec(t);
+      if (!m) return raw;
+      const toks = m[2]!.trim().split(/\s+/).filter(Boolean);
+      if (!toks.length) return raw;
+      const last = toks[toks.length - 1]!;
+      if (/^(PULSE|SIN|SINE|EXP|PWL|DC|AC)\b/i.test(last)) return raw;
+      if (isNumericToken(last) && !/^[A-Za-z_]/.test(last)) return raw;
+      if (/[=]/.test(last)) return raw;
+      const resolved = resolve(last);
+      if (!resolved || resolved === last) return raw;
+      toks[toks.length - 1] = resolved;
+      const indent = raw.match(/^\s*/)?.[0] ?? "";
+      notes.push(`${last} → ${resolved}`);
+      return `${indent}${m[1]} ${toks.join(" ")}`;
     })
     .join("\n");
 
@@ -251,14 +304,24 @@ export function sanitizeNetlistForAccuracy(netlist: string): SanitizeNetlistResu
   text = tvs.text;
   notes.push(...tvs.notes);
 
+  const remap = remapModelRefsToDefinedSubckts(text);
+  text = remap.text;
+  notes.push(...remap.notes);
+
   const tran = ensureTranCoversPwl(text);
   text = tran.text;
   if (tran.note) notes.push(tran.note);
 
+  if (/delay\s*\(|\bTABLE\s*\(/i.test(text)) {
+    warnings.push(
+      "Library uses LTspice-only constructs (delay/TABLE) — D2SPICE/QSPICE may reject those .subckt bodies",
+    );
+  }
+
   const missing = missingModelRefs(text);
   if (missing.length) {
     warnings.push(
-      `Missing .model / .subckt: ${missing.join(", ")} — results will not match LTspice until these exist in Models`,
+      `Missing .model / .subckt: ${missing.join(", ")} — drop the PN files into Models (e.g. P_XFD11K54CA.txt, SM8S36A.txt)`,
     );
   }
 

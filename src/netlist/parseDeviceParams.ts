@@ -402,6 +402,40 @@ export function extractDirectives(text: string): string[] {
   return dedupeAnalysisDirectives(raw);
 }
 
+/**
+ * Pull `.subckt`…`.ends` blocks (plus top-level `.model` lines) out of pasted
+ * netlist text so Apply can park them in the Models library (D2SPICE needs them
+ * inlined — extractDirectives previously dropped them).
+ */
+export function extractSubcktLibraryText(text: string): string {
+  const lines = text.split(/\r?\n/);
+  const out: string[] = [];
+  let inSubckt = false;
+
+  for (const raw of lines) {
+    const t = raw.trim();
+    if (/^\.subckt\b/i.test(t)) {
+      inSubckt = true;
+      out.push(raw);
+      continue;
+    }
+    if (inSubckt) {
+      out.push(raw);
+      if (/^\.ends\b/i.test(t)) {
+        inSubckt = false;
+        out.push("");
+      }
+      continue;
+    }
+    // Top-level .model (not already inside a subckt we capture above)
+    if (/^\.model\b/i.test(t)) {
+      out.push(raw);
+    }
+  }
+
+  return out.join("\n").trim();
+}
+
 /** Keep one of .tran / .ac / .dc / .op (last wins); leave other directives alone. */
 export function dedupeAnalysisDirectives(dirs: string[]): string[] {
   const analysis = /^\.(tran|ac|dc|op|tf|noise|four)\b/i;

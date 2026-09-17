@@ -35,7 +35,7 @@ import { mergeCommonlyUsed, readCommonlyUsed, recordCommonlyUsed } from "./model
 import type { ComponentData, ComponentKind, ComponentRotation } from "./model/types";
 import { normalizeRotation } from "./model/rotation";
 import { toNetlist } from "./netlist/toNetlist";
-import { extractDirectives } from "./netlist/parseDeviceParams";
+import { extractDirectives, extractSubcktLibraryText } from "./netlist/parseDeviceParams";
 import { applyNetlistToGraph } from "./netlist/applyNetlistToGraph";
 import { cloneSnapshot, createHistory, type CircuitSnapshot } from "./history/circuitHistory";
 import { parseCircuitFile } from "./persistence/circuitFile";
@@ -3931,6 +3931,20 @@ export default function App() {
       setDirectives([".tran 1u 500u", ".options reltol=1e-3"]);
     }
 
+    // Park .subckt bodies into Models — Apply used to drop them, so D2SPICE
+    // then failed with "Unknown subckt" even when the paste looked fine.
+    const extractedLib = extractSubcktLibraryText(draftNetlist);
+    if (extractedLib) {
+      setLibrary((prev) => {
+        const cur = prev.trim();
+        if (!cur) return extractedLib.endsWith("\n") ? extractedLib : `${extractedLib}\n`;
+        if (cur.includes(extractedLib.slice(0, Math.min(80, extractedLib.length)))) {
+          return prev;
+        }
+        return `${cur}\n\n* --- from netlist Apply ---\n${extractedLib}\n`;
+      });
+    }
+
     const errors: string[] = [];
     if (result.skippedUnknown.length) {
       errors.push(
@@ -3961,7 +3975,11 @@ export default function App() {
     setTextEditMode(false);
     setDraftNetlist("");
     setNetlistStatusError(false);
-    setNetlistStatus(parts.join(" · "));
+    setNetlistStatus(
+      extractedLib
+        ? `${parts.join(" · ")} · models → Models library`
+        : parts.join(" · "),
+    );
   }, [nodes, edges, draftNetlist, setNodes, setEdges, pushHistory]);
 
   const handleNodesChange = useCallback(
