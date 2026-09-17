@@ -2949,6 +2949,33 @@ body { background: var(--bg); color: var(--text); }
   outline: none;
   border-color: var(--accent);
 }
+.sim-wc-pulse {
+  min-width: 108px;
+}
+.sim-wc-select-pulse {
+  width: 118px;
+  max-width: 132px;
+}
+.sim-wc-save-btn {
+  align-self: flex-end;
+  margin-bottom: 1px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.sim-wc-save-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.sim-wc-save-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 .pop-out-btn { padding: 2px 6px; line-height: 1; font-size: 13px; }
 
 /* Floating windows (pop-out panels) ------------------------------------- */

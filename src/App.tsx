@@ -47,6 +47,7 @@ import {
   parseWorkspaceFile,
   tabFromSnapshot,
   type WorkspaceFile,
+  type WorkspaceTabLastSim,
 } from "./persistence/workspaceFile";
 import {
   getLocalProject,
@@ -209,6 +210,19 @@ function partHasLiveWire(
     if ((deg.get(otherId) ?? 0) >= 2) return true;
   }
   return false;
+}
+
+function activeTabLastSim(ws: WorkspaceFile, tabId: string): SimResult | null {
+  const tab = ws.tabs.find((t) => t.id === tabId);
+  const last = tab?.lastSim;
+  if (!last?.series?.length) return null;
+  return {
+    ok: last.ok,
+    source: last.source,
+    message: last.message,
+    engine: last.engine === "D1SPICE" || last.engine === "D2SPICE" ? last.engine : undefined,
+    series: last.series.map((s) => ({ name: s.name, x: s.x, y: s.y })),
+  };
 }
 
 export default function App() {
@@ -413,6 +427,8 @@ export default function App() {
   const [simRunState, setSimRunState] = useState<SimRunState>("idle");
   /** Last successful/failed sim waveforms — enables canvas probe hover when ok. */
   const [simResult, setSimResult] = useState<SimResult | null>(null);
+  const simResultRef = useRef(simResult);
+  simResultRef.current = simResult;
 
   /** Open the floating simulation window. Pass true only to auto-start a run. */
   const openSimWindow = useCallback((andPlay = false) => {
@@ -805,32 +821,60 @@ export default function App() {
     setNetlistStatus("schematic cleared (undo to restore)");
   }, [pushHistory, restore, clearTransientUi]);
 
-  const captureWorkspace = useCallback((): WorkspaceFile => {
-    flushActiveTab();
-    const docs = tabsRef.current ?? [];
-    const metas = new Map(tabMetas.map((m) => [m.id, m.title]));
-    const activeId = activeTabIdRef.current;
-    const activeTabTitle =
-      (metas.get(activeId) ?? docs.find((d) => d.id === activeId)?.title ?? "").trim();
-    const rawName = projectName.trim();
-    const isDefaultName =
-      !rawName ||
-      /^untitled(\s+project)?$/i.test(rawName);
-    // Prefer an explicit project name; otherwise use the active tab title on Save.
-    const name = isDefaultName
-      ? activeTabTitle || "Untitled project"
-      : rawName;
-    return buildWorkspaceFile({
-      name,
-      activeTabId: activeId,
-      tabs: docs.map((d) =>
-        tabFromSnapshot(d.id, metas.get(d.id) ?? d.title, d.snap, {
-          hiddenCrossingKeys: d.hiddenCrossingKeys,
-          nextId: d.nextId,
-        }),
-      ),
-    });
-  }, [flushActiveTab, projectName, tabMetas]);
+  const captureWorkspace = useCallback(
+    (opts?: {
+      name?: string;
+      activeTabTitle?: string;
+      includeLastSim?: boolean;
+    }): WorkspaceFile => {
+      flushActiveTab();
+      const docs = tabsRef.current ?? [];
+      const metas = new Map(tabMetas.map((m) => [m.id, m.title]));
+      const activeId = activeTabIdRef.current;
+      if (opts?.activeTabTitle) {
+        const clean = opts.activeTabTitle.trim() || "Circuit";
+        metas.set(activeId, clean);
+        const doc = docs.find((d) => d.id === activeId);
+        if (doc) doc.title = clean;
+      }
+      const activeTabTitle =
+        (metas.get(activeId) ?? docs.find((d) => d.id === activeId)?.title ?? "").trim();
+      const rawName = (opts?.name ?? projectName).trim();
+      const isDefaultName =
+        !rawName ||
+        /^untitled(\s+project)?$/i.test(rawName);
+      // Prefer an explicit project name; otherwise use the active tab title on Save.
+      const name = isDefaultName
+        ? activeTabTitle || "Untitled project"
+        : rawName;
+
+      const lastSim: WorkspaceTabLastSim | null | undefined = (() => {
+        if (!opts?.includeLastSim) return undefined;
+        const r = simResultRef.current;
+        if (!r?.series?.length) return null;
+        return {
+          ok: r.ok,
+          source: r.source,
+          message: r.message,
+          engine: r.engine,
+          series: r.series.map((s) => ({ name: s.name, x: [...s.x], y: [...s.y] })),
+        };
+      })();
+
+      return buildWorkspaceFile({
+        name,
+        activeTabId: activeId,
+        tabs: docs.map((d) =>
+          tabFromSnapshot(d.id, metas.get(d.id) ?? d.title, d.snap, {
+            hiddenCrossingKeys: d.hiddenCrossingKeys,
+            nextId: d.nextId,
+            lastSim: d.id === activeId ? lastSim : undefined,
+          }),
+        ),
+      });
+    },
+    [flushActiveTab, projectName, tabMetas],
+  );
 
   const applyWorkspace = useCallback(
     (wsIn: WorkspaceFile, opts?: { projectId?: string | null }) => {
@@ -870,10 +914,45 @@ export default function App() {
       setProjectName(ws.name);
       setCurrentProjectId(opts?.projectId ?? null);
       clearTransientUi();
+      setSimResult(activeTabLastSim(ws, active.id));
       setHistTick((t) => t + 1);
       requestFitView();
     },
     [restore, clearTransientUi, requestFitView],
+  );
+
+  const saveLoadDumpCondition = useCallback(
+    async (title: string) => {
+      const clean = title.trim() || "Condition";
+      onRenameTab(activeTabIdRef.current, clean);
+      setProjectName(clean);
+      const ws = captureWorkspace({
+        name: clean,
+        activeTabTitle: clean,
+        includeLastSim: true,
+      });
+      setNetlistStatus("saving condition…");
+      setNetlistStatusError(false);
+      try {
+        const rec = saveLocalProject(ws, currentProjectId);
+        setCurrentProjectId(rec.id);
+        setProjectName(rec.name);
+        saveDraftWorkspace(rec.workspace);
+      } catch {
+        /* local backup optional */
+      }
+      const remote = await saveSharedWorkspace(ws);
+      if (remote.ok) {
+        setNetlistStatus(`saved condition “${remote.name}”`);
+        setNetlistStatusError(false);
+        return;
+      }
+      setNetlistStatusError(true);
+      setNetlistStatus(
+        `shared save failed (${remote.error}) — kept a copy in this browser only`,
+      );
+    },
+    [captureWorkspace, currentProjectId, onRenameTab],
   );
 
   const onSaveProgress = useCallback(async () => {
@@ -4615,6 +4694,7 @@ export default function App() {
             directives={directives}
             onDirectivesChange={setDirectives}
             onLoadDumpConditionsChange={applyLoadDumpConditions}
+            onSaveLoadDumpCondition={saveLoadDumpCondition}
           />
         </FloatingWindow>
       )}

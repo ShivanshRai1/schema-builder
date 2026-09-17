@@ -27,12 +27,16 @@ import { formatProbeValue } from "../sim/probeHover";
 import { attachPlotNav } from "../sim/plotNav";
 import {
   conditionsEqual,
+  LOAD_DUMP_PULSES,
+  normalizePulseId,
   parseLoadDumpFromNetlist,
   type LoadDumpConditions,
+  type LoadDumpPulseId,
 } from "../sim/loadDumpConditions";
 import {
   findLoadDumpPreset,
   LOAD_DUMP_PRESETS,
+  loadDumpConditionSaveName,
   type LoadDumpDiodeSlot,
 } from "../sim/loadDumpPresets";
 import { type UiTheme } from "../theme";
@@ -695,6 +699,7 @@ export function SimPanel({
   onDirectivesChange,
   retainedResult = null,
   onLoadDumpConditionsChange,
+  onSaveLoadDumpCondition,
 }: {
   netlist: string;
   onPopOut?: () => void;
@@ -719,6 +724,8 @@ export function SimPanel({
       };
     },
   ) => void;
+  /** Rename active tab + Save schematic/netlist/last Run for this condition. */
+  onSaveLoadDumpCondition?: (title: string) => void | Promise<void>;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
@@ -817,9 +824,10 @@ export function SimPanel({
     const preset = findLoadDumpPreset(id);
     if (!preset) return;
     wcApplyingRef.current = true;
-    setWc(preset.conditions);
-    wcRef.current = preset.conditions;
-    onLoadDumpConditionsChange(preset.conditions, {
+    const next = { ...preset.conditions, pulse: preset.pulse };
+    setWc(next);
+    wcRef.current = next;
+    onLoadDumpConditionsChange(next, {
       diodeModel: {
         pn: preset.pn,
         slot: preset.diodeSlot,
@@ -829,6 +837,24 @@ export function SimPanel({
     window.setTimeout(() => {
       wcApplyingRef.current = false;
     }, 0);
+  };
+
+  const applyPulse = (pulse: LoadDumpPulseId) => {
+    if (!onLoadDumpConditionsChange) return;
+    const next = { ...wcRef.current, pulse: normalizePulseId(pulse) };
+    wcApplyingRef.current = true;
+    setWc(next);
+    wcRef.current = next;
+    onLoadDumpConditionsChange(next);
+    window.setTimeout(() => {
+      wcApplyingRef.current = false;
+    }, 0);
+  };
+
+  const saveCondition = () => {
+    if (!onSaveLoadDumpCondition) return;
+    const name = loadDumpConditionSaveName(conditionId, wcRef.current);
+    void onSaveLoadDumpCondition(name);
   };
 
   /** Controlled preset — boxes stay editable for any custom step/stop. */
@@ -1218,6 +1244,25 @@ export function SimPanel({
               ))}
             </select>
           </label>
+          <label
+            className="sim-wc-field sim-wc-pulse"
+            title="Test pulse profile (stored in *.wc; PWL until XPULSE .inc)"
+          >
+            <span className="sim-wc-lab">Pulse</span>
+            <select
+              className="sim-wc-select sim-wc-select-pulse"
+              value={normalizePulseId(wc.pulse)}
+              disabled={busy || !onLoadDumpConditionsChange}
+              aria-label="Load-dump test pulse"
+              onChange={(e) => applyPulse(e.target.value as LoadDumpPulseId)}
+            >
+              {LOAD_DUMP_PULSES.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </label>
           {(
             [
               ["usPeak", "Us", "V", "Peak voltage Us"],
@@ -1252,6 +1297,17 @@ export function SimPanel({
               />
             </label>
           ))}
+          {onSaveLoadDumpCondition && (
+            <button
+              type="button"
+              className="sim-wc-save-btn"
+              disabled={busy}
+              title="Rename tab to this condition and Save (schematic + netlist + last Run)"
+              onClick={() => saveCondition()}
+            >
+              Save cond.
+            </button>
+          )}
         </div>
         <div className="panel-header-right">
           <>

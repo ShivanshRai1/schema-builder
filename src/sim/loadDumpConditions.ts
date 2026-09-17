@@ -2,10 +2,21 @@
  * ISO 16750-2-style load-dump "working conditions" ↔ netlist / graph sync.
  *
  * Canonical marker (survives round-trips):
- *   * .wc UA=27.8 Us=151 Ri=2 tr=10m td=350m stop=1
+ *   * .wc UA=27.8 Us=151 Ri=2 tr=10m td=350m stop=1 pulse=ISO16750_A
  *
  * Also updates V* PWL stimulus, R* value, and .tran stop when applying.
  */
+
+/** Selectable test-pulse id (email #1 / #3). Stimulus stays PWL until XPULSE .inc lands. */
+export type LoadDumpPulseId = "ISO16750_A" | "ISO7637_5A";
+
+export const LOAD_DUMP_PULSES: readonly {
+  id: LoadDumpPulseId;
+  label: string;
+}[] = [
+  { id: "ISO16750_A", label: "ISO 16750-2 A" },
+  { id: "ISO7637_5A", label: "ISO 7637-5a" },
+];
 
 export type LoadDumpConditions = {
   /** Absolute peak voltage Us (V). */
@@ -20,6 +31,8 @@ export type LoadDumpConditions = {
   tdMs: string;
   /** Simulation stop time (ms). */
   simStopMs: string;
+  /** Test pulse profile (stored in *.wc; drives future XPULSE). */
+  pulse: LoadDumpPulseId;
 };
 
 export const DEFAULT_LOAD_DUMP: LoadDumpConditions = {
@@ -29,6 +42,7 @@ export const DEFAULT_LOAD_DUMP: LoadDumpConditions = {
   trMs: "10",
   tdMs: "350",
   simStopMs: "1000",
+  pulse: "ISO16750_A",
 };
 
 const WC_RE =
@@ -88,10 +102,15 @@ function formatPoint(t: number, v: number): string {
   return `${ts} ${Number(v.toPrecision(6))}`;
 }
 
+export function normalizePulseId(raw: string | undefined | null): LoadDumpPulseId {
+  const t = String(raw ?? "").trim().toUpperCase().replace(/-/g, "_");
+  if (t.includes("7637")) return "ISO7637_5A";
+  return "ISO16750_A";
+}
+
 /**
- * Sample ISO-like load-dump:
- *   V = UA + (Us-UA) * min(t/tpk,1) * exp(-max(t-tpk,0)/tau)
- * with tpk=1.25*tr, tau=(td-1.125*tr)/ln(10).
+ * Sample ISO-like load-dump (absolute peak Us — matches email table / ISO16750 Uspk).
+ * Pulse id is recorded on *.wc for selectable profiles; PWL shape stays shared until XPULSE .inc.
  */
 export function buildLoadDumpPwl(c: LoadDumpConditions): string {
   const ua = parseNumber(c.uaSupply, 27.8);
@@ -102,6 +121,8 @@ export function buildLoadDumpPwl(c: LoadDumpConditions): string {
   const ln10 = 2.302585093;
   const tpk = Math.max(1e-9, 1.25 * tr);
   const tau = Math.max(1e-9, (td - 1.125 * tr) / ln10);
+  // UI Us is always absolute peak. ISO7637_5A .subckt uses amplitude-above-UA;
+  // when XPULSE lands we convert; PWL path keeps absolute peak for both.
   const usa = us - ua;
 
   const times = new Set<number>([0, tpk]);
@@ -123,7 +144,8 @@ export function buildLoadDumpPwl(c: LoadDumpConditions): string {
 }
 
 export function formatWcDirective(c: LoadDumpConditions): string {
-  return `* .wc UA=${c.uaSupply.trim() || "27.8"} Us=${c.usPeak.trim() || "151"} Ri=${c.ri.trim() || "2"} tr=${c.trMs.trim() || "10"}m td=${c.tdMs.trim() || "350"}m stop=${msToSpiceTime(c.simStopMs)}`;
+  const pulse = normalizePulseId(c.pulse);
+  return `* .wc UA=${c.uaSupply.trim() || "27.8"} Us=${c.usPeak.trim() || "151"} Ri=${c.ri.trim() || "2"} tr=${c.trMs.trim() || "10"}m td=${c.tdMs.trim() || "350"}m stop=${msToSpiceTime(c.simStopMs)} pulse=${pulse}`;
 }
 
 function parseWcLine(line: string): Partial<LoadDumpConditions> | null {
@@ -141,6 +163,7 @@ function parseWcLine(line: string): Partial<LoadDumpConditions> | null {
   const tr = get("tr") ?? get("Tr");
   const td = get("td") ?? get("Td");
   const stop = get("stop") ?? get("Stop");
+  const pulse = get("pulse") ?? get("Pulse");
   if (ua) out.uaSupply = ua.replace(/v$/i, "");
   if (us) out.usPeak = us.replace(/v$/i, "");
   if (ri) out.ri = ri.replace(/ohm$/i, "");
@@ -160,6 +183,7 @@ function parseWcLine(line: string): Partial<LoadDumpConditions> | null {
     const sec = spiceTimeToSeconds(stop);
     if (sec != null) out.simStopMs = secondsToMsString(sec);
   }
+  if (pulse) out.pulse = normalizePulseId(pulse);
   return out;
 }
 
@@ -207,6 +231,7 @@ export function parseLoadDumpFromNetlist(netlist: string): LoadDumpConditions {
     }
   }
 
+  base.pulse = normalizePulseId(base.pulse);
   return base;
 }
 
@@ -231,6 +256,7 @@ export function conditionsEqual(a: LoadDumpConditions, b: LoadDumpConditions): b
     a.ri === b.ri &&
     a.trMs === b.trMs &&
     a.tdMs === b.tdMs &&
-    a.simStopMs === b.simStopMs
+    a.simStopMs === b.simStopMs &&
+    normalizePulseId(a.pulse) === normalizePulseId(b.pulse)
   );
 }

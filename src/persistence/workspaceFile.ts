@@ -8,6 +8,21 @@ import { parseCircuitFile, type CircuitFile } from "./circuitFile";
 export const WORKSPACE_FORMAT = "simulai-workspace" as const;
 export const WORKSPACE_VERSION = 1;
 
+/** Optional last Run result kept with a tab (Save condition). */
+export type WorkspaceTabSimSeries = {
+  name: string;
+  x: number[];
+  y: number[];
+};
+
+export type WorkspaceTabLastSim = {
+  ok: boolean;
+  source: "fleet" | "demo";
+  message: string;
+  engine?: string;
+  series: WorkspaceTabSimSeries[];
+};
+
 export type WorkspaceTabFile = {
   id: string;
   title: string;
@@ -17,6 +32,8 @@ export type WorkspaceTabFile = {
   library?: string;
   hiddenCrossingKeys?: string[];
   nextId?: number;
+  /** Last successful/failed Run waveforms for this tab (optional). */
+  lastSim?: WorkspaceTabLastSim | null;
 };
 
 export type WorkspaceFile = {
@@ -75,8 +92,37 @@ export function parseWorkspaceFile(raw: unknown): WorkspaceFile {
       library: t.library ?? "",
       hiddenCrossingKeys: t.hiddenCrossingKeys ?? [],
       nextId: t.nextId,
+      lastSim: sanitizeLastSim((t as WorkspaceTabFile).lastSim),
     })),
     ownerId: raw.ownerId ?? null,
+  };
+}
+
+function sanitizeLastSim(raw: unknown): WorkspaceTabLastSim | null | undefined {
+  if (raw == null) return raw === null ? null : undefined;
+  if (!raw || typeof raw !== "object") return undefined;
+  const s = raw as Partial<WorkspaceTabLastSim>;
+  if (!Array.isArray(s.series)) return undefined;
+  const series: WorkspaceTabSimSeries[] = [];
+  for (const row of s.series) {
+    if (!row || typeof row !== "object") continue;
+    const name = String((row as WorkspaceTabSimSeries).name ?? "").trim();
+    const x = (row as WorkspaceTabSimSeries).x;
+    const y = (row as WorkspaceTabSimSeries).y;
+    if (!name || !Array.isArray(x) || !Array.isArray(y)) continue;
+    series.push({
+      name,
+      x: x.map(Number),
+      y: y.map(Number),
+    });
+  }
+  if (!series.length) return undefined;
+  return {
+    ok: Boolean(s.ok),
+    source: s.source === "demo" ? "demo" : "fleet",
+    message: String(s.message ?? ""),
+    engine: s.engine != null ? String(s.engine) : undefined,
+    series,
   };
 }
 
@@ -115,7 +161,11 @@ export function tabFromSnapshot(
   id: string,
   title: string,
   snap: CircuitSnapshot,
-  extra?: { hiddenCrossingKeys?: string[]; nextId?: number },
+  extra?: {
+    hiddenCrossingKeys?: string[];
+    nextId?: number;
+    lastSim?: WorkspaceTabLastSim | null;
+  },
 ): WorkspaceTabFile {
   return {
     id,
@@ -126,6 +176,7 @@ export function tabFromSnapshot(
     library: snap.library || undefined,
     hiddenCrossingKeys: extra?.hiddenCrossingKeys ?? [],
     nextId: extra?.nextId,
+    lastSim: extra?.lastSim,
   };
 }
 
