@@ -3403,27 +3403,62 @@ export default function App() {
   }, [setNodes, setEdges, pushHistory]);
 
   const onWirePathUpdate = useCallback(
-    (edgeId: string, waypoints: { x: number; y: number }[]) => {
+    (
+      edgeId: string,
+      waypoints: { x: number; y: number }[],
+      tipMoves?: { id: string; x: number; y: number }[],
+    ) => {
       // Live path edits — history is recorded once by the caller when the edit starts.
+      const tipIds = new Set((tipMoves ?? []).map((t) => t.id));
       setEdges((prev) =>
-        prev.map((e) =>
-          e.id === edgeId
-            ? {
-                ...e,
-                data: {
-                  ...(e.data as object),
-                  waypoints,
-                  // Bake the dragged geometry — re-routing would yank shared tips
-                  // and disturb neighboring wires at the same junction.
-                  directPath: true,
-                },
-                selected: true,
-              }
-            : e,
-        ),
+        prev.map((e) => {
+          if (e.id === edgeId) {
+            return {
+              ...e,
+              data: {
+                ...(e.data as object),
+                waypoints,
+                // Bake the dragged geometry — re-routing would yank shared tips
+                // and disturb neighboring wires at the same junction.
+                directPath: true,
+              },
+              selected: true,
+            };
+          }
+          // Sibling legs on a slid tip: drop stale absolute bends so they
+          // re-anchor to the tip (T square stays on the rail).
+          if (
+            tipIds.size &&
+            (tipIds.has(e.source) || tipIds.has(e.target))
+          ) {
+            const wps =
+              ((e.data as { waypoints?: { x: number; y: number }[] } | undefined)
+                ?.waypoints) ?? [];
+            if (!wps.length) return e;
+            return {
+              ...e,
+              data: {
+                ...(e.data as object),
+                waypoints: [],
+                directPath: true,
+              },
+            };
+          }
+          return e;
+        }),
       );
+      if (tipMoves?.length) {
+        const byId = new Map(tipMoves.map((t) => [t.id, t]));
+        setNodes((prev) =>
+          prev.map((n) => {
+            const m = byId.get(n.id);
+            if (!m) return n;
+            return { ...n, position: { x: m.x, y: m.y } };
+          }),
+        );
+      }
     },
-    [setEdges],
+    [setEdges, setNodes],
   );
 
   /** Drag-slide finished: simplify doglegs and remove leftover mid-rail tips. */
@@ -3451,7 +3486,25 @@ export default function App() {
           : e,
       );
 
-      const collapsed = collapsePassThroughTips(nodesNow, es);
+      // Keep TIP ends on the committed path ends (T squares follow the rail).
+      let ns = nodesNow;
+      const srcN = ns.find((n) => n.id === edge.source);
+      const tgtN = ns.find((n) => n.id === edge.target);
+      if (simplified.length >= 2) {
+        const start = simplified[0]!;
+        const end = simplified[simplified.length - 1]!;
+        ns = ns.map((n) => {
+          if (n.id === edge.source && srcN?.data.kind === "TIP") {
+            return { ...n, position: { x: start.x, y: start.y - 4 } };
+          }
+          if (n.id === edge.target && tgtN?.data.kind === "TIP") {
+            return { ...n, position: { x: end.x, y: end.y - 4 } };
+          }
+          return n;
+        });
+      }
+
+      const collapsed = collapsePassThroughTips(ns, es);
       let ns = collapsed.nodes;
       es = collapsed.edges;
       const coinc = mergeCoincidentTips(ns, es, 24);

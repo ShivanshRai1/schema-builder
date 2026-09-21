@@ -868,7 +868,11 @@ export type CanvasProps = {
   onWire: (payload: WireCompletePayload) => void;
   onWirePartial: (payload: WirePartialPayload) => void;
   onTrimWire: () => boolean;
-  onWirePathUpdate: (edgeId: string, waypoints: Point[]) => void;
+  onWirePathUpdate: (
+    edgeId: string,
+    waypoints: Point[],
+    tipMoves?: { id: string; x: number; y: number }[],
+  ) => void;
   /** After Drag-slide/bend ends — collapse doglegs + purge leftover rail tips. */
   onWirePathCommit?: (edgeId: string) => void;
   onMoveWireDisconnect: (
@@ -1979,12 +1983,14 @@ export function Canvas({
     }
 
     // --- Drag tool: reshape in place (connected) ----------------------------
-    // Keep pins / junction tips fixed — only this edge's interior path moves.
-    // Moving shared tips was yanking every sibling wire at the same T.
+    // Pin ends stay fixed. TIP ends (incl. T-junction tips) slide with the run
+    // so filled squares stay on the rail instead of floating at the old tip.
     const dragKind = hit.kind;
     const dragIndex = hit.kind === "segment" ? hit.segIndex : hit.polyIndex;
     let armed = false;
     let historyPushed = false;
+    const srcIsTip = src?.data.kind === "TIP";
+    const tgtIsTip = tgt?.data.kind === "TIP";
 
     const arm = () => {
       if (!historyPushed) {
@@ -2015,14 +2021,26 @@ export function Canvas({
       const nextPoly =
         dragKind === "corner"
           ? dragWireCorner(basePoly, dragIndex, cur, SCHEMATIC_GRID)
-          : dragWireSegment(basePoly, dragIndex, cur, SCHEMATIC_GRID);
+          : dragWireSegment(basePoly, dragIndex, cur, SCHEMATIC_GRID, {
+              slideStart: srcIsTip,
+              slideEnd: tgtIsTip,
+            });
       const liveEdge = edgesRef.current.find((e) => e.id === edgeId) ?? edge;
       const waypoints = polylineToStoredWaypoints(
         nodesRef.current,
         liveEdge,
         nextPoly,
       );
-      onWirePathUpdateRef.current(edgeId, waypoints);
+      const tipMoves: { id: string; x: number; y: number }[] = [];
+      if (srcIsTip && nextPoly.length >= 1) {
+        const p = nextPoly[0]!;
+        tipMoves.push({ id: edge.source, x: p.x, y: p.y - 4 });
+      }
+      if (tgtIsTip && nextPoly.length >= 1) {
+        const p = nextPoly[nextPoly.length - 1]!;
+        tipMoves.push({ id: edge.target, x: p.x, y: p.y - 4 });
+      }
+      onWirePathUpdateRef.current(edgeId, waypoints, tipMoves);
     };
 
     const onUp = () => {

@@ -299,31 +299,56 @@ export function collinearRunBounds(
 
 /**
  * LTspice-style segment drag: shift a maximal H/V run perpendicular.
- * Wire endpoints stay fixed — doglegs appear only at the run’s ends so
- * shared junction tips / pins (and sibling wires on them) are not yanked.
+ *
+ * By default wire endpoints stay fixed and doglegs appear at the run’s ends
+ * (keeps pin ends stable). When `slideStart` / `slideEnd` are set and the run
+ * reaches that polyline end, that end vertex moves with the bar — used for
+ * TIP ends so T-junction squares follow the dragged rail.
  */
 export function dragWireSegment(
   polyline: Point[],
   segIndex: number,
   cursor: Point,
   grid = STUB,
+  opts?: { slideStart?: boolean; slideEnd?: boolean },
 ): Point[] {
   const run = collinearRunBounds(polyline, segIndex);
   if (!run) return polyline;
   const { lo, hi, horiz } = run;
   const p = polyline[lo]!;
   const q = polyline[hi]!;
-  const head = polyline.slice(0, lo);
-  const tail = polyline.slice(hi + 1);
+  const slideStart = Boolean(opts?.slideStart) && lo === 0;
+  const slideEnd = Boolean(opts?.slideEnd) && hi === polyline.length - 1;
+  const head = slideStart ? [] : polyline.slice(0, lo);
+  const tail = slideEnd ? [] : polyline.slice(hi + 1);
 
   if (horiz) {
     const y = snapCoord(cursor.y, grid);
-    // Snap back to the straight run — otherwise a near-return leaves a thin
-    // U that looks like a duplicate parallel wire + junction squares.
     if (Math.abs(y - p.y) < grid) {
       return orthogonalPolyline([...head, p, q, ...tail]);
     }
-    // Keep original end vertices of the run; insert the shifted bar between them.
+    if (slideStart && slideEnd) {
+      return orthogonalPolyline([
+        { x: p.x, y },
+        { x: q.x, y },
+      ]);
+    }
+    if (slideStart) {
+      return orthogonalPolyline([
+        { x: p.x, y },
+        { x: q.x, y },
+        q,
+        ...tail,
+      ]);
+    }
+    if (slideEnd) {
+      return orthogonalPolyline([
+        ...head,
+        p,
+        { x: p.x, y },
+        { x: q.x, y },
+      ]);
+    }
     return orthogonalPolyline([
       ...head,
       p,
@@ -337,6 +362,28 @@ export function dragWireSegment(
   const x = snapCoord(cursor.x, grid);
   if (Math.abs(x - p.x) < grid) {
     return orthogonalPolyline([...head, p, q, ...tail]);
+  }
+  if (slideStart && slideEnd) {
+    return orthogonalPolyline([
+      { x, y: p.y },
+      { x, y: q.y },
+    ]);
+  }
+  if (slideStart) {
+    return orthogonalPolyline([
+      { x, y: p.y },
+      { x, y: q.y },
+      q,
+      ...tail,
+    ]);
+  }
+  if (slideEnd) {
+    return orthogonalPolyline([
+      ...head,
+      p,
+      { x, y: p.y },
+      { x, y: q.y },
+    ]);
   }
   return orthogonalPolyline([
     ...head,
