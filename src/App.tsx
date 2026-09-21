@@ -2626,6 +2626,16 @@ export default function App() {
       const nodesNow = nodesRef.current;
       const edgesNow = edgesRef.current;
       let best: { id: string; d: number } | null = null;
+      for (const n of nodesNow) {
+        if (n.data.kind !== "TIP") continue;
+        // Deg-1 tips too (self-T / spur marks) — Delete must find them.
+        const pt = pinWorldPoint(n, "t");
+        if (!pt) continue;
+        const d = Math.hypot(pt.x - point.x, pt.y - point.y);
+        if (d <= 14 && (!best || d < best.d)) best = { id: n.id, d };
+      }
+      // Prefer tips that actually have ≥2 wires when several are nearby.
+      let bestMulti: { id: string; d: number } | null = null;
       const deg = new Map<string, number>();
       for (const e of edgesNow) {
         deg.set(e.source, (deg.get(e.source) ?? 0) + 1);
@@ -2637,9 +2647,9 @@ export default function App() {
         const pt = pinWorldPoint(n, "t");
         if (!pt) continue;
         const d = Math.hypot(pt.x - point.x, pt.y - point.y);
-        if (d <= 14 && (!best || d < best.d)) best = { id: n.id, d };
+        if (d <= 14 && (!bestMulti || d < bestMulti.d)) bestMulti = { id: n.id, d };
       }
-      return best?.id;
+      return bestMulti?.id ?? best?.id;
     },
     [],
   );
@@ -2716,21 +2726,39 @@ export default function App() {
 
       if (kind === "junction") {
         const tipId = tipIdNearJunction(point, meta?.tipId);
-        if (!tipId) return; // Square with no shared tip — don't delete rails.
+        if (!tipId) return; // Square with no tip — don't delete rails.
+        const deg = edgesNow.reduce(
+          (n, e) => n + (e.source === tipId || e.target === tipId ? 1 : 0),
+          0,
+        );
         // Same as toggle: restore hop when possible so Delete isn't a dead end.
-        const unjoined = unjoinJunctionToCrossing(nodesNow, edgesNow, tipId);
-        if (unjoined) {
+        if (deg >= 2) {
+          const unjoined = unjoinJunctionToCrossing(nodesNow, edgesNow, tipId);
+          if (unjoined) {
+            pushHistory();
+            nodesRef.current = unjoined.nodes;
+            edgesRef.current = unjoined.edges;
+            setNodes(unjoined.nodes);
+            setEdges(unjoined.edges);
+            return;
+          }
+          const dissolved = dissolveJunctionTip(nodesNow, edgesNow, tipId, newId);
+          if (!dissolved) return;
           pushHistory();
-          nodesRef.current = unjoined.nodes;
-          edgesRef.current = unjoined.edges;
-          setNodes(unjoined.nodes);
-          setEdges(unjoined.edges);
+          const pruned = pruneOrphanTips(dissolved.nodes, dissolved.edges);
+          setNodes(pruned.nodes);
+          setEdges(pruned.edges);
           return;
         }
-        const dissolved = dissolveJunctionTip(nodesNow, edgesNow, tipId, newId);
-        if (!dissolved) return;
+        // Deg-1 tip under a square (false/self-T spur): drop only that stub,
+        // never scissors the rail underneath.
+        const stub = edgesNow.find((e) => e.source === tipId || e.target === tipId);
+        if (!stub) return;
         pushHistory();
-        const pruned = pruneOrphanTips(dissolved.nodes, dissolved.edges);
+        const nextEdges = edgesNow.filter((e) => e.id !== stub.id);
+        const pruned = pruneOrphanTips(nodesNow, nextEdges);
+        nodesRef.current = pruned.nodes;
+        edgesRef.current = pruned.edges;
         setNodes(pruned.nodes);
         setEdges(pruned.edges);
         return;

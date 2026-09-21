@@ -2724,7 +2724,33 @@ export function Canvas({
         }
       }
 
-      // Wire under cursor wins over junction marks / parts.
+      // Filled junction / hollow crossing first — otherwise the wire under the
+      // square wins and Delete wipes the whole rail (user: “deleting T deletes wire”).
+      {
+        const marks = findWireJunctions(nodes, edges);
+        const hidden = new Set(hiddenCrossingRef.current);
+        if (hidden.size) {
+          marks.crossings = marks.crossings.filter((c) => !hidden.has(wireMarkKey(c)));
+        }
+        const markHit = hitTestWireMark(marks, cursor);
+        if (markHit) {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          if (markHit.kind === "junction") {
+            onDeleteWireMarkRef.current("junction", markHit.mark, {
+              tipId: markHit.mark.tipId,
+            });
+          } else {
+            onDeleteWireMarkRef.current("crossing", markHit.mark, {
+              edgeIds: markHit.mark.edgeIds,
+            });
+          }
+          return;
+        }
+      }
+
+      // Wire under cursor (no mark hit).
       {
         const wireHit = wireHitAtCursor(nodes, edges, cursor);
         if (wireHit) {
@@ -2734,29 +2760,6 @@ export function Canvas({
           onDeleteEdgeRef.current(wireHit.edgeId, cursor);
           return;
         }
-      }
-
-      // Filled junction / hollow crossing — scissors remove the mark's meaning.
-      const marks = findWireJunctions(nodes, edges);
-      const hidden = new Set(hiddenCrossingRef.current);
-      if (hidden.size) {
-        marks.crossings = marks.crossings.filter((c) => !hidden.has(wireMarkKey(c)));
-      }
-      const markHit = hitTestWireMark(marks, cursor);
-      if (markHit) {
-        event.preventDefault();
-        event.stopPropagation();
-        event.stopImmediatePropagation();
-        if (markHit.kind === "junction") {
-          onDeleteWireMarkRef.current("junction", markHit.mark, {
-            tipId: markHit.mark.tipId,
-          });
-        } else {
-          onDeleteWireMarkRef.current("crossing", markHit.mark, {
-            edgeIds: markHit.mark.edgeIds,
-          });
-        }
-        return;
       }
 
       const nodeEl = target?.closest?.(".react-flow__node") as HTMLElement | null;

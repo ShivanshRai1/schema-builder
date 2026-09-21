@@ -154,22 +154,26 @@ function branchPointFromPin(pin: Point, polys: Point[][]): Point | null {
 /**
  * Tip of a single polyline lands on an earlier segment of the same wire
  * (self-T). Excludes the segment(s) incident to that tip.
+ * Near-closed loops (ends almost meet) are not Ts — that invented squares on
+ * free-wire rectangles when two sides were joined.
  */
 function selfJoinOnOwnRail(pts: Point[]): Point | null {
   if (pts.length < 4) return null;
+  const start = pts[0]!;
+  const end = pts[pts.length - 1]!;
+  // Closing a loop / joining ends of one snake ≈ rectangle — not a mid-rail T.
+  if (near(start, end, 28)) return null;
+
   for (const atStart of [true, false] as const) {
-    const tip = atStart ? pts[0]! : pts[pts.length - 1]!;
+    const tip = atStart ? start : end;
     // Segments not adjacent to this tip.
     const iLo = atStart ? 1 : 0;
     const iHi = atStart ? pts.length - 2 : pts.length - 3;
     for (let i = iLo; i <= iHi; i++) {
       const a = pts[i]!;
       const b = pts[i + 1]!;
+      // Strict mid-segment only — landing on a bend looked like a T on L-corners.
       if (onInterior(tip, a, b)) return tip;
-      // Landed exactly on a bend that isn't next to the tip.
-      if (near(tip, a) && !(atStart && i <= 1) && !(!atStart && i >= pts.length - 2)) {
-        return a;
-      }
     }
   }
   return null;
