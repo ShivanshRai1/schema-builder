@@ -3505,7 +3505,7 @@ export default function App() {
       }
 
       const collapsed = collapsePassThroughTips(ns, es);
-      let ns = collapsed.nodes;
+      ns = collapsed.nodes;
       es = collapsed.edges;
       const coinc = mergeCoincidentTips(ns, es, 24);
       ns = coinc.nodes;
