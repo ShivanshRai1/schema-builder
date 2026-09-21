@@ -1,14 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type { WorkspaceFile } from "../persistence/workspaceFile";
-import { downloadWorkspace } from "../persistence/workspaceFile";
 import {
   deleteLocalProject,
   listLocalProjects,
   type LocalProjectMeta,
 } from "../persistence/localProjects";
-import { buildShareUrl, copyText, SHARE_URL_SOFT_LIMIT } from "../persistence/shareLink";
 
-type TabId = "save" | "library" | "share";
+type TabId = "save" | "open";
 
 export function ProjectsDialog({
   open,
@@ -16,7 +14,7 @@ export function ProjectsDialog({
   projectName,
   onProjectNameChange,
   currentProjectId,
-  workspace,
+  workspace: _workspace,
   onSaveProgress,
   onLoadProject,
   onExportFile,
@@ -45,6 +43,7 @@ export function ProjectsDialog({
     refresh();
     setStatus(null);
     setStatusErr(false);
+    setTab("save");
   }, [open]);
 
   useEffect(() => {
@@ -58,8 +57,6 @@ export function ProjectsDialog({
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [open, onClose]);
-
-  const shareInfo = useMemo(() => buildShareUrl(workspace), [workspace]);
 
   if (!open) return null;
 
@@ -81,7 +78,7 @@ export function ProjectsDialog({
           <div>
             <h2>Projects</h2>
             <p className="projects-dialog-sub">
-              Save writes a shared project on the server (everyone sees it).
+              Save / open: schematic + netlist + models + results
             </p>
           </div>
           <button type="button" className="ghost-btn" onClick={onClose}>
@@ -93,8 +90,7 @@ export function ProjectsDialog({
           {(
             [
               ["save", "Save"],
-              ["library", "My projects"],
-              ["share", "Share"],
+              ["open", "Open"],
             ] as const
           ).map(([id, label]) => (
             <button
@@ -123,24 +119,40 @@ export function ProjectsDialog({
                 />
               </label>
               <p className="projects-hint">
-                Saves all schematic tabs, models, and settings to the shared server store
-                {currentProjectId ? " (also keeps a local backup)." : " (plus a local backup)."}
+                Saves this browser’s project list
+                {currentProjectId ? " (updates the current entry)." : "."} You can also download a
+                .json file.
               </p>
               <div className="projects-actions">
-                <button type="button" className="ghost-btn ghost-btn-primary" onClick={onSaveProgress}>
-                  Save for everyone
+                <button
+                  type="button"
+                  className="ghost-btn ghost-btn-primary"
+                  onClick={() => {
+                    onSaveProgress();
+                    flash("saved");
+                    refresh();
+                  }}
+                >
+                  Save
                 </button>
-                <button type="button" className="ghost-btn" onClick={onExportFile}>
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={() => {
+                    onExportFile();
+                    flash("downloaded .json file");
+                  }}
+                >
                   Download file…
                 </button>
               </div>
             </section>
           )}
 
-          {tab === "library" && (
+          {tab === "open" && (
             <section className="projects-section">
               {projects.length === 0 ? (
-                <p className="projects-hint">No saved projects yet — use Save progress first.</p>
+                <p className="projects-hint">No local projects yet — Save one first, or import a file.</p>
               ) : (
                 <ul className="projects-list">
                   {projects.map((p) => (
@@ -156,7 +168,14 @@ export function ProjectsDialog({
                         </span>
                       </div>
                       <div className="projects-list-actions">
-                        <button type="button" className="ghost-btn" onClick={() => onLoadProject(p.id)}>
+                        <button
+                          type="button"
+                          className="ghost-btn"
+                          onClick={() => {
+                            onLoadProject(p.id);
+                            onClose();
+                          }}
+                        >
                           Open
                         </button>
                         <button
@@ -177,71 +196,20 @@ export function ProjectsDialog({
                 </ul>
               )}
               <label className="projects-import">
-                <span>Import .json file</span>
+                <span>Open .json file</span>
                 <input
                   type="file"
                   accept="application/json,.json"
                   onChange={(e) => {
                     const f = e.target.files?.[0];
                     e.target.value = "";
-                    if (f) onImportFile(f);
+                    if (f) {
+                      onImportFile(f);
+                      onClose();
+                    }
                   }}
                 />
               </label>
-            </section>
-          )}
-
-          {tab === "share" && (
-            <section className="projects-section">
-              <p className="projects-hint">
-                Share a file, clipboard JSON, or a link. Large projects (big model libraries) may be
-                too big for a URL — use Download instead.
-              </p>
-              <div className="projects-actions">
-                <button
-                  type="button"
-                  className="ghost-btn ghost-btn-primary"
-                  onClick={() => {
-                    downloadWorkspace(workspace);
-                    flash("downloaded share file");
-                  }}
-                >
-                  Download share file
-                </button>
-                <button
-                  type="button"
-                  className="ghost-btn"
-                  onClick={() => {
-                    void copyText(JSON.stringify(workspace))
-                      .then(() => flash("copied project JSON — paste into chat or a .json file"))
-                      .catch(() => flash("clipboard copy failed", true));
-                  }}
-                >
-                  Copy JSON
-                </button>
-                <button
-                  type="button"
-                  className="ghost-btn"
-                  disabled={shareInfo.tooLarge}
-                  title={
-                    shareInfo.tooLarge
-                      ? `Link would exceed ~${Math.round(SHARE_URL_SOFT_LIMIT / 1000)}k characters`
-                      : "Copy a URL that opens this project"
-                  }
-                  onClick={() => {
-                    void copyText(shareInfo.url)
-                      .then(() => flash("share link copied"))
-                      .catch(() => flash("clipboard copy failed", true));
-                  }}
-                >
-                  {shareInfo.tooLarge ? "Link too large" : "Copy share link"}
-                </button>
-              </div>
-              {!shareInfo.tooLarge && (
-                <p className="projects-share-url" title={shareInfo.url}>
-                  {shareInfo.url.slice(0, 96)}…
-                </p>
-              )}
             </section>
           )}
         </div>

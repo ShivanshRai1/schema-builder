@@ -1,5 +1,7 @@
 import type { CircuitHistory, CircuitSnapshot } from "../history/circuitHistory";
 import { cloneSnapshot, createHistory } from "../history/circuitHistory";
+import type { NetlistSectionId } from "../netlist/netlistSectionOrder";
+import type { WorkspaceTabLastSim } from "../persistence/workspaceFile";
 
 export type SchematicTabMeta = {
   id: string;
@@ -14,6 +16,8 @@ export type SchematicTabDoc = {
   history: CircuitHistory;
   hiddenCrossingKeys: string[];
   nextId: number;
+  /** Last Run waveforms for this tab (part of the four-piece save unit). */
+  lastSim?: WorkspaceTabLastSim | null;
 };
 
 let tabSeq = 1;
@@ -25,19 +29,26 @@ export function nextTabId(): string {
 export function emptySchematic(opts?: {
   library?: string;
   directives?: string[];
+  sectionOrder?: NetlistSectionId[];
 }): CircuitSnapshot {
   return {
     nodes: [],
     edges: [],
     directives: opts?.directives ?? [".tran 1u 1m", ".options reltol=1e-3"],
     library: opts?.library ?? "",
+    sectionOrder: opts?.sectionOrder,
   };
 }
 
 export function createTabDoc(
   title: string,
   snap: CircuitSnapshot,
-  opts?: { id?: string; history?: CircuitHistory; nextId?: number },
+  opts?: {
+    id?: string;
+    history?: CircuitHistory;
+    nextId?: number;
+    lastSim?: WorkspaceTabLastSim | null;
+  },
 ): SchematicTabDoc {
   return {
     id: opts?.id ?? nextTabId(),
@@ -46,6 +57,7 @@ export function createTabDoc(
     history: opts?.history ?? createHistory(),
     hiddenCrossingKeys: [],
     nextId: opts?.nextId ?? 0,
+    lastSim: opts?.lastSim,
   };
 }
 

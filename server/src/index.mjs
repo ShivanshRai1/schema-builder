@@ -31,13 +31,14 @@ app.post("/api/assistant", async (req, res) => {
   try {
     const message = String(req.body?.message ?? "").trim();
     const context = req.body?.context ?? { components: [], netlist: "" };
+    const history = Array.isArray(req.body?.history) ? req.body.history : [];
 
     if (!message) {
       res.status(400).json({ ops: [], reply: "Empty message.", source: "stub" });
       return;
     }
 
-    const raw = await handleAssistant(message, context);
+    const raw = await handleAssistant(message, context, history);
     let ops = validateOpsPayload(normalizeOps(raw.ops));
     let reply = String(raw.reply ?? "Done.");
     let source = raw.source ?? "stub";

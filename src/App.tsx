@@ -38,7 +38,13 @@ import { mergeCommonlyUsed, readCommonlyUsed, recordCommonlyUsed } from "./model
 import type { ComponentData, ComponentKind, ComponentRotation } from "./model/types";
 import { normalizeRotation } from "./model/rotation";
 import { toNetlist } from "./netlist/toNetlist";
-import { extractDirectives, extractSubcktLibraryText } from "./netlist/parseDeviceParams";
+import {
+  DEFAULT_NETLIST_SECTION_ORDER,
+  detectNetlistSectionOrder,
+  trimNetlistAfterEnd,
+  type NetlistSectionId,
+} from "./netlist/netlistSectionOrder";
+import { extractDirectives, extractSubcktLibraryText, looksLikeFullNetlistDeck, upsertSpiceLibrary } from "./netlist/parseDeviceParams";
 import { applyNetlistToGraph } from "./netlist/applyNetlistToGraph";
 import { cloneSnapshot, createHistory, type CircuitSnapshot } from "./history/circuitHistory";
 import { parseCircuitFile } from "./persistence/circuitFile";
@@ -215,12 +221,27 @@ function partHasLiveWire(
   return false;
 }
 
-function activeTabLastSim(ws: WorkspaceFile, tabId: string): SimResult | null {
-  const tab = ws.tabs.find((t) => t.id === tabId);
-  const last = tab?.lastSim;
-  if (!tab || !last?.series?.length) return null;
+function simResultToStored(
+  r: SimResult | null | undefined,
+): WorkspaceTabLastSim | undefined {
+  if (!r?.series?.length) return undefined;
+  return {
+    ok: r.ok,
+    source: r.source,
+    message: r.message,
+    engine: r.engine,
+    series: r.series.map((s) => ({ name: s.name, x: [...s.x], y: [...s.y] })),
+    conditionsSummary: r.conditionsSummary?.trim() || undefined,
+  };
+}
+
+function storedLastSimToResult(
+  last: WorkspaceTabLastSim | null | undefined,
+  directives?: string[],
+): SimResult | null {
+  if (!last?.series?.length) return null;
   const fromDirs = formatLoadDumpConditionsSummary(
-    parseLoadDumpFromNetlist((tab.directives ?? []).join("\n")),
+    parseLoadDumpFromNetlist((directives ?? []).join("\n")),
   );
   return {
     ok: last.ok,
@@ -231,6 +252,11 @@ function activeTabLastSim(ws: WorkspaceFile, tabId: string): SimResult | null {
     fromSavedCondition: true,
     conditionsSummary: last.conditionsSummary?.trim() || fromDirs,
   };
+}
+
+function activeTabLastSim(ws: WorkspaceFile, tabId: string): SimResult | null {
+  const tab = ws.tabs.find((t) => t.id === tabId);
+  return storedLastSimToResult(tab?.lastSim, tab?.directives);
 }
 
 export default function App() {
@@ -338,6 +364,9 @@ export default function App() {
     () => STARTER.directives,
   );
   const [library, setLibrary] = useState(() => STARTER.library ?? "");
+  const [sectionOrder, setSectionOrder] = useState<NetlistSectionId[]>(
+    () => STARTER.sectionOrder ?? [...DEFAULT_NETLIST_SECTION_ORDER],
+  );
   const [showLibrary, setShowLibrary] = useState(false);
   const [netlistFloating, setNetlistFloating] = useState(false);
   /** Simulation always opens as a floating waveform window (LTspice-style). */
@@ -517,16 +546,19 @@ export default function App() {
   const edgesRef = useRef(edges);
   const directivesRef = useRef(directives);
   const libraryRef = useRef(library);
+  const sectionOrderRef = useRef(sectionOrder);
   nodesRef.current = nodes;
   edgesRef.current = edges;
   directivesRef.current = directives;
   libraryRef.current = library;
+  sectionOrderRef.current = sectionOrder;
 
   const snapshot = useCallback((): CircuitSnapshot => ({
     nodes: nodesRef.current,
     edges: edgesRef.current,
     directives: directivesRef.current,
     library: libraryRef.current,
+    sectionOrder: sectionOrderRef.current,
   }), []);
 
 
@@ -540,6 +572,11 @@ export default function App() {
     setEdges(s.edges);
     setDirectives(s.directives);
     setLibrary(s.library);
+    setSectionOrder(
+      s.sectionOrder?.length
+        ? [...s.sectionOrder]
+        : [...DEFAULT_NETLIST_SECTION_ORDER],
+    );
     syncIdCounter(s.nodes, idCounter);
     setHistTick((t) => t + 1);
   }, [setNodes, setEdges]);
@@ -577,6 +614,9 @@ export default function App() {
     t.snap = cloneSnapshot(snapshot());
     t.hiddenCrossingKeys = hiddenCrossingKeys;
     t.nextId = idCounter.current;
+    // Keep last Run with the tab (schematic + netlist + models + results).
+    const stored = simResultToStored(simResultRef.current);
+    if (stored) t.lastSim = stored;
     // history.current is already this tab's history instance
   }, [snapshot, hiddenCrossingKeys]);
 
@@ -594,6 +634,7 @@ export default function App() {
       idCounter.current = next.nextId;
       setActiveTabId(id);
       clearTransientUi();
+      setSimResult(storedLastSimToResult(next.lastSim, next.snap.directives));
       setHistTick((t) => t + 1);
       requestFitView();
     },
@@ -610,6 +651,7 @@ export default function App() {
         // Keep models handy; blank canvas for a fresh build
         library: libraryRef.current,
         directives: [".tran 1u 1m", ".options reltol=1e-3"],
+        sectionOrder: sectionOrderRef.current,
       }),
     );
     tabsRef.current = [...(tabsRef.current ?? []), doc];
@@ -655,6 +697,7 @@ export default function App() {
         idCounter.current = next.nextId;
         setActiveTabId(next.id);
         clearTransientUi();
+        setSimResult(storedLastSimToResult(next.lastSim, next.snap.directives));
         setHistTick((t) => t + 1);
         requestFitView();
       }
@@ -827,6 +870,7 @@ export default function App() {
       emptySchematic({
         library: libraryRef.current,
         directives: directivesRef.current ?? [".tran 1u 1m", ".options reltol=1e-3"],
+        sectionOrder: sectionOrderRef.current,
       }),
     );
     setHiddenCrossingKeys([]);
@@ -862,7 +906,10 @@ export default function App() {
         : rawName;
 
       const lastSim: WorkspaceTabLastSim | null | undefined = (() => {
-        if (!opts?.includeLastSim) return undefined;
+        if (!opts?.includeLastSim) {
+          // Keep whatever flushActiveTab stored (live Run if any).
+          return undefined;
+        }
         const r = simResultRef.current;
         if (!r?.series?.length) return null;
         const activeDoc = docs.find((d) => d.id === activeId);
@@ -871,6 +918,7 @@ export default function App() {
           ? toNetlist(snap.nodes, snap.edges, {
               directives: snap.directives,
               library: snap.library,
+              sectionOrder: snap.sectionOrder,
             })
           : (activeDoc?.snap.directives ?? []).join("\n");
         const conditionsSummary =
@@ -886,6 +934,11 @@ export default function App() {
         };
       })();
 
+      if (opts?.includeLastSim) {
+        const activeDoc = docs.find((d) => d.id === activeId);
+        if (activeDoc) activeDoc.lastSim = lastSim ?? null;
+      }
+
       return buildWorkspaceFile({
         name,
         activeTabId: activeId,
@@ -893,7 +946,8 @@ export default function App() {
           tabFromSnapshot(d.id, metas.get(d.id) ?? d.title, d.snap, {
             hiddenCrossingKeys: d.hiddenCrossingKeys,
             nextId: d.nextId,
-            lastSim: d.id === activeId ? lastSim : undefined,
+            // Always persist each tab’s results — never wipe on ordinary Save.
+            lastSim: d.lastSim,
           }),
         ),
       });
@@ -912,10 +966,12 @@ export default function App() {
             edges: t.edges,
             directives: t.directives,
             library: t.library ?? "",
+            sectionOrder: t.sectionOrder,
           },
           {
             id: t.id,
             nextId: t.nextId ?? maxNodeId(t.nodes),
+            lastSim: t.lastSim,
           },
         );
         doc.hiddenCrossingKeys = t.hiddenCrossingKeys ?? [];
@@ -968,13 +1024,15 @@ export default function App() {
       }
       const remote = await saveSharedWorkspace(ws);
       if (remote.ok) {
-        setNetlistStatus(`saved condition “${remote.name}”`);
+        setNetlistStatus(
+          `saved condition “${remote.name}” — schematic, netlist, models, results`,
+        );
         setNetlistStatusError(false);
         return;
       }
       setNetlistStatusError(true);
       setNetlistStatus(
-        `shared save failed (${remote.error}) — kept a copy in this browser only`,
+        `server save failed (${remote.error}) — kept a local copy in this browser`,
       );
     },
     [captureWorkspace, currentProjectId, onRenameTab],
@@ -982,7 +1040,7 @@ export default function App() {
 
   const onSaveProgress = useCallback(async () => {
     const ws = captureWorkspace();
-    setNetlistStatus("saving shared project…");
+    setNetlistStatus("saving project…");
     setNetlistStatusError(false);
 
     // Always keep a local backup so a flaky network doesn't lose work.
@@ -997,19 +1055,21 @@ export default function App() {
 
     const remote = await saveSharedWorkspace(ws);
     if (remote.ok) {
-      setNetlistStatus(`saved “${remote.name}”`);
+      setNetlistStatus(
+        `saved “${remote.name}” — schematic, netlist, models, results`,
+      );
       setNetlistStatusError(false);
       return;
     }
     setNetlistStatusError(true);
     setNetlistStatus(
-      `shared save failed (${remote.error}) — kept a copy in this browser only`,
+      `server save failed (${remote.error}) — kept a local copy in this browser`,
     );
   }, [captureWorkspace, currentProjectId]);
 
   const onExportWorkspaceFile = useCallback(() => {
     downloadWorkspace(captureWorkspace());
-    setNetlistStatus("downloaded project file");
+    setNetlistStatus("downloaded project file (schematic + netlist + models + results)");
     setNetlistStatusError(false);
   }, [captureWorkspace]);
 
@@ -1105,8 +1165,14 @@ export default function App() {
   }, [captureWorkspace]);
 
   const netlist = useMemo(
-    () => toNetlist(nodes, edges, { title: "SimulAI demo", directives, library }),
-    [nodes, edges, directives, library],
+    () =>
+      toNetlist(nodes, edges, {
+        title: "SimulAI demo",
+        directives,
+        library,
+        sectionOrder,
+      }),
+    [nodes, edges, directives, library, sectionOrder],
   );
   const propsDialogNode = propsDialog
     ? nodes.find((n) => n.id === propsDialog.nodeId && n.data.kind !== "TIP") ?? null
@@ -3929,7 +3995,9 @@ export default function App() {
   }, []);
 
   const applyTextEdit = useCallback(() => {
-    const result = applyNetlistToGraph(nodes, edges, draftNetlist);
+    // Ignore anything after the first .end so a mid-deck .end cannot create ghosts.
+    const draft = trimNetlistAfterEnd(draftNetlist);
+    const result = applyNetlistToGraph(nodes, edges, draft);
 
     // Foreign / unsafe paste: never touch history or the live graph.
     if (result.rejected) {
@@ -3943,31 +4011,35 @@ export default function App() {
     setEdges(result.edges);
     syncIdCounter(result.nodes, idCounter);
 
-    const dirs = extractDirectives(draftNetlist);
-    if (dirs.length) {
-      // Keep previous .tran if the paste omitted analysis (easy to delete by mistake).
+    // Remember the user's section arrangement (any permutation).
+    const order = detectNetlistSectionOrder(draft);
+    setSectionOrder(order);
+
+    const dirs = extractDirectives(draft);
+    const fullDeck = looksLikeFullNetlistDeck(draft);
+    let directivesCommitted = false;
+    if (dirs.length || fullDeck) {
+      // Full deck: commit what the user typed (including clearing deleted lines).
+      // Partial paste with no directives: leave previous analyses alone.
       let next = dirs;
       if (!dirs.some((d) => /^\.tran\b/i.test(d))) {
         const kept = (directivesRef.current ?? []).filter((d) => /^\.tran\b/i.test(d));
         if (kept.length) next = [...dirs, ...kept];
+        else next = [...dirs, ".tran 1u 1m"];
       }
       setDirectives(next);
+      directivesCommitted = true;
     } else if (result.convertedFrom === "expresspcb") {
       setDirectives([".tran 1u 500u", ".options reltol=1e-3"]);
+      directivesCommitted = true;
     }
 
-    // Park .subckt bodies into Models — Apply used to drop them, so D2SPICE
-    // then failed with "Unknown subckt" even when the paste looked fine.
-    const extractedLib = extractSubcktLibraryText(draftNetlist);
+    // Park .subckt / .model into Models — upsert by name so edits stick.
+    const extractedLib = extractSubcktLibraryText(draft);
+    let modelsCommitted = false;
     if (extractedLib) {
-      setLibrary((prev) => {
-        const cur = prev.trim();
-        if (!cur) return extractedLib.endsWith("\n") ? extractedLib : `${extractedLib}\n`;
-        if (cur.includes(extractedLib.slice(0, Math.min(80, extractedLib.length)))) {
-          return prev;
-        }
-        return `${cur}\n\n* --- from netlist Apply ---\n${extractedLib}\n`;
-      });
+      setLibrary((prev) => upsertSpiceLibrary(prev, extractedLib));
+      modelsCommitted = true;
     }
 
     const errors: string[] = [];
@@ -3984,7 +4056,17 @@ export default function App() {
     if (result.updated.length) parts.push(`updated ${result.updated.join(", ")}`);
     if (result.added.length) parts.push(`added ${result.added.join(", ")} (unplaced — drag to position)`);
     if (result.deleted.length) parts.push(`deleted ${result.deleted.join(", ")}`);
-    if (!parts.length && !errors.length) parts.push("no device changes");
+    if (directivesCommitted && !result.updated.length && !result.added.length && !result.deleted.length) {
+      parts.push("directives updated");
+    }
+    if (modelsCommitted) parts.push("models → Models library");
+    const defaultOrder = DEFAULT_NETLIST_SECTION_ORDER.join(",");
+    if (order.join(",") !== defaultOrder) {
+      parts.push(`section order: ${order.join(" → ")}`);
+    }
+    if (!parts.length && !errors.length) {
+      parts.push("no device changes (netlist regenerated from schematic)");
+    }
     if (result.rewired) parts.push("wires rebuilt from nets");
     if (result.warnings?.length) {
       parts.push(`${result.warnings.length} conversion note(s)`);
@@ -4000,11 +4082,7 @@ export default function App() {
     setTextEditMode(false);
     setDraftNetlist("");
     setNetlistStatusError(false);
-    setNetlistStatus(
-      extractedLib
-        ? `${parts.join(" · ")} · models → Models library`
-        : parts.join(" · "),
-    );
+    setNetlistStatus(parts.join(" · "));
   }, [nodes, edges, draftNetlist, setNodes, setEdges, pushHistory]);
 
   const handleNodesChange = useCallback(
@@ -4233,8 +4311,19 @@ export default function App() {
       })
       .filter((w): w is { a: string; b: string } => w !== null);
 
-    return { components, wires, netlist };
-  }, [nodes, edges, netlist]);
+    const lib = library.trim();
+    return {
+      components,
+      wires,
+      netlist,
+      directives: directives ? [...directives] : undefined,
+      library: lib
+        ? lib.length > 8000
+          ? `${lib.slice(0, 8000)}\n* …(truncated for assistant)`
+          : lib
+        : undefined,
+    };
+  }, [nodes, edges, netlist, directives, library]);
 
   return (
     <ProbeProvider>
@@ -4243,6 +4332,79 @@ export default function App() {
     <div className="app">
       <header className="app-header">
         <span className="app-title">SimulAI · Schematic Editor</span>
+        <div className="app-header-actions" role="group" aria-label="Project and panels">
+          <button
+            type="button"
+            className={`ghost-btn${leftCollapsed ? "" : " ghost-btn-active"}`}
+            onClick={toggleLeftPanel}
+            title={leftCollapsed ? "Show Library (parts palette)" : "Hide Library"}
+          >
+            Library
+          </button>
+          <button
+            type="button"
+            className={`ghost-btn${rightCollapsed ? "" : " ghost-btn-active"}`}
+            onClick={toggleRightPanel}
+            title={rightCollapsed ? "Show Netlist panels" : "Hide Netlist panels"}
+          >
+            Netlist
+          </button>
+          <button
+            type="button"
+            className="ghost-btn"
+            onClick={onSave}
+            title="Save project: schematic + netlist + models + results (Ctrl+S)"
+          >
+            Save
+          </button>
+          <button
+            type="button"
+            className="ghost-btn"
+            onClick={() => setProjectsOpen(true)}
+            title="Projects — save/open one unit: schematic, netlist, models, results"
+          >
+            Projects
+          </button>
+          <button type="button" className="ghost-btn" onClick={onLoadClick} title="Open circuit or project JSON (Ctrl+O)">
+            Open
+          </button>
+          <button
+            type="button"
+            className="ghost-btn"
+            onClick={onClearSchematic}
+            title="Clear parts and wires on this tab (undoable)"
+          >
+            Clear
+          </button>
+          <button
+            type="button"
+            className="ghost-btn"
+            onClick={onRestoreStarter}
+            title="Reload the starter schematic"
+          >
+            Restore starter
+          </button>
+          <div className="theme-toggle" role="group" aria-label="Color theme">
+            <button
+              type="button"
+              className={`theme-toggle-btn${uiTheme === "light" ? " is-active" : ""}`}
+              aria-pressed={uiTheme === "light"}
+              title="Light theme"
+              onClick={() => setUiTheme("light")}
+            >
+              Light
+            </button>
+            <button
+              type="button"
+              className={`theme-toggle-btn${uiTheme === "dark" ? " is-active" : ""}`}
+              aria-pressed={uiTheme === "dark"}
+              title="Dark theme"
+              onClick={() => setUiTheme("dark")}
+            >
+              Dark
+            </button>
+          </div>
+        </div>
       </header>
 
       <div
@@ -4410,17 +4572,17 @@ export default function App() {
             <button
               type="button"
               className="panel-rail-btn"
-              title="Show parts library"
+              title="Show Library (parts palette)"
               onClick={toggleLeftPanel}
             >
-              Parts
+              Library
             </button>
           ) : (
             <>
               <button
                 type="button"
                 className="panel-collapse-btn panel-collapse-btn-left"
-                title="Hide parts library (more canvas)"
+                title="Hide Library (more canvas)"
                 onClick={toggleLeftPanel}
               >
                 ⟨
@@ -4461,82 +4623,6 @@ export default function App() {
             onRedo={redo}
             canUndo={histTick >= 0 && history.current.canUndo()}
             canRedo={histTick >= 0 && history.current.canRedo()}
-            trailingActions={
-              <>
-                <button
-                  type="button"
-                  className={`ghost-btn${leftCollapsed ? "" : " ghost-btn-active"}`}
-                  onClick={toggleLeftPanel}
-                  title={leftCollapsed ? "Show parts library" : "Hide parts library"}
-                >
-                  {leftCollapsed ? "Parts" : "Hide parts"}
-                </button>
-                <button
-                  type="button"
-                  className={`ghost-btn${rightCollapsed ? "" : " ghost-btn-active"}`}
-                  onClick={toggleRightPanel}
-                  title={rightCollapsed ? "Show netlist / chat" : "Hide right panels"}
-                >
-                  {rightCollapsed ? "Panels" : "Hide panels"}
-                </button>
-                <button
-                  type="button"
-                  className="ghost-btn"
-                  onClick={onSave}
-                  title="Save all tabs for everyone (Ctrl+S)"
-                >
-                  Save
-                </button>
-                <button
-                  type="button"
-                  className="ghost-btn"
-                  onClick={() => setProjectsOpen(true)}
-                  title="Open projects — load, save, or manage saved workspaces"
-                >
-                  Projects
-                </button>
-                <button type="button" className="ghost-btn" onClick={onLoadClick} title="Open circuit or project JSON (Ctrl+O)">
-                  Open
-                </button>
-                <button
-                  type="button"
-                  className="ghost-btn"
-                  onClick={onClearSchematic}
-                  title="Clear parts and wires on this tab (undoable)"
-                >
-                  Clear
-                </button>
-                <button
-                  type="button"
-                  className="ghost-btn"
-                  onClick={onRestoreStarter}
-                  title="Reload the starter schematic"
-                >
-                  Restore starter
-                </button>
-                {/* Temporarily hidden: Load H-bridge */}
-                <div className="theme-toggle" role="group" aria-label="Color theme">
-                  <button
-                    type="button"
-                    className={`theme-toggle-btn${uiTheme === "light" ? " is-active" : ""}`}
-                    aria-pressed={uiTheme === "light"}
-                    title="Light theme"
-                    onClick={() => setUiTheme("light")}
-                  >
-                    Light
-                  </button>
-                  <button
-                    type="button"
-                    className={`theme-toggle-btn${uiTheme === "dark" ? " is-active" : ""}`}
-                    aria-pressed={uiTheme === "dark"}
-                    title="Dark theme"
-                    onClick={() => setUiTheme("dark")}
-                  >
-                    Dark
-                  </button>
-                </div>
-              </>
-            }
           />
           <input
             ref={fileInputRef}
@@ -4605,10 +4691,10 @@ export default function App() {
             <button
               type="button"
               className="panel-rail-btn panel-rail-btn-right"
-              title="Show netlist and assistant"
+              title="Show Netlist panels"
               onClick={toggleRightPanel}
             >
-              Panels
+              Netlist
             </button>
           ) : (
             <div className="right-col">
@@ -4620,7 +4706,7 @@ export default function App() {
           <button
             type="button"
             className="panel-collapse-btn panel-collapse-btn-right"
-            title="Hide right panels (more canvas)"
+            title="Hide Netlist panels (more canvas)"
             onClick={toggleRightPanel}
           >
             ⟩

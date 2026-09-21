@@ -11,10 +11,7 @@ interface Message {
 }
 
 /**
- * Assistant panel.
- * Default: rule-based interpret via runAssistant (no env).
- * With VITE_ASSISTANT_API_URL: calls your backend stub / future LLM.
- *
+ * Assistant panel — simple edits via rules; complex Q&A / multi-step via LLM API.
  * Ops never hit the graph until the user confirms in AssistantProposeForm.
  */
 export function ChatPanel({
@@ -29,8 +26,8 @@ export function ChatPanel({
     {
       role: "assistant",
       text: usingApi
-        ? "Hi — ask me to add parts, change values, or connect wires. I'll show a form first for you to confirm."
-        : "Hi — try “add 10k resistor”, “set R1 value 4.7k”, or “connect R1 to C1”. Confirm changes in the form before they apply.",
+        ? "Ask circuit questions, design advice, or multi-step edits — I’ll propose changes for you to confirm. Short commands like “set R1 value 4.7k” also work."
+        : "Try “add 10k resistor”, “set R1 value 4.7k”, or “connect R1 to C1”. For complex questions, start the assistant server (see server/README).",
     },
   ]);
   const [input, setInput] = useState("");
@@ -48,6 +45,11 @@ export function ChatPanel({
     abortRef.current = ac;
 
     setInput("");
+    const prior = messages
+      .filter((m) => m.text && !m.text.startsWith("Hi —") && !m.text.startsWith("Ask circuit"))
+      .slice(-8)
+      .map((m) => ({ role: m.role, text: m.text }));
+
     setMessages((m) => [...m, { role: "user", text }]);
     setBusy(true);
     setPendingOps(null);
@@ -55,7 +57,10 @@ export function ChatPanel({
 
     try {
       const ctx = getContext();
-      const { ops, reply } = await runAssistant(text, ctx, { signal: ac.signal });
+      const { ops, reply } = await runAssistant(text, ctx, {
+        signal: ac.signal,
+        history: prior,
+      });
       if (ac.signal.aborted) return;
       setMessages((m) => [...m, { role: "assistant", text: reply }]);
       if (ops.length) {
@@ -91,6 +96,16 @@ export function ChatPanel({
     <div className="chat-panel">
       <div className="panel-header">
         <span>assistant</span>
+        <span
+          className="badge"
+          title={
+            usingApi
+              ? "Simple edits: rules · Questions & multi-step: LLM API"
+              : "Built-in edit rules only — start server for complex Q&A"
+          }
+        >
+          {usingApi ? "rules + LLM" : "rules"}
+        </span>
       </div>
 
       <div className="chat-log">
@@ -121,7 +136,7 @@ export function ChatPanel({
           className="chat-input"
           value={input}
           disabled={busy}
-          placeholder="e.g. add 10k resistor"
+          placeholder='e.g. Why is Vout ringing?  or  add 10k resistor'
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && void send()}
         />

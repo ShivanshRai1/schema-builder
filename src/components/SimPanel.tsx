@@ -725,7 +725,7 @@ export function SimPanel({
       };
     },
   ) => void;
-  /** Rename active tab + Save schematic/netlist/last Run for this condition. */
+  /** Rename active tab + Save schematic/netlist/models/last Run for this condition. */
   onSaveLoadDumpCondition?: (title: string) => void | Promise<void>;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -817,14 +817,16 @@ export function SimPanel({
     }, 0);
   };
 
-  const [conditionId, setConditionId] = useState("");
+  const [partNumberId, setPartNumberId] = useState("");
 
-  const applyConditionPreset = (id: string) => {
-    setConditionId(id);
+  /** Apply a PN table row: diode model + UA/Us/Ri/td (+ recommended pulse). */
+  const applyPartNumberPreset = (id: string) => {
+    setPartNumberId(id);
     if (!id || !onLoadDumpConditionsChange) return;
     const preset = findLoadDumpPreset(id);
     if (!preset) return;
     wcApplyingRef.current = true;
+    // Keep pulse/shape from the table row’s recommended profile; numbers come from the row.
     const next = { ...preset.conditions, pulse: preset.pulse };
     setWc(next);
     wcRef.current = next;
@@ -840,6 +842,7 @@ export function SimPanel({
     }, 0);
   };
 
+  /** Change pulse equation only — does not clear the selected part number. */
   const applyPulse = (pulse: LoadDumpPulseId) => {
     if (!onLoadDumpConditionsChange) return;
     const next = { ...wcRef.current, pulse: normalizePulseId(pulse) };
@@ -854,7 +857,7 @@ export function SimPanel({
 
   const saveCondition = () => {
     if (!onSaveLoadDumpCondition) return;
-    const name = loadDumpConditionSaveName(conditionId, wcRef.current);
+    const name = loadDumpConditionSaveName(partNumberId, wcRef.current);
     void onSaveLoadDumpCondition(name);
   };
 
@@ -1228,34 +1231,46 @@ export function SimPanel({
 
         <div
           className="sim-wc-card"
-          title="Load-dump working conditions — edits update schematic + netlist"
+          title="Part number sets D1/D2 model + UA/Us/Ri/td. Pulse sets the waveform equation. Editing numbers keeps both."
         >
           <div className="sim-wc-card-head">
             <span className="sim-wc-card-title">Conditions</span>
           </div>
           <div className="sim-wc-fields">
-            <label className="sim-wc-field sim-wc-preset" title="ISO 16750-2 Test A condition table">
-              <span className="sim-wc-lab">Condition</span>
+            <label
+              className="sim-wc-field sim-wc-preset"
+              title="Part number → diode model (XFD→D1, SM→D2) and fills UA/Us/Ri/td for that row"
+            >
+              <span className="sim-wc-lab">Part number</span>
               <select
                 className="sim-wc-select"
-                value={conditionId}
+                value={partNumberId}
                 disabled={busy || !onLoadDumpConditionsChange}
-                aria-label="Load-dump condition preset"
-                onChange={(e) => applyConditionPreset(e.target.value)}
+                aria-label="TVS / clamp part number"
+                onChange={(e) => applyPartNumberPreset(e.target.value)}
               >
-                <option value="">Custom</option>
-                {LOAD_DUMP_PRESETS.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.label}
-                  </option>
-                ))}
+                <option value="">—</option>
+                <optgroup label="D2 · SM…">
+                  {LOAD_DUMP_PRESETS.filter((p) => p.diodeSlot === "D2").map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.label}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="D1 · XFD…">
+                  {LOAD_DUMP_PRESETS.filter((p) => p.diodeSlot === "D1").map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.label}
+                    </option>
+                  ))}
+                </optgroup>
               </select>
             </label>
             <label
               className="sim-wc-field sim-wc-pulse"
               title={
                 LOAD_DUMP_PULSES.find((p) => p.id === normalizePulseId(wc.pulse))?.tip ??
-                "Test pulse profile"
+                "Test pulse profile (equation/shape). Changing UA/Us/Ri does not make this Custom."
               }
             >
               <span className="sim-wc-lab">Pulse</span>
@@ -1263,7 +1278,7 @@ export function SimPanel({
                 className="sim-wc-select sim-wc-select-pulse"
                 value={normalizePulseId(wc.pulse)}
                 disabled={busy || !onLoadDumpConditionsChange}
-                aria-label="Load-dump test pulse"
+                aria-label="Load-dump test pulse profile"
                 onChange={(e) => applyPulse(e.target.value as LoadDumpPulseId)}
               >
                 {LOAD_DUMP_PULSES.map((p) => (
@@ -1280,13 +1295,13 @@ export function SimPanel({
                   "Us",
                   "V",
                   normalizePulseId(wc.pulse) === "ISO7637_5A"
-                    ? "Us = amplitude above UA (ISO 7637-5a)"
-                    : "Us = absolute peak Uspk (ISO 16750-2 A)",
+                    ? "Us = amplitude above UA (ISO 7637-5a). Editing keeps the same pulse profile."
+                    : "Us = absolute peak Uspk (ISO 16750-2 A). Editing keeps the same pulse profile.",
                 ],
-                ["uaSupply", "Ua", "V", "Supply UA"],
-                ["ri", "Ri", "Ω", "Source resistance"],
-                ["trMs", "tr", "ms", "Rise time"],
-                ["tdMs", "td", "ms", "Decay td"],
+                ["uaSupply", "Ua", "V", "Supply UA — editing keeps Part number and Pulse"],
+                ["ri", "Ri", "Ω", "Source resistance — editing keeps Part number and Pulse"],
+                ["trMs", "tr", "ms", "Rise time — editing keeps Part number and Pulse"],
+                ["tdMs", "td", "ms", "Decay td — editing keeps Part number and Pulse"],
                 ["simStopMs", "stop", "ms", "Simulation stop time"],
               ] as const
             ).map(([key, lab, unit, tip]) => (
@@ -1301,7 +1316,7 @@ export function SimPanel({
                   disabled={busy || !onLoadDumpConditionsChange}
                   aria-label={tip}
                   onChange={(e) => {
-                    setConditionId("");
+                    // Keep Part number + Pulse: number edits are variables, not a custom shape.
                     patchWc({ [key]: e.target.value });
                   }}
                   onBlur={() => commitWc()}
@@ -1319,7 +1334,7 @@ export function SimPanel({
                 type="button"
                 className="sim-wc-save-btn"
                 disabled={busy}
-                title="Save this condition: rename the tab and store schematic, netlist, and last Run"
+                title="Save this condition as one unit: schematic + netlist + models + last Run results"
                 onClick={() => saveCondition()}
               >
                 Save condition

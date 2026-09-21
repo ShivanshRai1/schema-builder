@@ -15,29 +15,40 @@ export interface AssistantWire {
   b: string; // e.g. "C1.a"
 }
 
+export interface AssistantHistoryTurn {
+  role: "user" | "assistant";
+  text: string;
+}
+
 export interface AssistantContext {
   components: AssistantComponent[];
   wires?: AssistantWire[];
   netlist: string;
+  /** Analysis / WC markers (.tran, *.wc, …). */
+  directives?: string[];
+  /** Truncated Models library text (.subckt / .model). */
+  library?: string;
 }
 
 export interface AssistantRequest {
   message: string;
   context: AssistantContext;
+  /** Recent chat turns for follow-up questions (oldest → newest, excludes current). */
+  history?: AssistantHistoryTurn[];
 }
 
 export interface AssistantResponse {
   ops: Op[];
   reply: string;
   /** Where the reply came from (for UI badge / debugging). */
-  source?: "rules" | "api" | "stub";
+  source?: "rules" | "api" | "stub" | "llm" | "llm+rules";
 }
 
 /** LLM tool / JSON schema description — mirror this on the server. */
 export const OP_TOOL_SCHEMA = {
   name: "circuit_ops",
   description:
-    "Edit the schematic via structured operations. Never rewrite raw netlist text.",
+    "Edit the schematic via structured operations, or answer questions with ops=[]. Never rewrite raw netlist text.",
   parameters: {
     type: "object",
     properties: {
@@ -96,7 +107,11 @@ export const OP_TOOL_SCHEMA = {
           ],
         },
       },
-      reply: { type: "string", description: "Short user-facing confirmation" },
+      reply: {
+        type: "string",
+        description:
+          "User-facing answer. For questions, write a clear explanation. For edits, confirm what ops will do.",
+      },
     },
     required: ["ops", "reply"],
   },

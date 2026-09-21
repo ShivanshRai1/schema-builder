@@ -96,10 +96,27 @@ export function spicePinOrder(kind: ComponentKind): string[] {
   }
 }
 
+/**
+ * Join SPICE `+` continuation lines onto the previous logical line.
+ * Needed so Apply round-trips multi-line PWL / .model / long stimuli.
+ */
+export function foldSpiceContinuations(text: string): string {
+  const out: string[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const t = raw.trim();
+    if (t.startsWith("+") && out.length > 0) {
+      out[out.length - 1] = `${out[out.length - 1]}${t.replace(/^\+\s*/, " ")}`;
+    } else {
+      out.push(raw);
+    }
+  }
+  return out.join("\n");
+}
+
 /** Index first-token refdes → remaining tokens (nets + params). */
 export function indexDeviceLines(text: string): Map<string, string[]> {
   const map = new Map<string, string[]>();
-  for (const raw of text.split(/\r?\n/)) {
+  for (const raw of foldSpiceContinuations(text).split(/\r?\n/)) {
     const line = raw.replace(/;.*$/, "").trim();
     if (!line || line.startsWith("*") || line.startsWith(".")) continue;
     const tokens = sanitizeDeviceTokens(line.split(/\s+/));
@@ -130,7 +147,7 @@ function sanitizeDeviceTokens(tokens: string[]): string[] {
 export function parseDeviceLines(text: string): ParsedDevice[] {
   const out: ParsedDevice[] = [];
   let inSubckt = false;
-  for (const raw of text.split(/\r?\n/)) {
+  for (const raw of foldSpiceContinuations(text).split(/\r?\n/)) {
     const line = raw.replace(/;.*$/, "").trim();
     if (!line || line.startsWith("*")) continue;
     // Library blocks belong in Models — never invent schematic parts from them.
@@ -143,7 +160,7 @@ export function parseDeviceLines(text: string): ParsedDevice[] {
       continue;
     }
     if (inSubckt) continue;
-    if (line.startsWith(".") || line.startsWith("+")) continue;
+    if (line.startsWith(".")) continue;
     const tokens = sanitizeDeviceTokens(line.split(/\s+/));
     if (tokens.length < 2) continue;
     const [refdes, ...rest] = tokens;
@@ -369,14 +386,18 @@ export function extractParamsFromRest(
 }
 
 /**
- * `.model` / `.tran` / `.options` etc. — not `.save` / `.end` / inside `.subckt`.
- * Empty array means "caller should keep previous directives".
+ * `.tran` / `.options` / `.param` / `*.wc` etc. — not `.save` / `.end` / `.model`
+ * / inside `.subckt`. `.model` is parked in Models via extractSubcktLibraryText
+ * so Apply → regenerate does not duplicate them in the directives section.
+ *
+ * Empty array: caller decides whether to keep previous (partial paste) or
+ * commit a cleared directive set (full deck Apply).
  * Duplicate analyses (two `.tran`) are collapsed — last one wins (QSPICE fatal otherwise).
  */
 export function extractDirectives(text: string): string[] {
   const raw: string[] = [];
   let inSubckt = false;
-  for (const line of text.split(/\r?\n/).map((l) => l.trim())) {
+  for (const line of foldSpiceContinuations(text).split(/\r?\n/).map((l) => l.trim())) {
     if (!line) continue;
     // Keep load-dump working-conditions marker (bidirectional with Sim panel).
     if (line.startsWith("*")) {
@@ -396,19 +417,118 @@ export function extractDirectives(text: string): string[] {
     if (/^\.save\b/i.test(line) || /^\.end\b/i.test(line)) continue;
     // .include/.lib need files on the sim host; Models panel inlines .sub text instead.
     if (/^\.(include|inc|lib)\b/i.test(line)) continue;
-    // .model / .param / .meas / .options / analyses stay; analyses deduped below
+    // .model lives in Models library (section after directives), not here.
+    if (/^\.model\b/i.test(line)) continue;
+    // .param / .meas / .options / analyses stay; analyses deduped below
     raw.push(line);
   }
   return dedupeAnalysisDirectives(raw);
 }
 
 /**
+ * True when the text looks like a full deck (not a devices-only snippet).
+ * Full-deck Apply must commit directives — including clearing ones the user deleted —
+ * otherwise regenerate looks like Apply "undid" the edit.
+ */
+export function looksLikeFullNetlistDeck(text: string): boolean {
+  if (/\.end\b/im.test(text)) return true;
+  if (/\*\s*---\s*directives/i.test(text)) return true;
+  const hasDevice = parseDeviceLines(text).length > 0;
+  const hasDir =
+    extractDirectives(text).length > 0 ||
+    /^\s*\*\s*\.wc\b/im.test(text) ||
+    /^\s*\.model\b/im.test(text) ||
+    /^\s*\.subckt\b/im.test(text);
+  return hasDevice && hasDir;
+}
+
+type LibraryBlock = { name: string; kind: "model" | "subckt"; text: string };
+
+function parseLibraryBlocks(text: string): LibraryBlock[] {
+  const lines = foldSpiceContinuations(text).split(/\r?\n/);
+  const blocks: LibraryBlock[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const t = lines[i]!.trim();
+    const sub = /^\.subckt\s+(\S+)/i.exec(t);
+    if (sub) {
+      const start = i;
+      while (i < lines.length && !/^\.ends\b/i.test(lines[i]!.trim())) i++;
+      if (i < lines.length) i++; // include .ends
+      blocks.push({
+        name: sub[1]!,
+        kind: "subckt",
+        text: lines.slice(start, i).join("\n").trimEnd(),
+      });
+      continue;
+    }
+    const mod = /^\.model\s+(\S+)/i.exec(t);
+    if (mod) {
+      blocks.push({ name: mod[1]!, kind: "model", text: lines[i]!.trimEnd() });
+      i++;
+      continue;
+    }
+    i++;
+  }
+  return blocks;
+}
+
+/**
+ * Upsert `.model` / `.subckt` from an Apply extract into the Models library.
+ * Same-name definitions are replaced so edits stick (no silent keep-old).
+ */
+export function upsertSpiceLibrary(prev: string, extracted: string): string {
+  const incoming = parseLibraryBlocks(extracted);
+  if (!incoming.length) return prev;
+
+  const replace = new Map(
+    incoming.map((b) => [`${b.kind}:${b.name.toLowerCase()}`, b] as const),
+  );
+
+  const lines = foldSpiceContinuations(prev).split(/\r?\n/);
+  const kept: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const t = lines[i]!.trim();
+    const sub = /^\.subckt\s+(\S+)/i.exec(t);
+    if (sub) {
+      const key = `subckt:${sub[1]!.toLowerCase()}`;
+      const skip = replace.has(key);
+      while (i < lines.length && !/^\.ends\b/i.test(lines[i]!.trim())) {
+        if (!skip) kept.push(lines[i]!);
+        i++;
+      }
+      if (i < lines.length) {
+        if (!skip) kept.push(lines[i]!);
+        i++;
+      }
+      // Drop a blank line that only separated the removed block
+      if (skip && kept.length && kept[kept.length - 1]!.trim() === "") kept.pop();
+      continue;
+    }
+    const mod = /^\.model\s+(\S+)/i.exec(t);
+    if (mod && replace.has(`model:${mod[1]!.toLowerCase()}`)) {
+      i++;
+      if (kept.length && kept[kept.length - 1]!.trim() === "") kept.pop();
+      continue;
+    }
+    kept.push(lines[i]!);
+    i++;
+  }
+
+  const body = kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  const add = incoming.map((b) => b.text).join("\n\n");
+  if (!body) return `${add}\n`;
+  return `${body}\n\n${add}\n`;
+}
+
+/**
  * Pull `.subckt`…`.ends` blocks (plus top-level `.model` lines) out of pasted
  * netlist text so Apply can park them in the Models library (D2SPICE needs them
- * inlined — extractDirectives previously dropped them).
+ * inlined in the regenerated deck).
  */
 export function extractSubcktLibraryText(text: string): string {
-  const lines = text.split(/\r?\n/);
+  const lines = foldSpiceContinuations(text).split(/\r?\n/);
   const out: string[] = [];
   let inSubckt = false;
 

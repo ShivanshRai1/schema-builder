@@ -2,6 +2,10 @@ import type { Edge, Node } from "@xyflow/react";
 import type { ComponentData } from "../model/types";
 import type { CircuitSnapshot } from "../history/circuitHistory";
 import { COMPONENT_SPECS } from "../model/componentSpecs";
+import {
+  normalizeNetlistSectionOrder,
+  type NetlistSectionId,
+} from "../netlist/netlistSectionOrder";
 
 const FORMAT = "simulai-schematic" as const;
 const VERSION = 1;
@@ -14,6 +18,16 @@ export interface CircuitFile {
   edges: Edge[];
   directives?: string[];
   library?: string;
+  sectionOrder?: NetlistSectionId[];
+}
+
+function parseSectionOrder(raw: unknown): NetlistSectionId[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const ids = raw.filter(
+    (x): x is NetlistSectionId =>
+      x === "devices" || x === "directives" || x === "library",
+  );
+  return ids.length ? normalizeNetlistSectionOrder(ids) : undefined;
 }
 
 export function toCircuitFile(snap: CircuitSnapshot): CircuitFile {
@@ -25,6 +39,9 @@ export function toCircuitFile(snap: CircuitSnapshot): CircuitFile {
     edges: snap.edges,
     directives: snap.directives,
     library: snap.library || undefined,
+    sectionOrder: snap.sectionOrder
+      ? normalizeNetlistSectionOrder(snap.sectionOrder)
+      : undefined,
   };
 }
 
@@ -46,6 +63,7 @@ export function parseCircuitFile(raw: unknown): CircuitSnapshot {
     edges: f.edges as Edge[],
     directives: f.directives,
     library: f.library ?? "",
+    sectionOrder: parseSectionOrder(f.sectionOrder),
   };
 }
 

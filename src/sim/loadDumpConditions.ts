@@ -21,12 +21,12 @@ export const LOAD_DUMP_PULSES: readonly {
   {
     id: "ISO16750_A",
     label: "ISO 16750-2 A",
-    tip: "Us = absolute peak (Uspk). Shape matches ISO16750_TESTA.",
+    tip: "Us = absolute peak (Uspk). Shape = ISO16750_TESTA. Editing UA/Us/Ri keeps this profile (not Custom).",
   },
   {
     id: "ISO7637_5A",
     label: "ISO 7637-5a",
-    tip: "Us = amplitude above UA (peak = UA+Us). Shape matches ISO7637_5A.",
+    tip: "Us = amplitude above UA (peak = UA+Us). Shape = ISO7637_5A. Editing numbers keeps this profile.",
   },
 ];
 

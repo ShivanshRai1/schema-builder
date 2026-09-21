@@ -53,7 +53,7 @@ export function NetlistPanel({
               type="button"
               className={`ghost-btn${modelsOpen ? " ghost-btn-active" : ""}`}
               onClick={onToggleModels}
-              title="Show or hide Models (.sub / .lib) panel"
+              title="Show or hide Models (.sub / .lib) — stored in this project with schematic, netlist, and results"
             >
               {modelsOpen ? "Hide models" : "Models"}
             </button>
@@ -72,7 +72,7 @@ export function NetlistPanel({
               type="button"
               className="ghost-btn"
               onClick={onStartEdit}
-              title="Edit netlist text; Apply syncs params, add/delete, and wiring by refdes"
+              title="Edit netlist text; rearrange devices / directives / models in any order. Apply syncs params, add/delete, wiring, and remembers section order"
             >
               edit as text
             </button>

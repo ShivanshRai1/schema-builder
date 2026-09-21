@@ -18,6 +18,11 @@ export default defineConfig({
         target: "http://127.0.0.1:8080",
         changeOrigin: true,
       },
+      // Assistant backend (cd server && npm start) — complex chat / multi-step edits.
+      "/api/assistant": {
+        target: "http://127.0.0.1:8787",
+        changeOrigin: true,
+      },
     },
   },
 });

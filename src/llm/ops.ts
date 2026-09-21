@@ -136,7 +136,7 @@ export function interpret(input: string): InterpretResult {
   return {
     ops: [],
     reply:
-      'Try: "add resistor", "change the R1 value to 4.7k", "connect R1 to C1", "connect R1.b to C1.a", "disconnect R1", "remove C1".',
+      'I didn’t catch that. Try: "add 10k resistor", "set R1 value 4.7k", "connect R1 to C1", or "remove C1".',
   };
 }
 

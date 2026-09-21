@@ -1,13 +1,20 @@
 import type { Edge, Node } from "@xyflow/react";
 import type { ComponentData } from "../model/types";
+import type { NetlistSectionId } from "../netlist/netlistSectionOrder";
+import { normalizeNetlistSectionOrder } from "../netlist/netlistSectionOrder";
 
 /** Serializable circuit snapshot for undo/redo and save/load. */
 export interface CircuitSnapshot {
   nodes: Node<ComponentData>[];
   edges: Edge[];
   directives?: string[];
-  /** Raw .subckt library text prepended to the netlist. */
+  /** Raw .subckt / .model library text. */
   library: string;
+  /**
+   * Preferred netlist body order (devices / directives / library).
+   * `.end` is always last. Omitted → default devices → directives → library.
+   */
+  sectionOrder?: NetlistSectionId[];
 }
 
 export function cloneSnapshot(s: CircuitSnapshot): CircuitSnapshot {
@@ -20,6 +27,9 @@ export function cloneSnapshot(s: CircuitSnapshot): CircuitSnapshot {
     edges: s.edges.map((e) => ({ ...e })),
     directives: s.directives ? [...s.directives] : undefined,
     library: s.library,
+    sectionOrder: s.sectionOrder
+      ? normalizeNetlistSectionOrder(s.sectionOrder)
+      : undefined,
   };
 }
 

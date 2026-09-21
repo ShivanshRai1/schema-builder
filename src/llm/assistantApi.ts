@@ -1,10 +1,26 @@
-import type { AssistantContext, AssistantRequest, AssistantResponse } from "./assistantTypes";
+import type {
+  AssistantContext,
+  AssistantHistoryTurn,
+  AssistantRequest,
+  AssistantResponse,
+} from "./assistantTypes";
 import { validateOps } from "./validateOps";
 
-/** Default path when VITE_ASSISTANT_API_URL is unset. */
+const DEFAULT_DEV_ASSISTANT = "/api/assistant";
+
+/** Assistant backend URL. Env wins; in the browser, fall back to Vite-proxied /api/assistant. */
 export function assistantApiUrl(): string | null {
-  const u = (import.meta.env.VITE_ASSISTANT_API_URL as string | undefined)?.trim();
-  return u || null;
+  try {
+    const env = (import.meta as ImportMeta & { env?: Record<string, string | boolean | undefined> })
+      .env;
+    const u = typeof env?.VITE_ASSISTANT_API_URL === "string" ? env.VITE_ASSISTANT_API_URL.trim() : "";
+    if (u) return u;
+    // Local Vite proxies this to the assistant server (complex Q&A / multi-step).
+    if (typeof window !== "undefined") return DEFAULT_DEV_ASSISTANT;
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -16,8 +32,13 @@ export async function callAssistantApi(
   message: string,
   context: AssistantContext,
   signal?: AbortSignal,
+  history?: AssistantHistoryTurn[],
 ): Promise<AssistantResponse> {
-  const body: AssistantRequest = { message, context };
+  const body: AssistantRequest = {
+    message,
+    context,
+    ...(history?.length ? { history } : {}),
+  };
 
   const res = await fetch(url, {
     method: "POST",

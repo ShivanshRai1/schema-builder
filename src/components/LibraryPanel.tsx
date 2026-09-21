@@ -54,7 +54,7 @@ export function LibraryPanel({
         names.push(f.name);
       }
       onChange(next.endsWith("\n") ? next : next + "\n");
-      setStatus(`Added ${names.join(", ")} — included in Run netlist automatically`);
+      setStatus(`Added ${names.join(", ")} — kept in project Models; included on Run`);
     },
     [library, onChange],
   );
@@ -64,11 +64,11 @@ export function LibraryPanel({
       <div className="panel-header">
         <span>.subckt library</span>
         <div className="panel-header-right">
-          <span className="badge">models for Run</span>
+          <span className="badge">in project</span>
           <button
             type="button"
             className="ghost-btn library-browse-btn"
-            title="Browse for .sub / .lib model files"
+            title="Browse for .sub / .lib model files (stored in this project)"
             onClick={() => inputRef.current?.click()}
           >
             Browse…
@@ -77,7 +77,7 @@ export function LibraryPanel({
             <button
               type="button"
               className="ghost-btn library-browse-btn"
-              title="Clear all attached models"
+              title="Clear all attached models from this project"
               onClick={() => {
                 onChange("");
                 setStatus("Library cleared");
@@ -125,12 +125,13 @@ export function LibraryPanel({
         <div className="library-drop-hint">
           Drop <code>.sub</code> / <code>.lib</code> files here, or use <strong>Browse…</strong>
           {" — "}
-          no need to paste by hand. Models are sent with every Run.
+          models stay in this project (saved with schematic + netlist + results) and are inlined on
+          every Run.
         </div>
         <textarea
           className="library-textarea"
           spellCheck={false}
-          placeholder={"Vendor models appear here after you add files."}
+          placeholder={"Vendor .subckt / .model text lives here — part of the project, not a separate Drive."}
           value={library}
           onChange={(e) => onChange(e.target.value)}
         />

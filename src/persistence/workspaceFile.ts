@@ -3,12 +3,16 @@ import type { ComponentData } from "../model/types";
 import { COMPONENT_SPECS } from "../model/componentSpecs";
 import type { CircuitSnapshot } from "../history/circuitHistory";
 import { parseCircuitFile, type CircuitFile } from "./circuitFile";
+import {
+  normalizeNetlistSectionOrder,
+  type NetlistSectionId,
+} from "../netlist/netlistSectionOrder";
 
 /** Multi-tab workspace — also the future cloud/login project payload. */
 export const WORKSPACE_FORMAT = "simulai-workspace" as const;
 export const WORKSPACE_VERSION = 1;
 
-/** Optional last Run result kept with a tab (Save condition). */
+/** Optional last Run result kept with a tab (four-piece save: schematic + netlist + models + results). */
 export type WorkspaceTabSimSeries = {
   name: string;
   x: number[];
@@ -32,6 +36,8 @@ export type WorkspaceTabFile = {
   edges: Edge[];
   directives?: string[];
   library?: string;
+  /** Preferred netlist body section order (devices / directives / library). */
+  sectionOrder?: NetlistSectionId[];
   hiddenCrossingKeys?: string[];
   nextId?: number;
   /** Last successful/failed Run waveforms for this tab (optional). */
@@ -92,6 +98,14 @@ export function parseWorkspaceFile(raw: unknown): WorkspaceFile {
       edges: t.edges,
       directives: t.directives,
       library: t.library ?? "",
+      sectionOrder: Array.isArray(t.sectionOrder)
+        ? normalizeNetlistSectionOrder(
+            t.sectionOrder.filter(
+              (x): x is NetlistSectionId =>
+                x === "devices" || x === "directives" || x === "library",
+            ),
+          )
+        : undefined,
       hiddenCrossingKeys: t.hiddenCrossingKeys ?? [],
       nextId: t.nextId,
       lastSim: sanitizeLastSim((t as WorkspaceTabFile).lastSim),
@@ -156,6 +170,7 @@ export function parseProjectPayload(raw: unknown): WorkspaceFile {
         edges: snap.edges,
         directives: snap.directives,
         library: snap.library,
+        sectionOrder: snap.sectionOrder,
         hiddenCrossingKeys: [],
       },
     ],
@@ -180,6 +195,9 @@ export function tabFromSnapshot(
     edges: snap.edges,
     directives: snap.directives,
     library: snap.library || undefined,
+    sectionOrder: snap.sectionOrder
+      ? normalizeNetlistSectionOrder(snap.sectionOrder)
+      : undefined,
     hiddenCrossingKeys: extra?.hiddenCrossingKeys ?? [],
     nextId: extra?.nextId,
     lastSim: extra?.lastSim,

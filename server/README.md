@@ -30,13 +30,13 @@ Listens on `http://localhost:8787`.
 
 ## Point the frontend at it
 
-In the **app root** `.env`:
+In the **app root** `.env` (optional — Vite already proxies `/api/assistant` in dev):
 
 ```
 VITE_ASSISTANT_API_URL=http://localhost:8787/api/assistant
 ```
 
-Restart `npm run dev`. Chat will call this API.
+Restart `npm run dev`. Chat will call this API for **questions, analysis, and multi-step edits**. Short commands (`set R1 value 4.7k`) still work offline via built-in rules.
 
 **Unset** that env var to go back to the built-in rule assistant (no server needed).
 

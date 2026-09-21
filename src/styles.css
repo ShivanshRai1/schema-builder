@@ -154,11 +154,26 @@ body { background: var(--bg); color: var(--text); }
 .app { display: flex; flex-direction: column; height: 100vh; }
 
 .app-header {
-  display: flex; align-items: baseline; gap: 12px;
-  padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  flex-wrap: wrap;
 }
-.app-title { font-weight: 650; letter-spacing: 0.2px; }
+.app-title { font-weight: 650; letter-spacing: 0.2px; flex-shrink: 0; }
 .app-sub { color: var(--muted); font-size: 12.5px; }
+.app-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.app-header-actions .ghost-btn {
+  font-size: 12px;
+  padding: 4px 8px;
+}
 
 /* Mode instructions — full width under header, high contrast for new users */
 .mode-guide {
