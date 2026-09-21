@@ -108,9 +108,11 @@ const once = rotateChain(nodes0, edges0, 1);
 const jt = once.nodes.find((n) => n.id === "jt")!;
 const jtPin = pinWorldPoint(jt, "t")!;
 const rPin1 = pinWorldPoint(once.nodes.find((n) => n.id === "r")!, "a")!;
-if (Math.abs(jtPin.x - rPin1.x) > 20) {
+// Junction stays on the bus (fixed tap) — do not slide under the pin (that
+// rewrote free-wire meshes when dragging parts).
+if (Math.abs(jtPin.x - jx) > 1 || Math.abs(jtPin.y - busY) > 1) {
   throw new Error(
-    `after 90° rotate junction must follow R pin column (tip.x=${jtPin.x}, pin.x=${rPin1.x})`,
+    `after 90° rotate junction must stay on bus (tip.x=${jtPin.x}, pin.x=${rPin1.x})`,
   );
 }
 
@@ -149,6 +151,6 @@ if (findWireJunctions(rapid.nodes, rapid.edges).crossings.length) {
 }
 
 console.log("PASS pin-tip routes toward bus below top pin");
-console.log("PASS junction follows R after 90° rotate");
+console.log("PASS junction stays on bus after 90° rotate");
 console.log("PASS no upward zombie stub above R");
 console.log("PASS V-R-C bus layout stays clean on rapid rotate");

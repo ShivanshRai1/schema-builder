@@ -128,8 +128,8 @@ if (!stubPlan?.dropStubTipIds.includes("tip") || !stubPlan.dropStubEdgeIds.inclu
   throw new Error("short free TIP stub must be dropped at move start");
 }
 
-// T-junction on a horizontal tip↔tip bus: moving R must slide the junction
-// tip along the rail — not leave a stranded stub at the old X.
+// T-junction on a horizontal tip↔tip bus: moving R keeps the junction tip
+// fixed (free-wire rails must not be rewritten). Branch rubber-bands as an L.
 const busY = 207;
 const tipX = 326;
 const busNodes: Node<ComponentData>[] = [
@@ -158,18 +158,10 @@ if (busBefore.netOf("tl", "t") !== busAfter.netOf("tr", "t")) {
 const jt = busFinal.nodes.find((n) => n.id === "jt");
 if (!jt) throw new Error("junction tip should remain after move");
 const jtPin = pinWorldPoint(jt, "t")!;
-const r2Pin = pinWorldPoint(busFinal.nodes.find((n) => n.id === "r2")!, "b")!;
-// Tip projects onto the rail near the pin's outward stub (right pin → +x).
-if (Math.abs(jtPin.x - r2Pin.x) > 24) {
+if (Math.abs(jtPin.x - tipX) > 1 || Math.abs(jtPin.y - busY) > 1) {
   throw new Error(
-    `junction tip must slide near moved pin (tip.x=${jtPin.x}, pin.x=${r2Pin.x})`,
+    `junction tip must stay fixed on the bus (tip=${jtPin.x},${jtPin.y})`,
   );
-}
-if (Math.abs(jtPin.x - tipX) < 8) {
-  throw new Error("junction tip must leave the old bus X when the part moves");
-}
-if (Math.abs(jtPin.y - busY) > 1) {
-  throw new Error("junction tip must stay on the bus Y");
 }
 const jtDeg = busFinal.edges.filter(
   (e) => e.source === jt.id || e.target === jt.id,
@@ -194,4 +186,4 @@ if (stubOnR.length) {
 console.log("PASS connected part move only redraws attached wires");
 console.log("PASS autoroute after move approaches moved pin cleanly");
 console.log("PASS short free tip stubs are dropped at move start");
-console.log("PASS T-junction tip slides under moved pin (no stranded bus stub)");
+console.log("PASS T-junction tip stays fixed (free-wire rails preserved)");

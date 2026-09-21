@@ -1832,7 +1832,7 @@ function dropShortFreeStubsOnParts(
 /**
  * After a part lands, rebuild attached wires and clean the graph:
  * - pin↔pin: one clean elbow into the moved pin
- * - pin↔junction: slide the T along the bus under the moved pin (keep rail axis)
+ * - pin↔junction: leave the rail tap fixed; branch rubber-bands as an L
  * - pin↔free TIP: align tip onto the pin row/column
  * - free tips that land on rails merge into real junctions
  * - short free stubs on moved parts are removed
@@ -1857,65 +1857,6 @@ export type FinalizeConnectedPartMoveOpts = {
 };
 
 /**
- * Project a moved pin onto the junction tip's existing rail so the T slides
- * along the bus instead of leaving a long L stub at the old tap.
- */
-function slideJunctionTipAlongRail(
-  nodes: Node<ComponentData>[],
-  edges: Edge[],
-  tipId: string,
-  branchEdgeId: string,
-  tipPt: Point,
-  pinPt: Point,
-): Point | null {
-  const tipNeighborPts: Point[] = [];
-  const otherNeighborPts: Point[] = [];
-  for (const e of edges) {
-    if (e.id === branchEdgeId) continue;
-    if (e.source !== tipId && e.target !== tipId) continue;
-    const otherId = e.source === tipId ? e.target : e.source;
-    const otherHandle = e.source === tipId ? e.targetHandle : e.sourceHandle;
-    const other = nodes.find((n) => n.id === otherId);
-    if (!other || !otherHandle) continue;
-    const pt = pinWorldPoint(other, otherHandle);
-    if (!pt) continue;
-    // Tip↔tip neighbors define the bus. Part pins on the same tip are other
-    // branches and may sit off-axis (e.g. C tap slightly above the rail).
-    if (other.data.kind === "TIP") tipNeighborPts.push(pt);
-    else otherNeighborPts.push(pt);
-  }
-  const neighborPts =
-    tipNeighborPts.length > 0 ? tipNeighborPts : otherNeighborPts;
-  if (!neighborPts.length) {
-    return { x: pinPt.x, y: tipPt.y };
-  }
-
-  const horiz = neighborPts.every((p) => Math.abs(p.y - tipPt.y) <= 8);
-  const vert = neighborPts.every((p) => Math.abs(p.x - tipPt.x) <= 8);
-
-  if (horiz && !vert) {
-    const xs = [tipPt.x, ...neighborPts.map((p) => p.x)];
-    const lo = Math.min(...xs);
-    const hi = Math.max(...xs);
-    const x = Math.max(lo, Math.min(hi, pinPt.x));
-    return { x, y: tipPt.y };
-  }
-  if (vert && !horiz) {
-    const ys = [tipPt.y, ...neighborPts.map((p) => p.y)];
-    const lo = Math.min(...ys);
-    const hi = Math.max(...ys);
-    const y = Math.max(lo, Math.min(hi, pinPt.y));
-    return { x: tipPt.x, y };
-  }
-
-  // Ambiguous / bent rail: prefer the axis that keeps the tip on the bus.
-  const dx = Math.abs(pinPt.x - tipPt.x);
-  const dy = Math.abs(pinPt.y - tipPt.y);
-  if (dx >= dy) return { x: pinPt.x, y: tipPt.y };
-  return { x: tipPt.x, y: pinPt.y };
-}
-
-/**
  * Full post-move cleanup for any circuit: autoroute + tip slides + attach + prune.
  */
 export function finalizeConnectedPartMove(
@@ -1934,8 +1875,9 @@ export function finalizeConnectedPartMove(
     deg.set(e.target, (deg.get(e.target) ?? 0) + 1);
   }
 
-  // Absolute waypoints go stale after rotate/move. Clear every edge that
-  // touches a moved part or a shared junction tip on that part before routing.
+  // Absolute waypoints go stale after rotate/move. Clear only edges that
+  // touch the moved part — never wipe tip↔tip free-wire rails that merely
+  // share a junction tip (that flattened meshes into hop grids on Drag).
   const junctionTipIds = new Set<string>();
   const clearWaypointIds = new Set<string>();
   for (const e of edges) {
@@ -1950,11 +1892,6 @@ export function finalizeConnectedPartMove(
     const other = byId.get(otherId);
     if (other?.data.kind === "TIP" && (deg.get(otherId) ?? 0) >= 2) {
       junctionTipIds.add(otherId);
-    }
-  }
-  for (const e of edges) {
-    if (junctionTipIds.has(e.source) || junctionTipIds.has(e.target)) {
-      clearWaypointIds.add(e.id);
     }
   }
   const workEdges =
@@ -1995,26 +1932,9 @@ export function finalizeConnectedPartMove(
         if (part.data.kind === "WIRELABEL") {
           return edge;
         }
-        // Slide the T along the bus under the moved pin (keep rail axis).
-        // Fixed-tap L left long stranded stubs when dragging along a tip↔tip rail.
-        const tipPt = pinWorldPoint(tip, "t");
-        const pinHandle =
-          src.data.kind === "TIP" ? edge.targetHandle : edge.sourceHandle;
-        const pinPt = pinHandle ? pinWorldPoint(part, pinHandle) : null;
-        if (tipPt && pinPt) {
-          const slid = slideJunctionTipAlongRail(
-            nodes,
-            workEdges,
-            tip.id,
-            edge.id,
-            tipPt,
-            pinPt,
-          );
-          if (slid && !pointsEqual(slid, tipPt)) {
-            const p = tipNodePositionFromPin(slid);
-            tipMoves.push({ id: tip.id, x: p.x, y: p.y });
-          }
-        }
+        // Keep the junction where it is. Sliding T tips + clearing shared rails
+        // turned free-wire drawings into hop grids when dragging a part (L1).
+        // Branch rubber-bands as an L from the fixed tap.
         touchedTipIds.add(tip.id);
         return {
           ...edge,
@@ -2062,11 +1982,14 @@ export function finalizeConnectedPartMove(
 
   let nextNodes = applyTipMoves(nodes, tipMoves);
 
-  // Rail halves attached to a slid junction tip: drop absolute waypoints so
-  // they re-anchor to the tip's new position without leftover elbows.
-  if (touchedTipIds.size) {
+  // Only when a tip actually moved: drop absolute waypoints on its edges so
+  // they re-anchor. Do not wipe free-wire rails for a fixed junction tap.
+  const movedTipIds = new Set(
+    tipMoves.map((m) => m.id).filter((id) => touchedTipIds.has(id)),
+  );
+  if (movedTipIds.size) {
     nextEdges = nextEdges.map((edge) => {
-      if (!touchedTipIds.has(edge.source) && !touchedTipIds.has(edge.target)) {
+      if (!movedTipIds.has(edge.source) && !movedTipIds.has(edge.target)) {
         return edge;
       }
       const wps =

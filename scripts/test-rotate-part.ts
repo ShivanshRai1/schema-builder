@@ -99,10 +99,11 @@ if (before.netOf("r", "a") !== after.netOf("c", "a")) {
 
 const jt = afterNodes.find((n) => n.id === "jt")!;
 const jtPin = pinWorldPoint(jt, "t")!;
-const rPin = pinWorldPoint(afterNodes.find((n) => n.id === "r")!, "a")!;
-if (Math.abs(jtPin.x - rPin.x) > 24) {
+const tipX0 = pinWorldPoint(busNodes.find((n) => n.id === "jt")!, "t")!.x;
+const tipY0 = pinWorldPoint(busNodes.find((n) => n.id === "jt")!, "t")!.y;
+if (Math.abs(jtPin.x - tipX0) > 1 || Math.abs(jtPin.y - tipY0) > 1) {
   throw new Error(
-    `after rotate, junction tip must sit under R pin (tip.x=${jtPin.x}, pin.x=${rPin.x})`,
+    `after rotate, junction tip must stay fixed (tip.x=${jtPin.x}, was ${tipX0})`,
   );
 }
 
@@ -134,6 +135,6 @@ if (marks.crossings.length) {
 }
 
 console.log("PASS rotate keeps bus nets");
-console.log("PASS junction tip follows rotated R pin");
+console.log("PASS junction tip stays fixed after rotate");
 console.log("PASS no stale branch waypoints after rotate");
 console.log("PASS no hollow crossings after rotate");
