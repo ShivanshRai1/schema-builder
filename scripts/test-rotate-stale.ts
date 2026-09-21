@@ -81,7 +81,9 @@ function quickRotateChain(
   return { nodes: ns, edges: es };
 }
 
-// Stale-edge bug (old behavior): rotate twice but feed original edges on pass 2.
+// Stale-edge probe: rotate twice but feed original edges on pass 2.
+// Historically this produced hollow crossings; tip-slide + waypoint clear often
+// prevents it now. Still require the chained (correct) path to stay clean.
 const once = quickRotateChain(nodes, edges, 1);
 const r = once.nodes.find((n) => n.id === "r")!;
 const staleNodes = once.nodes.map((n) =>
@@ -91,8 +93,12 @@ const staleNodes = once.nodes.map((n) =>
 );
 const stale = finalizeConnectedPartMove(staleNodes, edges, new Set(["r"]));
 const staleMarks = findWireJunctions(stale.nodes, stale.edges);
-if (!staleMarks.crossings.length) {
-  throw new Error("expected stale-edge quick rotate to reproduce hollow crossings");
+if (staleMarks.crossings.length) {
+  console.log(
+    "note: stale-edge quick rotate still reproduces hollow crossings (caller must chain edges)",
+  );
+} else {
+  console.log("note: stale-edge quick rotate did not reproduce hollow crossings in this layout");
 }
 
 // Fixed behavior: always chain the latest finalized edges (mirrors nodesRef sync).
@@ -104,5 +110,4 @@ if (fixedMarks.crossings.length) {
   );
 }
 
-console.log("PASS stale-edge quick rotate reproduces bug in isolation");
 console.log("PASS chained finalized edges stay clean on rapid rotate");

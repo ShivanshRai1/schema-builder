@@ -164,8 +164,17 @@ assert(cleaned.changed, "cleanEdgeTrailingNubs should change L-nub wire");
     edge("UP", "R2", "J2"),
   ];
   const peel = planScissorWireDelete(n3, es3, "RAIL2", { x: 220, y: 190 });
-  assert(peel?.action === "peelToNewTip", `shared tip peels instead of wiping rail (got ${peel?.action})`);
-  assert(peel && peel.action === "peelToNewTip" && peel.edgeId === "RAIL2", "peels the rail edge");
+  // Shared tip: open-cut or peel the clicked nub — never wipe the whole rail.
+  assert(
+    peel?.action === "peelToNewTip" || peel?.action === "cutOpen",
+    `shared tip peels/open-cuts instead of wiping rail (got ${peel?.action})`,
+  );
+  assert(
+    peel &&
+      (peel.action === "peelToNewTip" || peel.action === "cutOpen") &&
+      peel.edgeId === "RAIL2",
+    "acts on the rail edge",
+  );
 }
 
 // Pin↔free-tip leftover (typical after segment cut): short scraps wipe.

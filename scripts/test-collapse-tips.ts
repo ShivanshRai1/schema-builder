@@ -66,11 +66,13 @@ const afterDelete = {
   edges: edges.filter((e) => e.id !== "JF"),
 };
 
+// Deg-2 splice tips are intentionally not drawn as filled junctions (need 3+
+// real wires). Esc / collapsePassThroughTips still merges them away.
 {
   const marks = findWireJunctions(afterDelete.nodes, afterDelete.edges);
   assert(
-    marks.junctions.some((p) => Math.abs(p.x - 100) < 1 && Math.abs(p.y - 100) < 1),
-    "splice tip still marked before collapse",
+    !marks.junctions.some((p) => Math.abs(p.x - 100) < 1 && Math.abs(p.y - 100) < 1),
+    "deg-2 splice tip must not show a filled junction square",
   );
 }
 
