@@ -270,9 +270,10 @@ export function findWireJunctions(
     crossings.push(edgeIds ? { ...p, edgeIds, hop } : { ...p, hop });
   };
 
-  // Shared TIP with 3+ *real* wire edges → junction mark.
-  // Short peel stubs (tip↔deg-1 free tip) must not inflate degree — they left
-  // "old" filled squares mid-rail after the branch moved.
+  // Shared TIP with 3+ wire edges → junction mark.
+  // Skip only *micro* peel nubs (≤10px tip↔free tip). Longer short branches
+  // are real T legs — excluding them (old ≤40px rule) hid filled squares on
+  // intentional short stubs (user free-wire T with no square).
   const rawDeg = new Map<string, number>();
   for (const e of edges) {
     rawDeg.set(e.source, (rawDeg.get(e.source) ?? 0) + 1);
@@ -302,7 +303,7 @@ export function findWireJunctions(
             );
           }
         }
-        if (len <= 40) continue;
+        if (len <= 10) continue;
       }
     }
     const bump = (id: string) =>

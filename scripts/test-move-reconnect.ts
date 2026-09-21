@@ -104,8 +104,9 @@ if (JSON.stringify(beforeNets) !== JSON.stringify(afterNets)) {
 
 console.log("PASS move away + back reconnects wires and restores netlist");
 
-// 3) Drop R1 back a few pixels OFF (grid-snap lands it a cell away): the part
-//    should be nudged onto the frozen tips and still reconnect both pins.
+// 3) Drop R1 back a few pixels OFF (grid-snap lands it a cell away): both pins
+//    still reconnect. The part stays at the drop (wires stretch) — yanking the
+//    symbol onto the stubs felt worse than a short L.
 const offNodes = moved.map((n) =>
   n.id === "n2" ? { ...n, position: { x: 280 + 9, y: 90 - 7 } } : n,
 );
@@ -115,8 +116,8 @@ if (recOff.reconnected !== 2) {
   process.exit(1);
 }
 const r1 = recOff.nodes.find((n) => n.id === "n2")!;
-if (r1.position.x !== 280 || r1.position.y !== 90) {
-  console.error("FAIL: R1 should be nudged back to align on the tips", r1.position);
+if (Math.abs(r1.position.x - 289) > 0.5 || Math.abs(r1.position.y - 83) > 0.5) {
+  console.error("FAIL: R1 should stay at drop position (no yank), got", r1.position);
   process.exit(1);
 }
 const afterOff = extractNets(recOff.nodes, recOff.edges);
@@ -127,7 +128,7 @@ if (
   console.error("FAIL: connections not restored after nudged move-back", recOff.edges);
   process.exit(1);
 }
-console.log("PASS off-by-a-few-pixels drop snaps onto tips and reconnects");
+console.log("PASS off-by-a-few-pixels drop reconnects without yanking the part");
 
 // 4) Connected move near a T-junction must NOT consume the junction tip.
 //    Old bug: drop C next to the junction rewired a random junction edge and
