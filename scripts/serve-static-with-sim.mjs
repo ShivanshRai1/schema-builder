@@ -1,12 +1,14 @@
 /**
- * Static file server for dist/ + reverse-proxy for /sim_api.php → local PHP.
+ * Static file server for dist/ + reverse-proxy for PHP sim APIs and the
+ * Gemini assistant (localhost only — keys stay on the droplet).
  *
  * Why: `npx serve` cannot execute PHP; SPA fallback returns index.html for
  * /sim_api.php (non-JSON). This keeps the browser on :8088 (same origin) and
- * only talks to PHP on 127.0.0.1 (not exposed publicly).
+ * only talks to PHP / assistant on 127.0.0.1 (not exposed publicly).
  *
  *   SIMULAI_DIST=/var/www/simulai-schematic/dist \
  *   SIM_PHP_PORT=8091 \
+ *   ASSISTANT_PORT=8787 \
  *   PORT=8088 \
  *   node scripts/serve-static-with-sim.mjs
  */
@@ -20,6 +22,7 @@ const DIST = path.resolve(
   process.env.SIMULAI_DIST || path.join(__dirname, "..", "dist"),
 );
 const PHP_PORT = Number(process.env.SIM_PHP_PORT || 8091);
+const ASSISTANT_PORT = Number(process.env.ASSISTANT_PORT || 8787);
 const PORT = Number(process.env.PORT || 8088);
 
 const MIME = {
@@ -52,14 +55,14 @@ function sendFile(res, filePath) {
   fs.createReadStream(filePath).pipe(res);
 }
 
-function proxyToPhp(req, res) {
-  const headers = { ...req.headers, host: `127.0.0.1:${PHP_PORT}` };
+function proxyToLocal(req, res, port, label) {
+  const headers = { ...req.headers, host: `127.0.0.1:${port}` };
   delete headers["accept-encoding"];
   const reqUrl = new URL(req.url || "/", "http://127.0.0.1");
   const p = http.request(
     {
       hostname: "127.0.0.1",
-      port: PHP_PORT,
+      port,
       path: reqUrl.pathname + reqUrl.search,
       method: req.method,
       headers,
@@ -73,11 +76,8 @@ function proxyToPhp(req, res) {
     res.writeHead(502, { "Content-Type": "application/json" });
     res.end(
       JSON.stringify({
-        error: "PHP proxy is down. Is php -S running on 127.0.0.1:" +
-          PHP_PORT +
-          "? (" +
-          e.message +
-          ")",
+        error:
+          `${label} proxy is down. Is it listening on 127.0.0.1:${port}? (${e.message})`,
       }),
     );
   });
@@ -89,7 +89,13 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url || "/", `http://${host}`);
 
   if (url.pathname === "/sim_api.php" || url.pathname === "/workspace_api.php") {
-    proxyToPhp(req, res);
+    proxyToLocal(req, res, PHP_PORT, "PHP");
+    return;
+  }
+
+  // Gemini assistant — same-origin so the built UI can POST /api/assistant
+  if (url.pathname === "/api/assistant") {
+    proxyToLocal(req, res, ASSISTANT_PORT, "Assistant");
     return;
   }
 
@@ -113,6 +119,6 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(
-    `[simulai] static ${DIST} on :${PORT}; /sim_api.php + /workspace_api.php → 127.0.0.1:${PHP_PORT}`,
+    `[simulai] static ${DIST} on :${PORT}; PHP → 127.0.0.1:${PHP_PORT}; assistant → 127.0.0.1:${ASSISTANT_PORT}`,
   );
 });

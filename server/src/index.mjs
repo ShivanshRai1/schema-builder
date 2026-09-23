@@ -13,6 +13,8 @@ import { interpretFallback, normalizeOps } from "./fallback.mjs";
 import { validateOpsPayload } from "./validate.mjs";
 
 const PORT = Number(process.env.PORT) || 8787;
+/** Bind localhost only in production so :8787 is not public. */
+const HOST = process.env.HOST || "127.0.0.1";
 const app = express();
 
 app.use(cors({ origin: true }));
@@ -62,7 +64,7 @@ app.post("/api/assistant", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`[assistant] http://localhost:${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`[assistant] http://${HOST}:${PORT}`);
   console.log(`[assistant] POST /api/assistant  (provider: ${providerStatus()})`);
 });

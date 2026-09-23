@@ -1233,9 +1233,6 @@ export function SimPanel({
           className="sim-wc-card"
           title="Part number sets D1/D2 model + UA/Us/Ri/td. Pulse sets the waveform equation. Editing numbers keeps both."
         >
-          <div className="sim-wc-card-head">
-            <span className="sim-wc-card-title">Conditions</span>
-          </div>
           <div className="sim-wc-fields">
             <label
               className="sim-wc-field sim-wc-preset"
@@ -1334,10 +1331,10 @@ export function SimPanel({
                 type="button"
                 className="sim-wc-save-btn"
                 disabled={busy}
-                title="Save this condition as one unit: schematic + netlist + models + last Run results"
+                title="Save project: schematic + netlist + models + results (names the project from this setup)"
                 onClick={() => saveCondition()}
               >
-                Save condition
+                Save project
               </button>
             )}
           </div>

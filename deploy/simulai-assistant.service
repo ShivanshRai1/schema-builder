@@ -1,0 +1,18 @@
+[Unit]
+Description=SimulAI schematic Gemini assistant API (localhost :8787)
+After=network.target
+
+[Service]
+Type=simple
+User=reactfe
+Group=reactfe
+WorkingDirectory=/home/reactfe/schema-builder-build/repo/server
+Environment=HOST=127.0.0.1
+Environment=PORT=8787
+# GEMINI_API_KEY must live in server/.env (gitignored) — loaded by loadEnv.mjs
+ExecStart=/usr/bin/node /home/reactfe/schema-builder-build/repo/server/src/index.mjs
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

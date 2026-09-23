@@ -1012,7 +1012,7 @@ export default function App() {
         activeTabTitle: clean,
         includeLastSim: true,
       });
-      setNetlistStatus("saving condition…");
+      setNetlistStatus("saving project…");
       setNetlistStatusError(false);
       try {
         const rec = saveLocalProject(ws, currentProjectId);
@@ -1025,7 +1025,7 @@ export default function App() {
       const remote = await saveSharedWorkspace(ws);
       if (remote.ok) {
         setNetlistStatus(
-          `saved condition “${remote.name}” — schematic, netlist, models, results`,
+          `saved “${remote.name}” — schematic, netlist, models, results`,
         );
         setNetlistStatusError(false);
         return;
@@ -4339,7 +4339,7 @@ export default function App() {
             onClick={toggleLeftPanel}
             title={leftCollapsed ? "Show Library (parts palette)" : "Hide Library"}
           >
-            Library
+            {leftCollapsed ? "Show Library" : "Hide Library"}
           </button>
           <button
             type="button"
@@ -4347,7 +4347,7 @@ export default function App() {
             onClick={toggleRightPanel}
             title={rightCollapsed ? "Show Netlist panels" : "Hide Netlist panels"}
           >
-            Netlist
+            {rightCollapsed ? "Show Netlist" : "Hide Netlist"}
           </button>
           <button
             type="button"
@@ -4380,9 +4380,9 @@ export default function App() {
             type="button"
             className="ghost-btn"
             onClick={onRestoreStarter}
-            title="Reload the starter schematic"
+            title="Restore the starter schematic"
           >
-            Restore starter
+            Restore
           </button>
           <div className="theme-toggle" role="group" aria-label="Color theme">
             <button

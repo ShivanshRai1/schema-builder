@@ -179,21 +179,34 @@ export function inferKindFromRefdes(
 ): ComponentKind | null {
   if (hint && COMPONENT_SPECS[hint]?.emits) return hint;
 
-  if (/^M\d+$/i.test(refdes)) return "NMOS";
-  if (/^Q\d+$/i.test(refdes)) return "NPN";
-  if (/^J\d+$/i.test(refdes)) return "NJFET";
+  const rd = refdes.trim();
+  if (/^M\d+$/i.test(rd)) return "NMOS";
+  if (/^Q\d+$/i.test(rd)) return "NPN";
+  if (/^J\d+$/i.test(rd)) return "NJFET";
 
+  // SPICE refdes is case-insensitive (c1 === C1).
+  const rdU = rd.toUpperCase();
   const candidates = Object.values(COMPONENT_SPECS)
     .filter((s) => s.emits && s.refdesPrefix)
     .sort((a, b) => b.refdesPrefix.length - a.refdesPrefix.length);
 
   for (const s of candidates) {
-    const p = s.refdesPrefix;
-    if (refdes.startsWith(p) && /^\d+$/.test(refdes.slice(p.length))) {
+    const p = s.refdesPrefix.toUpperCase();
+    if (!p) continue;
+    if (rdU.startsWith(p) && /^\d+$/.test(rdU.slice(p.length))) {
       return s.kind;
     }
   }
   return null;
+}
+
+/**
+ * SPICE X-instance of a lettered part (XD1 → D1). Plain X1 stays null —
+ * those are handled as generic Xn subckts.
+ */
+export function spiceInstanceBaseRefdes(refdes: string): string | null {
+  const m = /^X([A-Za-z]+\d+)$/i.exec(refdes.trim());
+  return m?.[1] ?? null;
 }
 
 /**
@@ -249,8 +262,10 @@ export function inferKindFromDevice(
 
   if (hint && COMPONENT_SPECS[hint]?.emits) return hint;
 
-  // Bare Xn + two nets + model → vendor subckt / TVS, not crystal (unless model is XTAL).
-  if (/^X\d+$/i.test(refdes) && rest.length >= 3) {
+  // Xn / XD1 + two nets + model → vendor subckt / TVS (not crystal unless XTAL).
+  const base = spiceInstanceBaseRefdes(refdes);
+  const isXInstance = /^X\d+$/i.test(refdes) || Boolean(base);
+  if (isXInstance && rest.length >= 3) {
     const model = rest[rest.length - 1] ?? "";
     const netCount = rest.length - 1;
     if (netCount === 2) {
@@ -266,6 +281,12 @@ export function inferKindFromDevice(
       // Unknown 2-pin X-subckt: bidirectional TVS glyph (closest 2-terminal clamp)
       return "DTVSBI";
     }
+  }
+
+  // XD1 → try D1 prefix rules when hint was missing
+  if (base) {
+    const fromBase = inferKindFromRefdes(base, hint);
+    if (fromBase) return fromBase;
   }
 
   return inferKindFromRefdes(refdes, hint);

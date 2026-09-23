@@ -7,6 +7,7 @@ import {
   isSchematicHiddenAmmeter,
   parseDeviceLines,
   splitNetsAndParams,
+  spiceInstanceBaseRefdes,
   spicePinOrder,
 } from "./parseDeviceParams";
 import { extractNets } from "./nets";
@@ -38,6 +39,52 @@ export interface ApplyNetlistResult {
 }
 
 type Endpoint = { nodeId: string; pinId: string };
+
+/** Case-insensitive + XD1↔D1 lookup for schematic nodes. */
+function findNodeBySpiceRefdes(
+  byRefdes: Map<string, Node<ComponentData>>,
+  spiceRefdes: string,
+): Node<ComponentData> | undefined {
+  const hit = byRefdes.get(spiceRefdes);
+  if (hit) return hit;
+  const want = spiceRefdes.toUpperCase();
+  for (const [k, v] of byRefdes) {
+    if (k.toUpperCase() === want) return v;
+  }
+  const base = spiceInstanceBaseRefdes(spiceRefdes);
+  if (!base) return undefined;
+  const baseU = base.toUpperCase();
+  const exact = byRefdes.get(base);
+  if (exact) return exact;
+  for (const [k, v] of byRefdes) {
+    if (k.toUpperCase() === baseU) return v;
+  }
+  return undefined;
+}
+
+/** Schematic refdes to keep: XD1 → D1 (preserve existing casing when possible). */
+function schematicRefdesForSpice(
+  spiceRefdes: string,
+  existing?: Node<ComponentData>,
+): string {
+  if (existing?.data.refdes) return existing.data.refdes;
+  return spiceInstanceBaseRefdes(spiceRefdes) ?? spiceRefdes;
+}
+
+function textCoversSchematicRefdes(
+  textRefdes: Set<string>,
+  schematicRefdes: string,
+): boolean {
+  if (textRefdes.has(schematicRefdes)) return true;
+  const u = schematicRefdes.toUpperCase();
+  if (textRefdes.has(u)) return true;
+  for (const t of textRefdes) {
+    if (t.toUpperCase() === u) return true;
+    const base = spiceInstanceBaseRefdes(t);
+    if (base && base.toUpperCase() === u) return true;
+  }
+  return false;
+}
 
 function mergeParams(
   kind: ComponentKind,
@@ -370,17 +417,26 @@ export function applyNetlistToGraph(
       recognizable++;
       continue;
     }
-    const existing = byRefdes.get(device.refdes);
+    const existing = findNodeBySpiceRefdes(byRefdes, device.refdes);
     const kind = inferKindFromDevice(device.refdes, device.rest, existing?.data.kind);
     if (!kind) continue;
     if (splitNetsAndParams(kind, device.rest)) recognizable++;
   }
 
-  const textRefdes = new Set(devices.map((d) => d.refdes));
+  const textRefdes = new Set<string>();
+  for (const d of devices) {
+    textRefdes.add(d.refdes);
+    textRefdes.add(d.refdes.toUpperCase());
+    const base = spiceInstanceBaseRefdes(d.refdes);
+    if (base) {
+      textRefdes.add(base);
+      textRefdes.add(base.toUpperCase());
+    }
+  }
   let wouldDelete = 0;
   for (const n of nodes) {
     const spec = COMPONENT_SPECS[n.data.kind];
-    if (spec.emits && n.data.refdes && !textRefdes.has(n.data.refdes)) {
+    if (spec.emits && n.data.refdes && !textCoversSchematicRefdes(textRefdes, n.data.refdes)) {
       wouldDelete++;
     }
   }
@@ -405,7 +461,7 @@ export function applyNetlistToGraph(
       deleted.push(n.data.refdes);
       continue;
     }
-    if (spec.emits && n.data.refdes && !textRefdes.has(n.data.refdes)) {
+    if (spec.emits && n.data.refdes && !textCoversSchematicRefdes(textRefdes, n.data.refdes)) {
       deleted.push(n.data.refdes);
       continue;
     }
@@ -440,7 +496,7 @@ export function applyNetlistToGraph(
   for (const device of devices) {
     if (hiddenAmmeterRefdes.has(device.refdes)) continue;
 
-    const existing = byRefdes.get(device.refdes);
+    const existing = findNodeBySpiceRefdes(byRefdes, device.refdes);
     const kind = inferKindFromDevice(device.refdes, device.rest, existing?.data.kind);
     if (!kind) {
       skippedUnknown.push(device.refdes);
@@ -454,7 +510,8 @@ export function applyNetlistToGraph(
     }
 
     const nets = split.nets.map(resolveNet);
-    deviceNets.set(device.refdes, { kind, nets });
+    const schematicRefdes = schematicRefdesForSpice(device.refdes, existing);
+    deviceNets.set(schematicRefdes, { kind, nets });
 
     if (existing) {
       const { params, changed } = mergeParams(
@@ -464,7 +521,7 @@ export function applyNetlistToGraph(
       );
       const kindChanged = existing.data.kind !== kind;
       if (changed || kindChanged) {
-        updated.push(device.refdes);
+        updated.push(schematicRefdes);
         working = working.map((n) =>
           n.id === existing.id
             ? {
@@ -472,6 +529,7 @@ export function applyNetlistToGraph(
                 data: {
                   ...n.data,
                   kind,
+                  refdes: schematicRefdes,
                   params: kindChanged
                     ? { ...defaultParams(kind), ...extractParamsFromRest(kind, split.paramTokens) }
                     : params,
@@ -481,7 +539,7 @@ export function applyNetlistToGraph(
               }
             : n,
         );
-        byRefdes.set(device.refdes, working.find((n) => n.id === existing.id)!);
+        byRefdes.set(schematicRefdes, working.find((n) => n.id === existing.id)!);
       }
     } else {
       const params = {
@@ -497,15 +555,15 @@ export function applyNetlistToGraph(
         },
         data: {
           kind,
-          refdes: device.refdes,
+          refdes: schematicRefdes,
           params,
           unplaced: true,
         },
       };
       addSlot++;
       working = [...working, node];
-      byRefdes.set(device.refdes, node);
-      added.push(device.refdes);
+      byRefdes.set(schematicRefdes, node);
+      added.push(schematicRefdes);
     }
   }
 

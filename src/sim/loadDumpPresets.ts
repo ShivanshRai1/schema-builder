@@ -104,7 +104,7 @@ export function findLoadDumpPreset(id: string): LoadDumpPreset | undefined {
   return LOAD_DUMP_PRESETS.find((p) => p.id === id);
 }
 
-/** Suggested tab / project name for Save condition. */
+/** Suggested tab / project name when saving from the sim toolbar. */
 export function loadDumpConditionSaveName(
   partNumberId: string,
   c: LoadDumpConditions,

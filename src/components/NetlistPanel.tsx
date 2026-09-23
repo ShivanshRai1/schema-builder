@@ -107,7 +107,8 @@ export function NetlistPanel({
           options={{
             readOnly: !editing,
             minimap: { enabled: false },
-            fontSize: 13,
+            fontSize: 18,
+            fontWeight: "700",
             lineNumbers: "on",
             scrollBeyondLastLine: false,
             wordWrap: "on",
