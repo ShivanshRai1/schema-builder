@@ -27,6 +27,8 @@ export interface SimResult {
   message: string;
   series: SimSeries[];
   engine?: SimEngine;
+  /** Pre-Run sanitize warnings (e.g. missing .model) — still may have plotted. */
+  warnings?: string[];
   /** True when waveforms were restored from a saved condition (not this Run). */
   fromSavedCondition?: boolean;
   /** Working-condition line for the saved-result banner. */
@@ -532,7 +534,8 @@ export async function runSimulation(
   const engine = opts.engine ?? "D2SPICE";
   const cleaned = sanitizeNetlistForAccuracy(netlist);
   const job = await runFleetJob(cleaned.netlist, opts);
-  const hint = [...cleaned.notes, ...cleaned.warnings].filter(Boolean).join(" · ");
+  const warn = cleaned.warnings.filter(Boolean);
+  const hint = [...cleaned.notes, ...warn].filter(Boolean).join(" · ");
   if (!job.ok) {
     return {
       ok: false,
@@ -540,6 +543,7 @@ export async function runSimulation(
       message: hint ? `${job.error} · ${hint}` : job.error,
       series: [],
       engine,
+      warnings: warn.length ? warn : undefined,
     };
   }
   const series = formatSeriesForChart(normalizeSeries(job.data), cleaned.netlist);
@@ -552,14 +556,18 @@ export async function runSimulation(
         : "Simulation returned no waveform data",
       series: [],
       engine,
+      warnings: warn.length ? warn : undefined,
     };
   }
   return {
     ok: true,
     source: "fleet",
-    message: "Simulation complete",
+    message: warn.length
+      ? `Simulation complete — WARNING: ${warn.join(" · ")}`
+      : "Simulation complete",
     series,
     engine,
+    warnings: warn.length ? warn : undefined,
   };
 }
 

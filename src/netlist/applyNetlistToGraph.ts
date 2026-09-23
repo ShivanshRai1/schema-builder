@@ -5,6 +5,7 @@ import {
   extractParamsFromRest,
   inferKindFromDevice,
   isSchematicHiddenAmmeter,
+  netTokenCount,
   parseDeviceLines,
   splitNetsAndParams,
   spiceInstanceBaseRefdes,
@@ -27,6 +28,8 @@ export interface ApplyNetlistResult {
   rewired: boolean;
   /** Device lines we could not map to a known kind. */
   skippedUnknown: string[];
+  /** Known kind but too few tokens (nets / value / model missing). */
+  skippedIncomplete?: string[];
   /**
    * When set, Apply must not change the graph (foreign format / unsafe wipe).
    * nodes/edges are the inputs unchanged.
@@ -382,6 +385,7 @@ export function applyNetlistToGraph(
   const added: string[] = [];
   const deleted: string[] = [];
   const skippedUnknown: string[] = [];
+  const skippedIncomplete: string[] = [];
 
   /** Named 0 V ammeters (Vsense…) — keep in SPICE text, omit from schematic. */
   const hiddenAmmeterRefdes = new Set<string>();
@@ -505,7 +509,10 @@ export function applyNetlistToGraph(
 
     const split = splitNetsAndParams(kind, device.rest);
     if (!split) {
-      skippedUnknown.push(device.refdes);
+      const need = netTokenCount(kind);
+      skippedIncomplete.push(
+        `${device.refdes} (need ${need} net name(s) + value/model; got ${device.rest.length} token(s))`,
+      );
       continue;
     }
 
@@ -624,6 +631,7 @@ export function applyNetlistToGraph(
       deleted,
       rewired: false,
       skippedUnknown,
+      skippedIncomplete,
     };
   }
 
@@ -661,5 +669,6 @@ export function applyNetlistToGraph(
     deleted,
     rewired: true,
     skippedUnknown,
+    skippedIncomplete,
   };
 }

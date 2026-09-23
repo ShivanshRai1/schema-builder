@@ -1447,7 +1447,15 @@ export function SimPanel({
           </div>
         )}
         {result && !busy && !result.fromSavedCondition && (
-          <div className={`netlist-status${result.ok ? "" : " netlist-status-error"}`}>
+          <div
+            className={`netlist-status${
+              result.ok
+                ? result.warnings?.length
+                  ? " netlist-status-warn"
+                  : ""
+                : " netlist-status-error"
+            }`}
+          >
             {result.message}
           </div>
         )}

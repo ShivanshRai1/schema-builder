@@ -167,12 +167,86 @@ body { background: var(--bg); color: var(--text); }
 .app-header-actions {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex-wrap: wrap;
+}
+.app-header-btn-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
 }
 .app-header-actions .ghost-btn {
   font-size: 12px;
-  padding: 4px 8px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  padding: 5px 11px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  line-height: 1.25;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease,
+    border-color 0.12s ease;
+}
+.app-header-actions .ghost-btn:hover {
+  background: var(--panel);
+  border-color: var(--border);
+  color: var(--text);
+}
+.app-header-actions .ghost-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.app-header-actions .ghost-btn-active {
+  background: var(--panel);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+  box-shadow: 0 0 0 1px var(--accent-dim);
+}
+.app-header-actions .ghost-btn-active:hover {
+  background: var(--panel);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.app-header-actions .theme-toggle {
+  margin-left: 0;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  overflow: visible;
+}
+.app-header-actions .theme-toggle-btn {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 11px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  line-height: 1.25;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+.app-header-actions .theme-toggle-btn:hover {
+  color: var(--text);
+  background: var(--panel);
+}
+.app-header-actions .theme-toggle-btn.is-active {
+  background: var(--panel);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+  box-shadow: 0 0 0 1px var(--accent-dim);
 }
 
 /* Mode instructions — full width under header, high contrast for new users */
@@ -394,6 +468,11 @@ body { background: var(--bg); color: var(--text); }
 }
 .workspace-compact .ghost-btn {
   padding: 2px 7px;
+  font-size: 11.5px;
+}
+.workspace-compact .app-header-actions .ghost-btn,
+.workspace-compact .app-header-actions .theme-toggle-btn {
+  padding: 4px 9px;
   font-size: 11.5px;
 }
 .workspace-compact .right-slot {
@@ -3434,6 +3513,10 @@ body { background: var(--bg); color: var(--text); }
 }
 .netlist-status-error {
   color: var(--danger);
+}
+.netlist-status-warn {
+  color: #b8860b;
+  font-weight: 600;
 }
 
 .editor-wrap { flex: 1; min-height: 0; }

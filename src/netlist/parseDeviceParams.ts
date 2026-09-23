@@ -162,7 +162,14 @@ export function parseDeviceLines(text: string): ParsedDevice[] {
     if (inSubckt) continue;
     if (line.startsWith(".")) continue;
     const tokens = sanitizeDeviceTokens(line.split(/\s+/));
-    if (tokens.length < 2) continue;
+    if (tokens.length < 2) {
+      // Lone refdes (e.g. "R1") — Apply can report incomplete + avoid deleting that part.
+      const alone = tokens[0];
+      if (alone && /^[A-Za-z][A-Za-z0-9]*\d[A-Za-z0-9]*$/i.test(alone)) {
+        out.push({ refdes: alone, rest: [] });
+      }
+      continue;
+    }
     const [refdes, ...rest] = tokens;
     out.push({ refdes, rest });
   }

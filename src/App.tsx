@@ -4007,7 +4007,15 @@ export default function App() {
     }
 
     pushHistory();
-    setNodes(result.nodes);
+    // A2: select newly added unplaced parts so they're easy to find and drag.
+    setNodes(
+      result.nodes.map((n) => {
+        const isNewUnplaced =
+          Boolean(n.data.unplaced) &&
+          result.added.some((r) => r.toUpperCase() === n.data.refdes.toUpperCase());
+        return isNewUnplaced ? { ...n, selected: true } : n;
+      }),
+    );
     setEdges(result.edges);
     syncIdCounter(result.nodes, idCounter);
 
@@ -4043,31 +4051,64 @@ export default function App() {
     }
 
     const errors: string[] = [];
-    if (result.skippedUnknown.length) {
+    if (result.skippedIncomplete?.length) {
       errors.push(
-        `unknown or incomplete device(s): ${result.skippedUnknown.join(", ")} — no matching symbol`,
+        `skipped incomplete line(s): ${result.skippedIncomplete.join("; ")}`,
       );
     }
+    if (result.skippedUnknown.length) {
+      errors.push(
+        `skipped unknown symbol: ${result.skippedUnknown.join(", ")}`,
+      );
+    }
+
+    const unplacedAdded = result.added.filter((ref) =>
+      result.nodes.some(
+        (n) =>
+          n.data.refdes.toUpperCase() === ref.toUpperCase() && Boolean(n.data.unplaced),
+      ),
+    );
+    const placedAdded = result.added.filter(
+      (ref) => !unplacedAdded.some((u) => u.toUpperCase() === ref.toUpperCase()),
+    );
 
     const parts: string[] = [];
     if (result.convertedFrom === "expresspcb") {
       parts.push("converted ExpressPCB (simplified)");
     }
-    if (result.updated.length) parts.push(`updated ${result.updated.join(", ")}`);
-    if (result.added.length) parts.push(`added ${result.added.join(", ")} (unplaced — drag to position)`);
-    if (result.deleted.length) parts.push(`deleted ${result.deleted.join(", ")}`);
-    if (directivesCommitted && !result.updated.length && !result.added.length && !result.deleted.length) {
+    if (result.updated.length) {
+      parts.push(`updated: ${result.updated.join(", ")}`);
+    }
+    if (placedAdded.length) {
+      parts.push(`added: ${placedAdded.join(", ")}`);
+    }
+    if (unplacedAdded.length) {
+      parts.push(
+        `added (unplaced — selected; drag onto canvas): ${unplacedAdded.join(", ")}`,
+      );
+    }
+    if (result.deleted.length) {
+      parts.push(`removed from schematic: ${result.deleted.join(", ")}`);
+    }
+    if (
+      directivesCommitted &&
+      !result.updated.length &&
+      !result.added.length &&
+      !result.deleted.length
+    ) {
+      parts.push("directives updated");
+    } else if (directivesCommitted && (result.updated.length || result.added.length || result.deleted.length)) {
       parts.push("directives updated");
     }
-    if (modelsCommitted) parts.push("models → Models library");
+    if (modelsCommitted) parts.push("models saved to Models library");
     const defaultOrder = DEFAULT_NETLIST_SECTION_ORDER.join(",");
     if (order.join(",") !== defaultOrder) {
       parts.push(`section order: ${order.join(" → ")}`);
     }
     if (!parts.length && !errors.length) {
-      parts.push("no device changes (netlist regenerated from schematic)");
+      parts.push("no device changes (schematic already matched the text)");
     }
-    if (result.rewired) parts.push("wires rebuilt from nets");
+    if (result.rewired) parts.push("wires rebuilt from net names");
     if (result.warnings?.length) {
       parts.push(`${result.warnings.length} conversion note(s)`);
     }
@@ -4075,14 +4116,16 @@ export default function App() {
     if (errors.length) {
       // Graph already updated for recognized devices; keep draft so user can fix unknowns.
       setNetlistStatusError(true);
-      setNetlistStatus(`Error: ${errors.join(" · ")}${parts.length ? ` · ${parts.join(" · ")}` : ""}`);
+      setNetlistStatus(
+        `Apply partial — ${errors.join(" · ")}${parts.length ? ` · ${parts.join(" · ")}` : ""}. Fix skipped lines, then Apply again.`,
+      );
       return;
     }
 
     setTextEditMode(false);
     setDraftNetlist("");
     setNetlistStatusError(false);
-    setNetlistStatus(parts.join(" · "));
+    setNetlistStatus(`Apply OK — ${parts.join(" · ")}`);
   }, [nodes, edges, draftNetlist, setNodes, setEdges, pushHistory]);
 
   const handleNodesChange = useCallback(
@@ -4333,57 +4376,61 @@ export default function App() {
       <header className="app-header">
         <span className="app-title">SimulAI · Schematic Editor</span>
         <div className="app-header-actions" role="group" aria-label="Project and panels">
-          <button
-            type="button"
-            className={`ghost-btn${leftCollapsed ? "" : " ghost-btn-active"}`}
-            onClick={toggleLeftPanel}
-            title={leftCollapsed ? "Show Library (parts palette)" : "Hide Library"}
-          >
-            {leftCollapsed ? "Show Library" : "Hide Library"}
-          </button>
-          <button
-            type="button"
-            className={`ghost-btn${rightCollapsed ? "" : " ghost-btn-active"}`}
-            onClick={toggleRightPanel}
-            title={rightCollapsed ? "Show Netlist panels" : "Hide Netlist panels"}
-          >
-            {rightCollapsed ? "Show Netlist" : "Hide Netlist"}
-          </button>
-          <button
-            type="button"
-            className="ghost-btn"
-            onClick={onSave}
-            title="Save project: schematic + netlist + models + results (Ctrl+S)"
-          >
-            Save
-          </button>
-          <button
-            type="button"
-            className="ghost-btn"
-            onClick={() => setProjectsOpen(true)}
-            title="Projects — save/open one unit: schematic, netlist, models, results"
-          >
-            Projects
-          </button>
-          <button type="button" className="ghost-btn" onClick={onLoadClick} title="Open circuit or project JSON (Ctrl+O)">
-            Open
-          </button>
-          <button
-            type="button"
-            className="ghost-btn"
-            onClick={onClearSchematic}
-            title="Clear parts and wires on this tab (undoable)"
-          >
-            Clear
-          </button>
-          <button
-            type="button"
-            className="ghost-btn"
-            onClick={onRestoreStarter}
-            title="Restore the starter schematic"
-          >
-            Restore
-          </button>
+          <div className="app-header-btn-group" role="group" aria-label="Panels">
+            <button
+              type="button"
+              className={`ghost-btn${leftCollapsed ? "" : " ghost-btn-active"}`}
+              onClick={toggleLeftPanel}
+              title={leftCollapsed ? "Show Library (parts palette)" : "Hide Library"}
+            >
+              {leftCollapsed ? "Show Library" : "Hide Library"}
+            </button>
+            <button
+              type="button"
+              className={`ghost-btn${rightCollapsed ? "" : " ghost-btn-active"}`}
+              onClick={toggleRightPanel}
+              title={rightCollapsed ? "Show Netlist panels" : "Hide Netlist panels"}
+            >
+              {rightCollapsed ? "Show Netlist" : "Hide Netlist"}
+            </button>
+          </div>
+          <div className="app-header-btn-group" role="group" aria-label="File">
+            <button
+              type="button"
+              className="ghost-btn"
+              onClick={onSave}
+              title="Save project: schematic + netlist + models + results (Ctrl+S)"
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              className="ghost-btn"
+              onClick={() => setProjectsOpen(true)}
+              title="Projects — save/open one unit: schematic, netlist, models, results"
+            >
+              Projects
+            </button>
+            <button type="button" className="ghost-btn" onClick={onLoadClick} title="Open circuit or project JSON (Ctrl+O)">
+              Open
+            </button>
+            <button
+              type="button"
+              className="ghost-btn"
+              onClick={onClearSchematic}
+              title="Clear parts and wires on this tab (undoable)"
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              className="ghost-btn"
+              onClick={onRestoreStarter}
+              title="Restore the starter schematic"
+            >
+              Restore
+            </button>
+          </div>
           <div className="theme-toggle" role="group" aria-label="Color theme">
             <button
               type="button"
