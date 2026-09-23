@@ -502,8 +502,8 @@ export function upsertSpiceLibrary(prev: string, extracted: string): string {
   const incoming = parseLibraryBlocks(extracted);
   if (!incoming.length) return prev;
 
-  const replace = new Map(
-    incoming.map((b) => [`${b.kind}:${b.name.toLowerCase()}`, b] as const),
+  const replace = new Map<string, (typeof incoming)[number]>(
+    incoming.map((b) => [`${b.kind}:${b.name.toLowerCase()}`, b]),
   );
 
   const lines = foldSpiceContinuations(prev).split(/\r?\n/);
