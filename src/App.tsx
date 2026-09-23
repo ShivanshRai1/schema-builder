@@ -4759,7 +4759,12 @@ export default function App() {
             }
           />
           <div className="right-slot" style={{ flex: `${slotFr.chat} 1 80px` }}>
-            <ChatPanel onApplyOps={applyOpsSafe} getContext={getAssistantContext} />
+            <ChatPanel
+              activeTabId={activeTabId}
+              tabTitle={tabMetas.find((t) => t.id === activeTabId)?.title}
+              onApplyOps={applyOpsSafe}
+              getContext={getAssistantContext}
+            />
           </div>
             </div>
           )}
