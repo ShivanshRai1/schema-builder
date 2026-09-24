@@ -33,7 +33,7 @@ export function ChatPanel({
   activeTabId: string;
   /** Shown so it’s clear which circuit this chat belongs to. */
   tabTitle?: string;
-  onApplyOps: (ops: Op[]) => void;
+  onApplyOps: (ops: Op[]) => number | void;
   getContext: () => AssistantContext;
 }) {
   const usingApi = Boolean(assistantApiUrl());
@@ -109,10 +109,16 @@ export function ChatPanel({
 
   function applyPending() {
     if (!pendingOps?.length) return;
-    onApplyOps(pendingOps);
+    const n = onApplyOps(pendingOps) ?? pendingOps.length;
     setMessagesForActive((m) => [
       ...m,
-      { role: "assistant", text: `Applied ${pendingOps.length} change(s) to the schematic.` },
+      {
+        role: "assistant",
+        text:
+          n > 0
+            ? `Applied ${n} change(s) to the schematic.`
+            : "Nothing applied — no matching parts on this schematic (check refdes like D1/D2).",
+      },
     ]);
     setPendingOps(null);
     setPendingContext(null);

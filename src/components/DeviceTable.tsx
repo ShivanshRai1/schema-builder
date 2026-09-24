@@ -12,7 +12,7 @@ export function DeviceTable({
   onApplyOps,
 }: {
   context: AssistantContext;
-  onApplyOps: (ops: Op[]) => void;
+  onApplyOps: (ops: Op[]) => number | void;
 }) {
   const rows = useMemo(
     () =>

@@ -4264,13 +4264,12 @@ export default function App() {
     setLibrary(text);
   }, []);
 
-  const applyOpsSafe = useCallback((ops: Op[]) => {
-    if (!ops.length) return;
-    pushHistory();
+  const applyOpsSafe = useCallback((ops: Op[]): number => {
+    if (!ops.length) return 0;
     // Apply the whole batch on local copies so "add then connect" sees the new part.
     let ns = nodesRef.current.slice();
     let es = edgesRef.current.slice();
-    let changed = false;
+    let applied = 0;
 
     for (const op of ops) {
       if (op.type === "addComponent") {
@@ -4285,32 +4284,31 @@ export default function App() {
           };
         }
         ns = [...ns, node];
-        changed = true;
+        applied++;
       } else if (op.type === "setParam") {
-        const want = op.refdes.toUpperCase();
-        let hit = false;
-        ns = ns.map((n) => {
-          if (n.data.refdes.toUpperCase() !== want) return n;
-          const coerced = coerceSetParam(op.key, op.value, n.data.kind);
-          if (!coerced) return n;
-          hit = true;
-          return {
-            ...n,
-            data: {
-              ...n.data,
-              params: { ...n.data.params, [coerced.key]: coerced.value },
-            },
-          };
-        });
-        if (hit) changed = true;
+        const target = findNodeByRefdes(ns, op.refdes);
+        if (!target) continue;
+        const coerced = coerceSetParam(op.key, op.value, target.data.kind);
+        if (!coerced) continue;
+        ns = ns.map((n) =>
+          n.id === target.id
+            ? {
+                ...n,
+                data: {
+                  ...n.data,
+                  params: { ...n.data.params, [coerced.key]: coerced.value },
+                },
+              }
+            : n,
+        );
+        applied++;
       } else if (op.type === "deleteComponent") {
-        const want = op.refdes.toUpperCase();
-        const target = ns.find((n) => n.data.refdes.toUpperCase() === want);
+        const target = findNodeByRefdes(ns, op.refdes);
         if (target) {
           const idSet = new Set([target.id]);
           ns = ns.filter((n) => !idSet.has(n.id));
           es = es.filter((e) => !idSet.has(e.source) && !idSet.has(e.target));
-          changed = true;
+          applied++;
         }
       } else if (op.type === "connectPins") {
         const a = findNodeByRefdes(ns, op.aRefdes);
@@ -4319,21 +4317,23 @@ export default function App() {
           const aPin = op.aPin || defaultPin(a, "from");
           const bPin = op.bPin || defaultPin(b, "to");
           es = connectEndpoints(es, a, aPin, b, bPin);
-          changed = true;
+          applied++;
         }
       } else if (op.type === "disconnectPins") {
         const a = findNodeByRefdes(ns, op.aRefdes);
         if (a) {
           const b = op.bRefdes ? findNodeByRefdes(ns, op.bRefdes) : undefined;
           es = disconnectEndpoints(es, a, op.aPin, b, op.bPin);
-          changed = true;
+          applied++;
         }
       }
     }
 
-    if (!changed) return;
+    if (!applied) return 0;
+    pushHistory();
     setNodes(ns);
     setEdges(es);
+    return applied;
   }, [pushHistory, setNodes, setEdges]);
 
   const getAssistantContext = useCallback((): AssistantContext => {

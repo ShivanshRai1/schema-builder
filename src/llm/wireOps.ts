@@ -4,7 +4,7 @@ import type { ComponentData } from "../model/types";
 import { COMPONENT_SPECS } from "../model/componentSpecs";
 import { rotatePinSpec } from "../model/rotation";
 
-/** Resolve refdes (or GND/ground/0) to a graph node. */
+/** Resolve refdes (or GND/ground/0) to a graph node. Also matches XD1 ↔ D1. */
 export function findNodeByRefdes(
   nodes: Node<ComponentData>[],
   refdes: string,
@@ -14,7 +14,18 @@ export function findNodeByRefdes(
   if (want === "GND" || want === "GROUND" || want === "0" || want === "EARTH") {
     return nodes.find((n) => n.data.kind === "GND");
   }
-  return nodes.find((n) => n.data.refdes.toUpperCase() === want);
+  const direct = nodes.find((n) => n.data.refdes.toUpperCase() === want);
+  if (direct) return direct;
+  // XD1 (netlist) ↔ D1 (schematic)
+  if (want.startsWith("X") && want.length > 1) {
+    const base = want.slice(1);
+    const byBase = nodes.find((n) => n.data.refdes.toUpperCase() === base);
+    if (byBase) return byBase;
+  }
+  return nodes.find((n) => {
+    const rd = n.data.refdes.toUpperCase();
+    return rd === `X${want}` || (rd.startsWith("X") && rd.slice(1) === want);
+  });
 }
 
 export function pinExists(node: Node<ComponentData>, pinId: string): boolean {
