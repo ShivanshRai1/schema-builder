@@ -31,6 +31,7 @@ import {
 } from "./sim/loadDumpConditions";
 import type { LoadDumpDiodeSlot } from "./sim/loadDumpPresets";
 import { ensureLoadDumpPulseLibrary } from "./sim/loadDumpPulseInc";
+import { missingModelRefs } from "./sim/sanitizeNetlist";
 import { LibraryPanel } from "./components/LibraryPanel";
 import { FloatingWindow } from "./components/FloatingWindow";
 import { COMPONENT_SPECS, defaultParams, getComponentPins, isGroundKind } from "./model/componentSpecs";
@@ -80,6 +81,7 @@ import starterCircuit from "../examples/demo-circuit.json";
 import { applyTheme, readStoredTheme, type UiTheme } from "./theme";
 import type { Op } from "./llm/ops";
 import type { AssistantContext } from "./llm/assistantTypes";
+import { coerceSetParam } from "./llm/validateOps";
 import {
   connectEndpoints,
   defaultPin,
@@ -1174,6 +1176,7 @@ export default function App() {
       }),
     [nodes, edges, directives, library, sectionOrder],
   );
+  const missingModels = useMemo(() => missingModelRefs(netlist), [netlist]);
   const propsDialogNode = propsDialog
     ? nodes.find((n) => n.id === propsDialog.nodeId && n.data.kind !== "TIP") ?? null
     : null;
@@ -4285,12 +4288,21 @@ export default function App() {
         changed = true;
       } else if (op.type === "setParam") {
         const want = op.refdes.toUpperCase();
-        ns = ns.map((n) =>
-          n.data.refdes.toUpperCase() === want
-            ? { ...n, data: { ...n.data, params: { ...n.data.params, [op.key]: op.value } } }
-            : n,
-        );
-        changed = true;
+        let hit = false;
+        ns = ns.map((n) => {
+          if (n.data.refdes.toUpperCase() !== want) return n;
+          const coerced = coerceSetParam(op.key, op.value, n.data.kind);
+          if (!coerced) return n;
+          hit = true;
+          return {
+            ...n,
+            data: {
+              ...n.data,
+              params: { ...n.data.params, [coerced.key]: coerced.value },
+            },
+          };
+        });
+        if (hit) changed = true;
       } else if (op.type === "deleteComponent") {
         const want = op.refdes.toUpperCase();
         const target = ns.find((n) => n.data.refdes.toUpperCase() === want);
@@ -4790,6 +4802,7 @@ export default function App() {
                 <LibraryPanel
                   library={library}
                   onChange={onLibraryChange}
+                  missingModels={missingModels}
                   analysisHint={
                     (directives ?? []).find((d) => /^\.tran\b/i.test(d)) ??
                     ".tran 1u 1m (default)"

@@ -24,7 +24,7 @@ function summarize(op: Op): string {
     case "addComponent":
       return `Add ${COMPONENT_SPECS[op.kind]?.label ?? op.kind}${op.params?.value ? ` (${op.params.value})` : ""}`;
     case "setParam":
-      return `Set ${op.refdes} ${op.key}`;
+      return `Set ${op.refdes} ${op.key} = ${op.value}`;
     case "deleteComponent":
       return `Remove ${op.refdes}`;
     case "connectPins":

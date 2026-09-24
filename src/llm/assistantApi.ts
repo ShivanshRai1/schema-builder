@@ -4,6 +4,7 @@ import type {
   AssistantRequest,
   AssistantResponse,
 } from "./assistantTypes";
+import type { ComponentKind } from "../model/types";
 import { validateOps } from "./validateOps";
 
 const DEFAULT_DEV_ASSISTANT = "/api/assistant";
@@ -61,7 +62,12 @@ export async function callAssistantApi(
 
   const d = data as Record<string, unknown>;
   const reply = String(d.reply ?? "").trim() || "Done.";
-  const ops = validateOps(d.ops);
+  const kindByRefdes: Record<string, ComponentKind> = {};
+  for (const c of context.components ?? []) {
+    const rd = String(c.refdes ?? "").trim().toUpperCase();
+    if (rd && c.kind) kindByRefdes[rd] = c.kind;
+  }
+  const ops = validateOps(d.ops, { kindByRefdes });
 
   return {
     ops,

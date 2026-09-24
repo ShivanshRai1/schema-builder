@@ -15,13 +15,120 @@ function optPin(s: unknown): string | undefined {
   return p || undefined;
 }
 
+/** Alias cleanup for setParam keys (B1/B3). */
+export function normalizeSetParamKey(raw: string): string {
+  let key = String(raw ?? "").trim().toLowerCase().replace(/[^a-z_]/g, "");
+  if (
+    key === "resistance" ||
+    key === "capacitance" ||
+    key === "inductance" ||
+    key === "val" ||
+    key === "param" ||
+    key === "parameter"
+  ) {
+    key = "value";
+  }
+  if (
+    key === "part" ||
+    key === "pn" ||
+    key === "subckt" ||
+    key === "subcircuit" ||
+    key === "type" ||
+    key === "spicemodel"
+  ) {
+    key = "model";
+  }
+  return key;
+}
+
+/** Editable attribute keys for a kind (from COMPONENT_SPECS). */
+export function allowedParamKeysForKind(kind: ComponentKind): Set<string> {
+  const spec = COMPONENT_SPECS[kind];
+  if (!spec) return new Set();
+  return new Set(spec.attributes.map((a) => a.key));
+}
+
+/** True for engineering values like 4.7k / 100n / 2 — not model names. */
+export function looksLikeSpiceValue(value: string): boolean {
+  return /^[+\-]?\d/.test(String(value ?? "").trim());
+}
+
+/**
+ * Letter-led identifiers (SM8S36A, XFD11K54CA, DZEN, FooBar).
+ * Used to rewrite mistaken setParam key "value" → "model".
+ */
+export function looksLikeModelName(value: string): boolean {
+  const t = String(value ?? "").trim();
+  if (!t || t.length > 80) return false;
+  if (looksLikeSpiceValue(t)) return false;
+  return /^[A-Za-z_][A-Za-z0-9_.-]*$/.test(t);
+}
+
+/**
+ * Coerce / drop a setParam so diodes get `model` and passives get `value`.
+ * When `kind` is known, unknown keys for that kind are dropped.
+ */
+export function coerceSetParam(
+  keyRaw: string,
+  valueRaw: string,
+  kind?: ComponentKind | null,
+): { key: string; value: string } | null {
+  let key = normalizeSetParamKey(keyRaw);
+  const value = String(valueRaw ?? "").trim();
+  if (!key || !value) return null;
+
+  // LLM often sends key:"value" for a part/model name on diodes/TVS.
+  if (key === "value" && looksLikeModelName(value)) {
+    key = "model";
+  }
+  // Rare inverse: model key with a numeric string on a value-only part.
+  if (key === "model" && looksLikeSpiceValue(value)) {
+    key = "value";
+  }
+
+  if (kind && COMPONENT_SPECS[kind]) {
+    const allowed = allowedParamKeysForKind(kind);
+    if (!allowed.size) return null;
+    if (!allowed.has(key)) {
+      if (key === "value" && allowed.has("model") && looksLikeModelName(value)) {
+        key = "model";
+      } else if (key === "model" && allowed.has("value") && looksLikeSpiceValue(value)) {
+        key = "value";
+      } else {
+        return null;
+      }
+    }
+  }
+
+  return { key, value };
+}
+
+function filterParamsForKind(
+  kind: ComponentKind,
+  params: Record<string, string>,
+): Record<string, string> | undefined {
+  const allowed = allowedParamKeysForKind(kind);
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(params)) {
+    const coerced = coerceSetParam(k, v, kind);
+    if (coerced && allowed.has(coerced.key)) out[coerced.key] = coerced.value;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+export interface ValidateOpsOptions {
+  /** Optional refdes → kind map from the live schematic (stricter B3). */
+  kindByRefdes?: Record<string, ComponentKind>;
+}
+
 /**
  * Validate ops from the assistant API / LLM before applying to the graph.
  * Drops anything malformed so a bad model response cannot break the app.
  */
-export function validateOps(raw: unknown): Op[] {
+export function validateOps(raw: unknown, opts?: ValidateOpsOptions): Op[] {
   if (!Array.isArray(raw)) return [];
   const out: Op[] = [];
+  const kindByRefdes = opts?.kindByRefdes ?? {};
 
   for (const item of raw) {
     if (!item || typeof item !== "object") continue;
@@ -34,15 +141,15 @@ export function validateOps(raw: unknown): Op[] {
       const paramsRaw = o.params;
       let params: Record<string, string> | undefined;
       if (paramsRaw && typeof paramsRaw === "object" && !Array.isArray(paramsRaw)) {
-        params = {};
+        const draft: Record<string, string> = {};
         for (const [k, v] of Object.entries(paramsRaw as Record<string, unknown>)) {
           const key = String(k).trim();
           const value = String(v ?? "").trim();
-          if (key && value) params[key] = value;
+          if (key && value) draft[key] = value;
         }
-        if (!Object.keys(params).length) params = undefined;
+        params = filterParamsForKind(kind, draft);
       } else if (o.value != null && String(o.value).trim()) {
-        params = { value: String(o.value).trim() };
+        params = filterParamsForKind(kind, { value: String(o.value).trim() });
       }
       out.push(params ? { type: "addComponent", kind, params } : { type: "addComponent", kind });
       continue;
@@ -50,10 +157,13 @@ export function validateOps(raw: unknown): Op[] {
 
     if (type === "setParam") {
       const refdes = normRef(o.refdes);
-      let key = String(o.key ?? "").trim().toLowerCase();
-      if (key === "resistance" || key === "capacitance" || key === "inductance") key = "value";
       const value = String(o.value ?? "").trim();
-      if (refdes && key) out.push({ type: "setParam", refdes, key, value });
+      const kind =
+        kindByRefdes[refdes] ?? kindByRefdes[refdes.toUpperCase()] ?? null;
+      const coerced = coerceSetParam(String(o.key ?? ""), value, kind);
+      if (refdes && coerced) {
+        out.push({ type: "setParam", refdes, key: coerced.key, value: coerced.value });
+      }
       continue;
     }
 

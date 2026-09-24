@@ -84,7 +84,8 @@ const KEY_ALIASES: Record<string, string> = {
   voltage: "value", volts: "value", volt: "value",
   current: "value", amps: "value", amp: "value", amperes: "value",
   r: "value", c: "value", l: "value",
-  model: "model", type: "model",
+  model: "model", type: "model", part: "model", pn: "model",
+  subckt: "model", subcircuit: "model", spicemodel: "model",
   name: "name", label: "name",
   ic: "ic",
 };
@@ -92,7 +93,9 @@ const KEY_ALIASES: Record<string, string> = {
 const ADD_VERBS = "add|insert|place|create|put|include|drop|spawn|introduce|append|new";
 const SET_VERBS = "set|change|update|modify|edit|adjust|make|alter|revise|tune|replace|switch|assign|configure|fix";
 const DEL_VERBS = "delete|remove|erase|drop|clear|discard|destroy|kill|omit|exclude|uninstall|take\\s+out|get\\s+rid\\s+of";
-const VALUE_WORDS = "value|val|param(?:eter)?|resistance|capacitance|inductance|ohms?|farads?|henr(?:y|ies)|voltage|current|amps?|volts?|model|name|ic";
+const VALUE_WORDS =
+  "value|val|param(?:eter)?|resistance|capacitance|inductance|ohms?|farads?|henr(?:y|ies)|voltage|current|amps?|volts?|model|part|pn|subckt|subcircuit|name|ic";
+const MODEL_WORDS = "model|part|pn|subckt|subcircuit";
 
 /** Strip polite / filler prefixes so patterns can anchor at the verb. */
 function normalizeUtterance(raw: string): string {
@@ -136,7 +139,7 @@ export function interpret(input: string): InterpretResult {
   return {
     ops: [],
     reply:
-      'I didn’t catch that. Try: "add 10k resistor", "set R1 value 4.7k", "connect R1 to C1", or "remove C1".',
+      'I didn’t catch that. Try: "add 10k resistor", "set R1 value 4.7k", "set D1 model Foo", "connect R1 to C1", or "remove C1".',
   };
 }
 
@@ -274,6 +277,10 @@ function matchAdd(text: string): InterpretResult | null {
 }
 
 function matchSet(text: string): InterpretResult | null {
+  // "set D1 model to SM8S36A" / "set D1 to model Foo" / "use model Foo for D1"
+  const modelFirst = matchSetModel(text);
+  if (modelFirst) return modelFirst;
+
   // "set R1 value 4.7k" / "set R1 value to 4.7k" / "set R1 model Foo"
   const strict = text.match(
     new RegExp(`^(?:${SET_VERBS})\\s+([A-Za-z]+\\d+)\\s+(${VALUE_WORDS})\\s+(?:to\\s+|as\\s+|==?\\s*)?(.+)$`, "i"),
@@ -301,8 +308,11 @@ function matchSet(text: string): InterpretResult | null {
       `^(?:${SET_VERBS})\\s+(?:the\\s+)?(${VALUE_WORDS})\\s+(?:of\\s+|for\\s+|on\\s+)?([A-Za-z]+\\d+)\\s+(?:to\\s+|as\\s+|==?\\s*)(.+)$`,
       "i",
     ),
-    // give R1 a value of 4.7k / give R1 value 4.7k
-    /^(?:give|assign)\s+([A-Za-z]+\d+)\s+(?:a\s+)?(?:value|resistance|capacitance|inductance)\s+(?:of\s+)?(.+)$/i,
+    // give R1 a value of 4.7k / give R1 model Foo
+    new RegExp(
+      `^(?:give|assign)\\s+([A-Za-z]+\\d+)\\s+(?:a\\s+)?(?:${VALUE_WORDS})\\s+(?:of\\s+|to\\s+|as\\s+)?(.+)$`,
+      "i",
+    ),
     // change R1 to 4.7k / set R1 = 4.7k / make C1 2.2n
     new RegExp(`^(?:${SET_VERBS})\\s+([A-Za-z]+\\d+)\\s+(?:(?:to|as|=|==)\\s*)?(.+)$`, "i"),
     // R1 = 4.7k / R1 value = 4.7k / R1 to 4.7k
@@ -347,8 +357,49 @@ function matchSet(text: string): InterpretResult | null {
   return null;
 }
 
+/** Explicit model / part / subckt phrases (before value catch-alls). */
+function matchSetModel(text: string): InterpretResult | null {
+  const patterns: RegExp[] = [
+    // set D1 to model Foo / change D2 model to Bar
+    new RegExp(
+      `^(?:${SET_VERBS})\\s+([A-Za-z]+\\d+)\\s+(?:to\\s+)?(?:${MODEL_WORDS})\\s+(?:to\\s+|as\\s+|==?\\s*)?(.+)$`,
+      "i",
+    ),
+    // set model of D1 to Foo / change the model for D2 to Bar
+    new RegExp(
+      `^(?:${SET_VERBS})\\s+(?:the\\s+)?(?:${MODEL_WORDS})\\s+(?:of\\s+|for\\s+|on\\s+)?([A-Za-z]+\\d+)\\s+(?:to\\s+|as\\s+|==?\\s*)(.+)$`,
+      "i",
+    ),
+    // use model Foo on D1 / use Foo for D1 model
+    new RegExp(
+      `^(?:use|apply)\\s+(?:(?:${MODEL_WORDS})\\s+)?([A-Za-z][A-Za-z0-9_.-]*)\\s+(?:(?:for|on|to)\\s+)([A-Za-z]+\\d+)(?:\\s+(?:${MODEL_WORDS}))?$`,
+      "i",
+    ),
+  ];
+
+  for (const re of patterns) {
+    const m = text.match(re);
+    if (!m) continue;
+    let refdes = "";
+    let value = "";
+    if (/^[A-Za-z]+\d+$/i.test(m[1]!)) {
+      refdes = m[1]!.toUpperCase();
+      value = cleanValue(m[2]);
+    } else if (/^[A-Za-z]+\d+$/i.test(m[2]!)) {
+      value = cleanValue(m[1]);
+      refdes = m[2]!.toUpperCase();
+    }
+    if (!refdes || !value || /^(a|an|the)\b/i.test(value)) continue;
+    return {
+      ops: [{ type: "setParam", refdes, key: "model", value }],
+      reply: `Ready to set ${refdes} model = ${value}.`,
+    };
+  }
+  return null;
+}
+
 function isValueWord(s: string): boolean {
-  return /^(?:value|val|param(?:eter)?|resistance|capacitance|inductance|ohms?|farads?|henr(?:y|ies)|voltage|current|amps?|volts?|model|name|ic)$/i.test(
+  return /^(?:value|val|param(?:eter)?|resistance|capacitance|inductance|ohms?|farads?|henr(?:y|ies)|voltage|current|amps?|volts?|model|part|pn|subckt|subcircuit|name|ic)$/i.test(
     String(s ?? "").trim(),
   );
 }

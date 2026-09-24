@@ -41,7 +41,12 @@ app.post("/api/assistant", async (req, res) => {
     }
 
     const raw = await handleAssistant(message, context, history);
-    let ops = validateOpsPayload(normalizeOps(raw.ops));
+    const kindByRefdes = {};
+    for (const c of Array.isArray(context?.components) ? context.components : []) {
+      const rd = String(c?.refdes ?? "").trim().toUpperCase();
+      if (rd && c?.kind) kindByRefdes[rd] = String(c.kind);
+    }
+    let ops = validateOpsPayload(normalizeOps(raw.ops), { kindByRefdes });
     let reply = String(raw.reply ?? "Done.");
     let source = raw.source ?? "stub";
 
@@ -49,7 +54,7 @@ app.post("/api/assistant", async (req, res) => {
     if (ops.length === 0) {
       const fb = interpretFallback(message);
       if (fb) {
-        ops = validateOpsPayload(normalizeOps(fb.ops));
+        ops = validateOpsPayload(normalizeOps(fb.ops), { kindByRefdes });
         if (ops.length) {
           reply = fb.reply;
           source = source === "llm" ? "llm+rules" : "rules";

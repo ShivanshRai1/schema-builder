@@ -323,7 +323,7 @@ export function sanitizeNetlistForAccuracy(netlist: string): SanitizeNetlistResu
   const missing = missingModelRefs(text);
   if (missing.length) {
     warnings.push(
-      `Missing .model / .subckt: ${missing.join(", ")} — drop the PN files into Models (e.g. P_XFD11K54CA.txt, SM8S36A.txt)`,
+      `Missing .model / .subckt: ${missing.join(", ")} — add the matching files in Models`,
     );
   }
 

@@ -31,7 +31,8 @@ const KEY_ALIASES = {
   voltage: "value", volts: "value", volt: "value",
   current: "value", amps: "value", amp: "value", amperes: "value",
   r: "value", c: "value", l: "value",
-  model: "model", type: "model",
+  model: "model", type: "model", part: "model", pn: "model",
+  subckt: "model", subcircuit: "model", spicemodel: "model",
   name: "name", label: "name",
   ic: "ic",
 };
@@ -39,7 +40,9 @@ const KEY_ALIASES = {
 const ADD_VERBS = "add|insert|place|create|put|include|drop|spawn|introduce|append|new";
 const SET_VERBS = "set|change|update|modify|edit|adjust|make|alter|revise|tune|replace|switch|assign|configure|fix";
 const DEL_VERBS = "delete|remove|erase|drop|clear|discard|destroy|kill|omit|exclude|uninstall|take\\s+out|get\\s+rid\\s+of";
-const VALUE_WORDS = "value|val|param(?:eter)?|resistance|capacitance|inductance|ohms?|farads?|henr(?:y|ies)|voltage|current|amps?|volts?|model|name|ic";
+const VALUE_WORDS =
+  "value|val|param(?:eter)?|resistance|capacitance|inductance|ohms?|farads?|henr(?:y|ies)|voltage|current|amps?|volts?|model|part|pn|subckt|subcircuit|name|ic";
+const MODEL_WORDS = "model|part|pn|subckt|subcircuit";
 
 function normalizeUtterance(raw) {
   return String(raw ?? "")
@@ -174,6 +177,9 @@ function matchAdd(text) {
 }
 
 function matchSet(text) {
+  const modelFirst = matchSetModel(text);
+  if (modelFirst) return modelFirst;
+
   const strict = text.match(
     new RegExp(`^(?:${SET_VERBS})\\s+([A-Za-z]+\\d+)\\s+(${VALUE_WORDS})\\s+(?:to\\s+|as\\s+|==?\\s*)?(.+)$`, "i"),
   );
@@ -198,7 +204,10 @@ function matchSet(text) {
       `^(?:${SET_VERBS})\\s+(?:the\\s+)?(${VALUE_WORDS})\\s+(?:of\\s+|for\\s+|on\\s+)?([A-Za-z]+\\d+)\\s+(?:to\\s+|as\\s+|==?\\s*)(.+)$`,
       "i",
     ),
-    /^(?:give|assign)\s+([A-Za-z]+\d+)\s+(?:a\s+)?(?:value|resistance|capacitance|inductance)\s+(?:of\s+)?(.+)$/i,
+    new RegExp(
+      `^(?:give|assign)\\s+([A-Za-z]+\\d+)\\s+(?:a\\s+)?(?:${VALUE_WORDS})\\s+(?:of\\s+|to\\s+|as\\s+)?(.+)$`,
+      "i",
+    ),
     new RegExp(`^(?:${SET_VERBS})\\s+([A-Za-z]+\\d+)\\s+(?:(?:to|as|=|==)\\s*)?(.+)$`, "i"),
     new RegExp(`^([A-Za-z]+\\d+)\\s+(?:(?:${VALUE_WORDS})\\s+)?(?:(?:to|as|=|==)\\s*)(.+)$`, "i"),
   ];
@@ -241,8 +250,45 @@ function matchSet(text) {
   return null;
 }
 
+function matchSetModel(text) {
+  const patterns = [
+    new RegExp(
+      `^(?:${SET_VERBS})\\s+([A-Za-z]+\\d+)\\s+(?:to\\s+)?(?:${MODEL_WORDS})\\s+(?:to\\s+|as\\s+|==?\\s*)?(.+)$`,
+      "i",
+    ),
+    new RegExp(
+      `^(?:${SET_VERBS})\\s+(?:the\\s+)?(?:${MODEL_WORDS})\\s+(?:of\\s+|for\\s+|on\\s+)?([A-Za-z]+\\d+)\\s+(?:to\\s+|as\\s+|==?\\s*)(.+)$`,
+      "i",
+    ),
+    new RegExp(
+      `^(?:use|apply)\\s+(?:(?:${MODEL_WORDS})\\s+)?([A-Za-z][A-Za-z0-9_.-]*)\\s+(?:(?:for|on|to)\\s+)([A-Za-z]+\\d+)(?:\\s+(?:${MODEL_WORDS}))?$`,
+      "i",
+    ),
+  ];
+
+  for (const re of patterns) {
+    const m = text.match(re);
+    if (!m) continue;
+    let refdes = "";
+    let value = "";
+    if (/^[A-Za-z]+\d+$/i.test(m[1])) {
+      refdes = m[1].toUpperCase();
+      value = cleanValue(m[2]);
+    } else if (/^[A-Za-z]+\d+$/i.test(m[2])) {
+      value = cleanValue(m[1]);
+      refdes = m[2].toUpperCase();
+    }
+    if (!refdes || !value || /^(a|an|the)\b/i.test(value)) continue;
+    return {
+      ops: [{ type: "setParam", refdes, key: "model", value }],
+      reply: `Set ${refdes} model = ${value}.`,
+    };
+  }
+  return null;
+}
+
 function isValueWord(s) {
-  return /^(?:value|val|param(?:eter)?|resistance|capacitance|inductance|ohms?|farads?|henr(?:y|ies)|voltage|current|amps?|volts?|model|name|ic)$/i.test(
+  return /^(?:value|val|param(?:eter)?|resistance|capacitance|inductance|ohms?|farads?|henr(?:y|ies)|voltage|current|amps?|volts?|model|part|pn|subckt|subcircuit|name|ic)$/i.test(
     String(s ?? "").trim(),
   );
 }

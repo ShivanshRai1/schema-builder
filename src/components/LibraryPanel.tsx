@@ -29,15 +29,19 @@ export function LibraryPanel({
   library,
   onChange,
   analysisHint,
+  missingModels,
 }: {
   library: string;
   onChange: (text: string) => void;
   /** e.g. current .tran line — shown so users know analysis persists */
   analysisHint?: string;
+  /** Model names referenced by the netlist but not defined in Models / deck. */
+  missingModels?: string[];
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  const missing = (missingModels ?? []).filter(Boolean);
 
   const ingestFiles = useCallback(
     async (files: FileList | File[]) => {
@@ -101,6 +105,14 @@ export function LibraryPanel({
         }}
       />
 
+      {missing.length > 0 && (
+        <div className="library-missing-hint" role="status">
+          Missing for Run: <strong>{missing.join(", ")}</strong>
+          {" — "}
+          Browse or drop the matching <code>.sub</code> / <code>.lib</code> / <code>.txt</code> into Models
+        </div>
+      )}
+
       <div
         className={`library-dropzone${dragOver ? " is-dragover" : ""}`}
         onDragEnter={(e) => {
@@ -123,10 +135,21 @@ export function LibraryPanel({
         }}
       >
         <div className="library-drop-hint">
-          Drop <code>.sub</code> / <code>.lib</code> files here, or use <strong>Browse…</strong>
-          {" — "}
-          models stay in this project (saved with schematic + netlist + results) and are inlined on
-          every Run.
+          {library.trim() ? (
+            <>
+              Drop <code>.sub</code> / <code>.lib</code> / <code>.txt</code> here, or{" "}
+              <strong>Browse…</strong>
+              {" — "}
+              models stay in this project and are inlined on every Run.
+            </>
+          ) : (
+            <>
+              Models is empty — drop vendor <code>.sub</code> / <code>.lib</code> / <code>.txt</code>{" "}
+              files here, or use <strong>Browse…</strong>
+              {" — "}
+              add whatever models this schematic’s netlist references.
+            </>
+          )}
         </div>
         <textarea
           className="library-textarea"

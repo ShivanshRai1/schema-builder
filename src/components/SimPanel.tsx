@@ -1436,14 +1436,14 @@ export function SimPanel({
         )}
         {result && !busy && result.fromSavedCondition && (
           <div className="netlist-status sim-saved-result-banner" role="status">
-            Result from a saved condition
+            Saved plot — not from this Run
             {(() => {
               const summary =
                 result.conditionsSummary?.trim() ||
                 formatLoadDumpConditionsSummary(wc);
-              return summary ? ` — ${summary}` : "";
+              return summary ? ` (${summary})` : "";
             })()}
-            . Not from this Run. Click Run to simulate again.
+            . Click <strong>Run</strong> to simulate the current schematic.
           </div>
         )}
         {result && !busy && !result.fromSavedCondition && (
