@@ -102,6 +102,7 @@ function normalizeUtterance(raw: string): string {
   return raw
     .trim()
     .replace(/[.!?]+$/g, "")
+    .replace(/[“”"]/g, "")
     .replace(
       /^(?:please|pls|can\s+you|could\s+you|would\s+you|hey|hi|hello|ok(?:ay)?|just|now|then|also|and|,|\s)+/gi,
       "",
@@ -143,31 +144,101 @@ export function interpret(input: string): InterpretResult {
   };
 }
 
-const REF = "([A-Za-z]+\\d+|GND|ground|earth|0)";
+const REF =
+  "([A-Za-z]+\\d+|GND|ground|earth|0|mid|middle|midpoint|junction|clamp|net\\s*mid|net\\s*\\d+|NET\\d+)";
 const PIN = "([A-Za-z][A-Za-z0-9]*)";
 const ENDPOINT = `${REF}(?:\\s*(?:\\.|\\s+pin\\s+|\\s+pin\\s*=\\s*|\\s+)\\s*${PIN})?`;
 
 function normalizeRefToken(raw: string): string {
-  const t = raw.trim().toUpperCase();
+  const t = raw.trim().toUpperCase().replace(/\s+/g, "");
   if (t === "GROUND" || t === "EARTH" || t === "0") return "GND";
+  if (/^(MID|MIDDLE|MIDPOINT|JUNCTION|CLAMP|NETMID)$/i.test(t)) return "MID";
+  if (/^(NEWC|NEWCAP|CAPACITOR|CAP)$/i.test(t)) return "NEWC";
+  const netNum = /^NET(\d+)$/i.exec(t);
+  if (netNum) return netNum[1]!;
   return t;
 }
 
 function matchConnect(text: string): InterpretResult | null {
   if (!/^(?:connect|wire|link|join|attach|rewire|reconnect)\b/i.test(text)) return null;
 
-  // connect R1.b to C1.a / wire R1 pin b to C1 pin a
+  // connect C1 from mid to ground
+  // connect the new capacitor from net mid to ground
+  const fromTo = text.match(
+    new RegExp(
+      `^(?:connect|wire|link|join|attach|rewire|reconnect)\\s+(?:(?:a|an|the|new|added)\\s+)*(?:(capacitor|cap)|${ENDPOINT})\\s+from\\s+${ENDPOINT}\\s+to\\s+${ENDPOINT}$`,
+      "i",
+    ),
+  );
+  if (fromTo) {
+    const partIsCap = Boolean(fromTo[1]);
+    // Groups: 1=cap keyword | 2–3=part ENDPOINT | 4–5=from | 6–7=to
+    let partRef: string;
+    let partPin: string | undefined;
+    let fromRef: string;
+    let fromPin: string | undefined;
+    let toRef: string;
+    let toPin: string | undefined;
+    if (partIsCap) {
+      partRef = "NEWC";
+      fromRef = normalizeRefToken(fromTo[4]!);
+      fromPin = fromTo[5]?.trim().toLowerCase();
+      toRef = normalizeRefToken(fromTo[6]!);
+      toPin = fromTo[7]?.trim().toLowerCase();
+    } else {
+      partRef = normalizeRefToken(fromTo[2]!);
+      partPin = fromTo[3]?.trim().toLowerCase();
+      fromRef = normalizeRefToken(fromTo[4]!);
+      fromPin = fromTo[5]?.trim().toLowerCase();
+      toRef = normalizeRefToken(fromTo[6]!);
+      toPin = fromTo[7]?.trim().toLowerCase();
+    }
+    const ops: Op[] = [
+      {
+        type: "connectPins",
+        aRefdes: partRef,
+        bRefdes: fromRef,
+        ...(partPin ? { aPin: partPin } : {}),
+        ...(fromPin ? { bPin: fromPin } : {}),
+      },
+      {
+        type: "connectPins",
+        aRefdes: partRef,
+        bRefdes: toRef,
+        ...(partPin ? { aPin: partPin } : {}),
+        ...(toPin ? { bPin: toPin } : {}),
+      },
+    ];
+    return {
+      ops,
+      reply: `Ready to connect ${partIsCap ? "new capacitor" : partRef} from ${fromRef} to ${toRef}.`,
+    };
+  }
+
+  // connect R1.b to C1.a / connect C1 to mid / connect capacitor to mid
   const withPins = text.match(
     new RegExp(
-      `^(?:connect|wire|link|join|attach|rewire|reconnect)\\s+${ENDPOINT}\\s+(?:to|with|and|->|→)\\s+${ENDPOINT}$`,
+      `^(?:connect|wire|link|join|attach|rewire|reconnect)\\s+(?:(?:a|an|the|new|added)\\s+)*(?:(capacitor|cap)|${ENDPOINT})\\s+(?:to|with|and|->|→)\\s+${ENDPOINT}$`,
       "i",
     ),
   );
   if (withPins) {
-    const aRefdes = normalizeRefToken(withPins[1]);
-    const aPin = withPins[2]?.trim().toLowerCase();
-    const bRefdes = normalizeRefToken(withPins[3]);
-    const bPin = withPins[4]?.trim().toLowerCase();
+    const partIsCap = Boolean(withPins[1]);
+    // Groups: 1=cap keyword | 2–3=part ENDPOINT | 4–5=target ENDPOINT
+    let aRefdes: string;
+    let aPin: string | undefined;
+    let bRefdes: string;
+    let bPin: string | undefined;
+    if (partIsCap) {
+      aRefdes = "NEWC";
+      bRefdes = normalizeRefToken(withPins[4]!);
+      bPin = withPins[5]?.trim().toLowerCase();
+    } else {
+      aRefdes = normalizeRefToken(withPins[2]!);
+      aPin = withPins[3]?.trim().toLowerCase();
+      bRefdes = normalizeRefToken(withPins[4]!);
+      bPin = withPins[5]?.trim().toLowerCase();
+    }
     const op: Op = {
       type: "connectPins",
       aRefdes,
@@ -175,7 +246,7 @@ function matchConnect(text: string): InterpretResult | null {
       ...(aPin ? { aPin } : {}),
       ...(bPin ? { bPin } : {}),
     };
-    const aLabel = aPin ? `${aRefdes}.${aPin}` : aRefdes;
+    const aLabel = partIsCap ? "new capacitor" : aPin ? `${aRefdes}.${aPin}` : aRefdes;
     const bLabel = bPin ? `${bRefdes}.${bPin}` : bRefdes;
     return { ops: [op], reply: `Ready to connect ${aLabel} → ${bLabel}.` };
   }

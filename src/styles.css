@@ -375,7 +375,7 @@ body { background: var(--bg); color: var(--text); }
 }
 .mode-guide-legend .wl-item svg { flex-shrink: 0; }
 
-.workspace { flex: 1; display: grid; grid-template-columns: 280px 1fr 380px; min-height: 0; position: relative; }
+.workspace { flex: 1; display: grid; grid-template-columns: 336px 1fr 380px; min-height: 0; position: relative; }
 
 .palette-shell,
 .right-shell {
@@ -1187,33 +1187,55 @@ body { background: var(--bg); color: var(--text); }
   hyphens: manual;
   transition: font-size .14s ease, font-weight .14s ease, color .14s ease, opacity .14s ease;
 }
-.palette-subgroup { margin-bottom: 8px; }
+.palette-subgroup {
+  margin: 4px 0 14px 14px;
+  padding: 8px 8px 8px 12px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  background: color-mix(in srgb, var(--panel, var(--bg)) 94%, var(--accent) 6%);
+}
 .palette-subtitle {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   width: 100%;
-  margin: 0 0 6px;
-  padding: 4px 2px;
-  border: none;
-  background: transparent;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, var(--accent) 30%);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel, #fff) 88%, var(--accent) 12%);
   color: var(--text);
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 12.5px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: none;
   cursor: pointer;
   text-align: left;
 }
-.palette-subtitle:hover { color: var(--accent); }
+.palette-subtitle:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--panel, #fff) 78%, var(--accent) 22%);
+}
+.palette-subgroup .palette-grid {
+  margin-left: 6px;
+}
 .palette-subtitle-caret {
-  width: 10px;
-  color: var(--muted);
-  font-size: 10px;
+  width: 12px;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
 }
 .palette-subtitle-count {
   margin-left: auto;
-  font-size: 10px;
-  font-weight: 500;
-  color: var(--muted);
+  min-width: 1.5em;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg, #fff) 70%, var(--accent) 30%);
+  opacity: 0.9;
 }
 
 /* Legacy docked props panel removed — attributes open via right-click dialog. */

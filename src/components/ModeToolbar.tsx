@@ -510,8 +510,8 @@ export function ModeToolbar({
                 className={`mode-toolbar-view-btn mode-toolbar-probe${probeOn ? " is-active" : ""}`}
                 title={
                   probeOn
-                    ? "Probe ON — click wire = V(net), click part = I(ref); Ctrl+wire = V(a,b)"
-                    : "Probe — after Run, click schematic nets/parts to plot (LTspice-style)"
+                    ? "Probe ON — wire = V vs ground · part = I · drag/Ctrl two wires = V(a,b)"
+                    : "Probe — after Run, click schematic nets/parts to plot"
                 }
                 aria-label={probeOn ? "Probe on" : "Probe"}
                 aria-pressed={probeOn}

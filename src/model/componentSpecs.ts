@@ -112,7 +112,7 @@ const PN: PinSpec[] = [pin("p", "+", "top"), pin("n", "-", "bottom")];
 export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
   // ---- Resistors ---------------------------------------------------------
   R: {
-    kind: "R", category: "Resistor", refdesPrefix: "R", label: "Fixed resistor", glyph: "∿", emits: true,
+    kind: "R", category: "Resistor", refdesPrefix: "R", label: "Resistor(Fixed)", glyph: "∿", emits: true,
     pins: LR, attributes: [A("value", "Resistance", "text", "1k", { unit: "Ω" })],
     toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${spiceOhm(p.value)}`,
   },
@@ -122,7 +122,7 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
     toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${spiceOhm(p.value)}`,
   },
   RVAR: {
-    kind: "RVAR", category: "Resistor", refdesPrefix: "R", label: "Variable / rheostat", glyph: "∿↗", emits: true,
+    kind: "RVAR", category: "Resistor", refdesPrefix: "R", label: "Variable(Rheostat)", glyph: "∿↗", emits: true,
     pins: LR, attributes: [A("value", "Resistance", "text", "1k", { unit: "Ω" })],
     toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${spiceOhm(p.value)}`,
   },
@@ -163,12 +163,12 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
 
   // ---- Inductors ---------------------------------------------------------
   L: {
-    kind: "L", category: "Inductor", refdesPrefix: "L", label: "Air core inductor", glyph: "◠◠", emits: true,
+    kind: "L", category: "Inductor", refdesPrefix: "L", label: "Inductor (Air Core)", glyph: "◠◠", emits: true,
     pins: LR, attributes: [A("value", "Inductance", "text", "1m", { unit: "H" }), A("ic", "Initial current", "text", "", { unit: "A" })],
     toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${spiceHenry(p.value)}${p.ic ? ` ic=${p.ic}` : ""}`,
   },
   LVAR: {
-    kind: "LVAR", category: "Inductor", refdesPrefix: "L", label: "Variable inductor", glyph: "◠↗", emits: true,
+    kind: "LVAR", category: "Inductor", refdesPrefix: "L", label: "Inductor (Variable)", glyph: "◠↗", emits: true,
     pins: LR, attributes: [A("value", "Inductance", "text", "1m", { unit: "H" }), A("ic", "Initial current", "text", "", { unit: "A" })],
     toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${spiceHenry(p.value)}${p.ic ? ` ic=${p.ic}` : ""}`,
   },
@@ -239,12 +239,12 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
 
   // ---- Capacitors --------------------------------------------------------
   C: {
-    kind: "C", category: "Capacitor", refdesPrefix: "C", label: "Non-polarized", glyph: "||", emits: true,
+    kind: "C", category: "Capacitor", refdesPrefix: "C", label: "Capacitor (Non-Polarized)", glyph: "||", emits: true,
     pins: LR, attributes: [A("value", "Capacitance", "text", "1u", { unit: "F" }), A("ic", "Initial voltage", "text", "", { unit: "V" })],
     toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${spiceFarad(p.value)}${p.ic ? ` ic=${p.ic}` : ""}`,
   },
   CPOL: {
-    kind: "CPOL", category: "Capacitor", refdesPrefix: "C", label: "Polarized", glyph: "|)", emits: true,
+    kind: "CPOL", category: "Capacitor", refdesPrefix: "C", label: "Capacitor (Polarized)", glyph: "|)", emits: true,
     pins: [pin("a", "+", "left"), pin("b", "−", "right")],
     attributes: [A("value", "Capacitance", "text", "1u", { unit: "F" }), A("ic", "Initial voltage", "text", "", { unit: "V" })],
     toSpice: (r, n, p) => `${r} ${n("a")} ${n("b")} ${spiceFarad(p.value)}${p.ic ? ` ic=${p.ic}` : ""}`,
@@ -297,7 +297,10 @@ export const COMPONENT_SPECS: Record<ComponentKind, ComponentSpec> = {
     pins: PN,
     attributes: [
       A("voffset", "DC offset", "text", "", { unit: "V" }),
-      A("vamp", "Amplitude", "text", "V", { unit: "V" }),
+      A("vamp", "Amplitude", "text", "V", {
+        unit: "V",
+        hint: "For load-dump (*.wc), this is Us — updating it rebuilds the PWL and Simulation Us",
+      }),
       A("freq", "Freq", "text", "", { unit: "Hz" }),
       A("tdelay", "Tdelay", "text", "", { unit: "s" }),
       A("theta", "Theta", "text", "", { unit: "1/s" }),
@@ -957,11 +960,11 @@ const PALETTE_SECTIONS: PaletteSection[] = [
     ],
     subsections: [
       {
-        title: "1. Diodes",
+        title: "Diodes",
         kinds: ["D", "DZ", "DS", "DTVS", "DTVSBI", "LED"],
       },
       {
-        title: "2. Transistors",
+        title: "Transistors",
         kinds: [
           "NPN",
           "PNP",
@@ -1003,6 +1006,14 @@ const PALETTE_HIDDEN = new Set<ComponentKind>([
   "CMMC",
   "FBEAD",
   "ANT",
+  // Resistor box variants + thermistor (keep zigzag R / POT / RVAR / LDR)
+  "RBOX",
+  "POTBOX",
+  "RVARBOX",
+  "THERM",
+  // Capacitor extras (keep Non-Polarized + Polarized)
+  "CFIXED",
+  "CVAR",
   // Inductor
   "XFMR",
   // Entire Math section

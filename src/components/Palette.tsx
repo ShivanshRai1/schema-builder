@@ -99,7 +99,7 @@ export function Palette({
   );
   /** Semiconductor subsections start expanded when the parent opens. */
   const [openSubsections, setOpenSubsections] = useState<Set<string>>(
-    () => new Set(["1. Diodes", "2. Transistors"]),
+    () => new Set(["Diodes", "Transistors"]),
   );
   const groups = useMemo(() => buildPalette(commonlyUsed), [commonlyUsed]);
   const q = query.trim().toLowerCase();

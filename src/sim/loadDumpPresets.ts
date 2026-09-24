@@ -104,14 +104,23 @@ export function findLoadDumpPreset(id: string): LoadDumpPreset | undefined {
   return LOAD_DUMP_PRESETS.find((p) => p.id === id);
 }
 
-/** Suggested tab / project name when saving from the sim toolbar. */
+/** Suggested tab / project name when saving a load-dump condition + results. */
 export function loadDumpConditionSaveName(
   partNumberId: string,
   c: LoadDumpConditions,
 ): string {
   const preset = findLoadDumpPreset(partNumberId);
-  if (preset) return preset.id;
-  const ua = (c.uaSupply.trim() || "UA").replace(/[^\w.-]+/g, "");
-  const us = (c.usPeak.trim() || "Us").replace(/[^\w.-]+/g, "");
-  return `${c.pulse}_${ua}V_Us${us}`;
+  const pulse =
+    c.pulse === "ISO7637_5A"
+      ? "ISO7637"
+      : c.pulse === "ISO16750_A"
+        ? "ISO16750"
+        : String(c.pulse).replace(/_/g, "");
+  const us = (c.usPeak.trim() || "?").replace(/[^\w.-]+/g, "");
+  const ua = (c.uaSupply.trim() || "?").replace(/[^\w.-]+/g, "");
+  const ri = (c.ri.trim() || "?").replace(/[^\w.-]+/g, "");
+  const pn = preset?.pn ?? (partNumberId.trim() || "");
+  // Human-readable so tabs / Projects show the setup, not a cryptic id.
+  if (pn) return `${pn} · ${pulse} · Us${us} · Ua${ua} · Ri${ri}`;
+  return `${pulse} · Us${us} · Ua${ua} · Ri${ri}`;
 }

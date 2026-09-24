@@ -155,9 +155,32 @@ export function resolveProbedSeries(
     }
 
     const fa = seriesByNameLoose(all, `V(${p.a})`);
-    const fb = seriesByNameLoose(all, `V(${p.b})`);
-    if (fa && fb) {
-      const d = differentialVoltage(fa, fb, p.a, p.b);
+    const fb =
+      p.b === "0" || /^gnd$/i.test(p.b)
+        ? (() => {
+            const any = all[0];
+            if (!any) return null;
+            return {
+              name: "V(0)",
+              x: any.x.slice(),
+              y: any.x.map(() => 0),
+            } satisfies SimSeries;
+          })()
+        : seriesByNameLoose(all, `V(${p.b})`);
+    const faOrGnd =
+      !fa && (p.a === "0" || /^gnd$/i.test(p.a))
+        ? (() => {
+            const any = all[0];
+            if (!any) return null;
+            return {
+              name: "V(0)",
+              x: any.x.slice(),
+              y: any.x.map(() => 0),
+            } satisfies SimSeries;
+          })()
+        : fa;
+    if (faOrGnd && fb) {
+      const d = differentialVoltage(faOrGnd, fb, p.a, p.b);
       if (d) {
         seen.add(uk);
         series.push(d);
@@ -165,7 +188,7 @@ export function resolveProbedSeries(
         missing.push(key);
       }
     } else {
-      if (!fa) missing.push(`V(${p.a})`);
+      if (!faOrGnd) missing.push(`V(${p.a})`);
       if (!fb) missing.push(`V(${p.b})`);
     }
   }
@@ -193,6 +216,37 @@ export function probeAvailable(all: readonly SimSeries[], p: ProbeSpec): boolean
     return !evaluateProbeExpression(p.expr, all).error;
   }
   return Boolean(
-    seriesByNameLoose(all, `V(${p.a})`) && seriesByNameLoose(all, `V(${p.b})`),
+    (seriesByNameLoose(all, `V(${p.a})`) ||
+      p.a === "0" ||
+      /^gnd$/i.test(p.a)) &&
+      (seriesByNameLoose(all, `V(${p.b})`) ||
+        p.b === "0" ||
+        /^gnd$/i.test(p.b)),
   );
+}
+
+/**
+ * User-facing text when a probe cannot be built from the current result series.
+ */
+export function formatProbeMissingHint(
+  missing: readonly string[],
+  opts?: { fromSavedCondition?: boolean },
+): string {
+  const list = missing.filter(Boolean);
+  const onlyGround =
+    list.length > 0 &&
+    list.every((s) => /^V\(0\)$/i.test(s) || /^V\(gnd\)$/i.test(s));
+  if (onlyGround) {
+    return "Ground is the 0 V reference (always 0) — click a live wire for voltage, or drag two wires for V(a,b).";
+  }
+  const signals =
+    list.length === 0
+      ? "Probed signal"
+      : list.length === 1
+        ? list[0]!
+        : list.slice(0, 3).join(", ") + (list.length > 3 ? "…" : "");
+  if (opts?.fromSavedCondition) {
+    return `${signals} not in this saved plot — click Run, then probe again.`;
+  }
+  return `${signals} not in results — click Run, or probe a net that appears under Simulation results.`;
 }

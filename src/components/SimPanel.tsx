@@ -20,6 +20,7 @@ import {
   isVoltageSignalName,
   resolveProbedSeries,
   colorForSignalName,
+  formatProbeMissingHint,
   PROBE_TRACE_COLORS,
 } from "../sim/probeSelection";
 import { evaluateProbeExpression } from "../sim/probeExpressions";
@@ -723,6 +724,7 @@ export function SimPanel({
         slot: LoadDumpDiodeSlot;
         kind: "DTVS" | "DTVSBI";
       };
+      skipHistory?: boolean;
     },
   ) => void;
   /** Rename active tab + Save schematic/netlist/models/last Run for this condition. */
@@ -1086,10 +1088,12 @@ export function SimPanel({
   const probeModeOn = Boolean(probeSel?.probeMode);
   const simSeries: SimSeries[] = result?.series.length ? result.series : [];
   const simLabels = legendLabelsForSeries(simSeries, netlist);
-  const probeSeries: SimSeries[] =
+  const probeResolved =
     result?.series.length && probes.length > 0
-      ? resolveProbedSeries(result.series, probes).series
-      : [];
+      ? resolveProbedSeries(result.series, probes)
+      : null;
+  const probeSeries: SimSeries[] = probeResolved?.series ?? [];
+  const probeMissing = probeResolved?.missing ?? [];
 
   const toggleSeries = (name: string) => {
     setHiddenSeries((prev) => {
@@ -1331,10 +1335,10 @@ export function SimPanel({
                 type="button"
                 className="sim-wc-save-btn"
                 disabled={busy}
-                title="Save project: schematic + netlist + models + results (names the project from this setup)"
+                title="Save condition: names this tab/project from PN · pulse · Us/Ua/Ri and stores schematic + netlist + models + last waveforms"
                 onClick={() => saveCondition()}
               >
-                Save project
+                Save condition
               </button>
             )}
           </div>
@@ -1405,8 +1409,8 @@ export function SimPanel({
               disabled={busy}
               title={
                 probeSel.probeMode
-                  ? "Probe ON — click schematic: wire=V, part=I, Ctrl+wire=differential"
-                  : "Show Probe / waveform pane and click the schematic to add traces"
+                  ? "Probe ON — wire click = V vs ground · part = I · drag or Ctrl+click two wires = V(a,b)"
+                  : "Show Probe pane — after Run, click wires/parts on the schematic"
               }
               aria-pressed={probeSel.probeMode}
               onClick={() => probeSel.setProbeMode(!probeSel.probeMode)}
@@ -1436,14 +1440,15 @@ export function SimPanel({
         )}
         {result && !busy && result.fromSavedCondition && (
           <div className="netlist-status sim-saved-result-banner" role="status">
-            Saved plot — not from this Run
+            Showing a <strong>saved condition</strong> plot — not from this Run
             {(() => {
               const summary =
                 result.conditionsSummary?.trim() ||
                 formatLoadDumpConditionsSummary(wc);
               return summary ? ` (${summary})` : "";
             })()}
-            . Click <strong>Run</strong> to simulate the current schematic.
+            . Click <strong>Run</strong> to simulate the current schematic, or{" "}
+            <strong>Save condition</strong> after Run to refresh this store.
           </div>
         )}
         {result && !busy && !result.fromSavedCondition && (
@@ -1467,6 +1472,17 @@ export function SimPanel({
             {probeFeedback.message}
           </div>
         )}
+        {!probeFeedback &&
+          result?.ok &&
+          probes.length > 0 &&
+          probeMissing.length > 0 &&
+          !probeSeries.length && (
+            <div className="netlist-status netlist-status-error" role="alert">
+              {formatProbeMissingHint(probeMissing, {
+                fromSavedCondition: Boolean(result.fromSavedCondition),
+              })}
+            </div>
+          )}
         {runState === "paused" && !result && (
           <div className="netlist-status">Simulation paused</div>
         )}
@@ -1529,7 +1545,9 @@ export function SimPanel({
               </button>
             )}
             {probeModeOn && (
-              <span className="sim-probe-hint">Probe ready — click / drag on schematic</span>
+              <span className="sim-probe-hint">
+                Wire = V(gnd) · drag/Ctrl two wires = V(a,b) · part = I
+              </span>
             )}
             {probes.length > 0 && (
               <span className="sim-probe-hint">
@@ -1551,7 +1569,7 @@ export function SimPanel({
             <input
               className="sim-expr-input"
               value={exprDraft}
-              placeholder='Expression e.g. V(out)  or  V(out)-V(in)'
+              placeholder='e.g. V(2) or V(2,0) or V(2)-V(1)'
               aria-label="Waveform expression"
               onChange={(e) => {
                 setExprDraft(e.target.value);
@@ -1671,13 +1689,13 @@ export function SimPanel({
               {result?.ok && !probes.length && (
                 <div className="sim-placeholder">
                   {probeModeOn
-                    ? "Click a wire (voltage) or part (current) on the schematic"
+                    ? "Click a wire (V vs ground), drag or Ctrl+click two wires (V(a,b)), or click a part (I)"
                     : "Turn Probe ON, then click the schematic"}
                 </div>
               )}
               {result?.ok && probes.length > 0 && !probeSeries.length && (
                 <div className="sim-placeholder">
-                  Probed signals not in results — try another net/part
+                  No probe waveform — see the message above
                 </div>
               )}
             </div>

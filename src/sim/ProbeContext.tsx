@@ -148,9 +148,18 @@ export function ProbeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const reportMissing = useCallback((signal: string) => {
+    const sig = signal.trim() || "Signal";
+    if (/^V\(0\)$/i.test(sig) || /^V\(gnd\)$/i.test(sig)) {
+      setFeedback({
+        ok: false,
+        message:
+          "Ground is always 0 V — click a live wire for voltage (or drag two wires for V(a,b)).",
+      });
+      return;
+    }
     setFeedback({
       ok: false,
-      message: `${signal} not in simulation results`,
+      message: `${sig} not in simulation results — click Run, or probe a net shown in Simulation results.`,
     });
   }, []);
 
@@ -184,7 +193,7 @@ export function ProbeProvider({ children }: { children: ReactNode }) {
       setBlackPin(null);
       setFeedback({
         ok: true,
-        message: `Red pin → V(${n}). Ctrl+click / drag to another net for black (differential).`,
+        message: `Red pin → V(${n}). Next: drag or Ctrl+click another wire for black → V(a,b). Single click alone = vs ground.`,
       });
       return;
     }

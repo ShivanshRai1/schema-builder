@@ -5,8 +5,12 @@ import type { Op } from "./ops";
 const KINDS = new Set(Object.keys(COMPONENT_SPECS) as ComponentKind[]);
 
 function normRef(s: unknown): string {
-  const t = String(s ?? "").trim().toUpperCase();
+  const t = String(s ?? "").trim().toUpperCase().replace(/\s+/g, "");
   if (t === "GROUND" || t === "EARTH" || t === "0") return "GND";
+  if (/^(MID|MIDDLE|MIDPOINT|JUNCTION|CLAMP|NETMID)$/i.test(t)) return "MID";
+  if (/^(NEWC|NEWCAP|CAPACITOR|CAP)$/i.test(t)) return "NEWC";
+  const netNum = /^NET(\d+)$/i.exec(t);
+  if (netNum) return netNum[1]!;
   return t;
 }
 

@@ -24,9 +24,12 @@ import { ClearProbesOnSimChange, ProbeProvider } from "./sim/ProbeContext";
 import type { SimResult } from "./sim/runSimulation";
 import {
   buildLoadDumpPwl,
+  extractUaUsFromPwl,
   formatLoadDumpConditionsSummary,
+  hasLoadDumpWc,
   parseLoadDumpFromNetlist,
   setWcInDirectives,
+  stripVoltUnit,
   type LoadDumpConditions,
 } from "./sim/loadDumpConditions";
 import type { LoadDumpDiodeSlot } from "./sim/loadDumpPresets";
@@ -84,10 +87,10 @@ import type { AssistantContext } from "./llm/assistantTypes";
 import { coerceSetParam } from "./llm/validateOps";
 import {
   connectEndpoints,
-  defaultPin,
   disconnectEndpoints,
   endpointLabel,
   findNodeByRefdes,
+  resolveConnectEndpoint,
 } from "./llm/wireOps";
 import { applyCutMove, detachPartForMove, edgesCoveredByRect, nodesCoveredByRect, nodesInRect, reconnectPartsOnTips, reconnectTipsOnPins, clipPolylineOutsideRect, type FlowRect } from "./wiring/cutMove";
 import { attachPartsToWires, attachNetNameToNearestPin } from "./wiring/insertOnWire";
@@ -402,7 +405,7 @@ export default function App() {
     return window.innerWidth < 1480;
   });
   const userSizedRight = useRef(false);
-  const [paletteWidth, setPaletteWidth] = useState(280);
+  const [paletteWidth, setPaletteWidth] = useState(336);
   const [rightWidth, setRightWidth] = useState(380);
   const [slotFr, setSlotFr] = useState({
     netlist: 1.2,
@@ -418,15 +421,15 @@ export default function App() {
         w < 1100 ? "compact" : w < 1480 ? "laptop" : "desktop";
       setViewport(next);
       if (next === "desktop") {
-        setPaletteWidth(leftCollapsed ? 44 : 280);
+        setPaletteWidth(leftCollapsed ? 44 : 336);
         if (!userSizedRight.current) setRightWidth(rightCollapsed ? 44 : 380);
         setSlotFr({ netlist: 1.2, sim: 1.0, chat: 1.0, library: 0.55 });
       } else if (next === "laptop") {
-        setPaletteWidth(leftCollapsed ? 44 : 200);
+        setPaletteWidth(leftCollapsed ? 44 : 248);
         if (!userSizedRight.current) setRightWidth(rightCollapsed ? 44 : 300);
         setSlotFr({ netlist: 1.15, sim: 0.9, chat: 0.75, library: 0.5 });
       } else {
-        setPaletteWidth(leftCollapsed ? 44 : 176);
+        setPaletteWidth(leftCollapsed ? 44 : 200);
         if (!userSizedRight.current) setRightWidth(rightCollapsed ? 44 : 268);
         setSlotFr({ netlist: 1.1, sim: 0.85, chat: 0.65, library: 0.45 });
       }
@@ -738,13 +741,15 @@ export default function App() {
           slot: LoadDumpDiodeSlot;
           kind: "DTVS" | "DTVSBI";
         };
+        /** Caller already pushed history (e.g. properties OK / Apply netlist). */
+        skipHistory?: boolean;
       },
     ) => {
       const pwl = buildLoadDumpPwl(c);
       const ri = (c.ri.trim() || "2").replace(/ohm$/i, "");
       const diode = opts?.diodeModel;
 
-      pushHistory();
+      if (!opts?.skipHistory) pushHistory();
       setNodes((ns) => {
         const vNodes = ns.filter((n) => {
           const pfx = COMPONENT_SPECS[n.data.kind]?.refdesPrefix;
@@ -1027,7 +1032,7 @@ export default function App() {
       const remote = await saveSharedWorkspace(ws);
       if (remote.ok) {
         setNetlistStatus(
-          `saved “${remote.name}” — schematic, netlist, models, results`,
+          `saved condition “${remote.name}” — schematic, netlist, models, waveforms`,
         );
         setNetlistStatusError(false);
         return;
@@ -2222,33 +2227,107 @@ export default function App() {
         kind != null
           ? new Set(getComponentPins(kind, nextParams).map((p) => p.id))
           : null;
-      setNodes((ns) =>
-        ns.map((n) => {
-          if (n.id !== nodeId) return n;
-          return {
-            ...n,
-            data: {
-              ...n.data,
-              refdes: draft.refdes,
-              params: nextParams,
-              labelPos: draft.labelPos === "auto" ? undefined : draft.labelPos,
-              rotation: normalizeRotation(draft.rotation),
-            },
-          };
-        }),
-      );
-      if (pinIds) {
-        setEdges((es) =>
-          es.filter((e) => {
-            if (e.source === nodeId && e.sourceHandle && !pinIds.has(e.sourceHandle)) return false;
-            if (e.target === nodeId && e.targetHandle && !pinIds.has(e.targetHandle)) return false;
-            return true;
+
+      const applyDraftToNode = () => {
+        setNodes((ns) =>
+          ns.map((n) => {
+            if (n.id !== nodeId) return n;
+            return {
+              ...n,
+              data: {
+                ...n.data,
+                refdes: draft.refdes,
+                params: nextParams,
+                labelPos: draft.labelPos === "auto" ? undefined : draft.labelPos,
+                rotation: normalizeRotation(draft.rotation),
+              },
+            };
           }),
         );
+        if (pinIds) {
+          setEdges((es) =>
+            es.filter((e) => {
+              if (e.source === nodeId && e.sourceHandle && !pinIds.has(e.sourceHandle))
+                return false;
+              if (e.target === nodeId && e.targetHandle && !pinIds.has(e.targetHandle))
+                return false;
+              return true;
+            }),
+          );
+        }
+      };
+
+      // Load-dump: Amplitude / Ua / Ri edits rebuild PWL + *.wc so schematic,
+      // Simulation Us, and netlist stay one surge number.
+      const dirsText = (directivesRef.current ?? []).join("\n");
+      if (hasLoadDumpWc(dirsText) && target) {
+        const ns = nodesRef.current;
+        const vNodes = ns.filter(
+          (n) => COMPONENT_SPECS[n.data.kind]?.refdesPrefix === "V",
+        );
+        const rNodes = ns.filter(
+          (n) => COMPONENT_SPECS[n.data.kind]?.refdesPrefix === "R",
+        );
+        const vTarget =
+          vNodes.find((n) => /^v1$/i.test(n.data.refdes)) ?? vNodes[0];
+        const rTarget =
+          rNodes.find((n) => /^r1$/i.test(n.data.refdes)) ?? rNodes[0];
+        const isV1 = Boolean(vTarget && vTarget.id === target.id);
+        const isR1 = Boolean(rTarget && rTarget.id === target.id);
+
+        if (isV1 || isR1) {
+          const prev = target.data.params;
+          const vampNext = stripVoltUnit(nextParams.vamp ?? "");
+          const uaNext = stripVoltUnit(nextParams.voffset ?? "");
+          const stimNext = (nextParams.stimulus ?? "").trim();
+          const stimPrev = (prev.stimulus ?? "").trim();
+          const riNext = (nextParams.value ?? "").trim().replace(/ohm$/i, "");
+
+          const c = parseLoadDumpFromNetlist(dirsText);
+          const stimChanged = isV1 && stimNext !== "" && stimNext !== stimPrev;
+          const vampMismatch =
+            isV1 && vampNext !== "" && vampNext !== stripVoltUnit(c.usPeak);
+          const uaMismatch =
+            isV1 && uaNext !== "" && uaNext !== stripVoltUnit(c.uaSupply);
+          const riMismatch =
+            isR1 && riNext !== "" && riNext !== stripVoltUnit(c.ri).replace(/ohm$/i, "");
+
+          if (vampMismatch || uaMismatch || stimChanged || riMismatch) {
+            if (vampMismatch) c.usPeak = vampNext;
+            if (uaMismatch) c.uaSupply = uaNext;
+            if (stimChanged && !vampMismatch) {
+              const fromPwl = extractUaUsFromPwl(stimNext);
+              if (fromPwl) {
+                if (!uaMismatch) c.uaSupply = fromPwl.ua;
+                if (c.pulse === "ISO7637_5A") {
+                  const ua = Number(c.uaSupply);
+                  const peak = Number(fromPwl.us);
+                  c.usPeak = String(
+                    Number((peak - (Number.isFinite(ua) ? ua : 0)).toPrecision(8)),
+                  );
+                } else {
+                  c.usPeak = fromPwl.us;
+                }
+              }
+            }
+            if (riMismatch) c.ri = riNext;
+
+            applyDraftToNode();
+            applyLoadDumpConditions(c, { skipHistory: true });
+            setNetlistStatus(
+              `V1/Us synced — Us=${c.usPeak.trim() || "—"}V (schematic, conditions, netlist)`,
+            );
+            setNetlistStatusError(false);
+            setPropsDialog(null);
+            return;
+          }
+        }
       }
+
+      applyDraftToNode();
       setPropsDialog(null);
     },
-    [setNodes, setEdges, pushHistory],
+    [setNodes, setEdges, pushHistory, applyLoadDumpConditions],
   );
 
   const rotateNodeLive = useCallback(
@@ -4129,7 +4208,16 @@ export default function App() {
     setDraftNetlist("");
     setNetlistStatusError(false);
     setNetlistStatus(`Apply OK — ${parts.join(" · ")}`);
-  }, [nodes, edges, draftNetlist, setNodes, setEdges, pushHistory]);
+
+    // Load-dump: *.wc Us / UA / Ri is canonical — rebuild V1 PWL + canvas Amplitude
+    // so schematic / Simulation Conditions / netlist cannot diverge after Apply.
+    if (hasLoadDumpWc(draft)) {
+      const c = parseLoadDumpFromNetlist(draft);
+      queueMicrotask(() => {
+        applyLoadDumpConditions(c, { skipHistory: true });
+      });
+    }
+  }, [nodes, edges, draftNetlist, setNodes, setEdges, pushHistory, applyLoadDumpConditions]);
 
   const handleNodesChange = useCallback(
     (changes: Parameters<typeof onNodesChange>[0]) => {
@@ -4270,6 +4358,11 @@ export default function App() {
     let ns = nodesRef.current.slice();
     let es = edgesRef.current.slice();
     let applied = 0;
+    let touchV1 = false;
+    let touchR1 = false;
+    let nextUs: string | undefined;
+    let nextUa: string | undefined;
+    let nextRi: string | undefined;
 
     for (const op of ops) {
       if (op.type === "addComponent") {
@@ -4302,6 +4395,20 @@ export default function App() {
             : n,
         );
         applied++;
+        const pfx = COMPONENT_SPECS[target.data.kind]?.refdesPrefix;
+        if (pfx === "V" && /^v1$/i.test(target.data.refdes)) {
+          if (coerced.key === "vamp" || coerced.key === "value") {
+            touchV1 = true;
+            nextUs = stripVoltUnit(coerced.value);
+          } else if (coerced.key === "voffset") {
+            touchV1 = true;
+            nextUa = stripVoltUnit(coerced.value);
+          }
+        }
+        if (pfx === "R" && /^r1$/i.test(target.data.refdes) && coerced.key === "value") {
+          touchR1 = true;
+          nextRi = coerced.value.trim().replace(/ohm$/i, "");
+        }
       } else if (op.type === "deleteComponent") {
         const target = findNodeByRefdes(ns, op.refdes);
         if (target) {
@@ -4311,19 +4418,25 @@ export default function App() {
           applied++;
         }
       } else if (op.type === "connectPins") {
-        const a = findNodeByRefdes(ns, op.aRefdes);
-        const b = findNodeByRefdes(ns, op.bRefdes);
+        const a = resolveConnectEndpoint(ns, es, op.aRefdes, op.aPin, "from");
+        const b = resolveConnectEndpoint(ns, es, op.bRefdes, op.bPin, "to");
         if (a && b) {
-          const aPin = op.aPin || defaultPin(a, "from");
-          const bPin = op.bPin || defaultPin(b, "to");
-          es = connectEndpoints(es, a, aPin, b, bPin);
+          es = connectEndpoints(es, a.node, a.pin, b.node, b.pin);
           applied++;
         }
       } else if (op.type === "disconnectPins") {
-        const a = findNodeByRefdes(ns, op.aRefdes);
+        const a = resolveConnectEndpoint(ns, es, op.aRefdes, op.aPin, "from");
         if (a) {
-          const b = op.bRefdes ? findNodeByRefdes(ns, op.bRefdes) : undefined;
-          es = disconnectEndpoints(es, a, op.aPin, b, op.bPin);
+          const b = op.bRefdes
+            ? resolveConnectEndpoint(ns, es, op.bRefdes, op.bPin, "to")
+            : null;
+          es = disconnectEndpoints(
+            es,
+            a.node,
+            op.aPin ? a.pin : undefined,
+            b?.node,
+            op.bPin && b ? b.pin : undefined,
+          );
           applied++;
         }
       }
@@ -4333,8 +4446,21 @@ export default function App() {
     pushHistory();
     setNodes(ns);
     setEdges(es);
+
+    const dirsText = (directivesRef.current ?? []).join("\n");
+    if (hasLoadDumpWc(dirsText) && (touchV1 || touchR1)) {
+      const c = parseLoadDumpFromNetlist(dirsText);
+      if (nextUs) c.usPeak = nextUs;
+      if (nextUa) c.uaSupply = nextUa;
+      if (nextRi) c.ri = nextRi;
+      // Defer so setNodes above commits first; skipHistory — already pushed.
+      queueMicrotask(() => {
+        applyLoadDumpConditions(c, { skipHistory: true });
+      });
+    }
+
     return applied;
-  }, [pushHistory, setNodes, setEdges]);
+  }, [pushHistory, setNodes, setEdges, applyLoadDumpConditions]);
 
   const getAssistantContext = useCallback((): AssistantContext => {
     const components = nodes.map((n) => {
@@ -4505,7 +4631,7 @@ export default function App() {
                   <li><kbd>Ctrl</kbd>+C copy mode · click a part/wire or drag a box (≥70%) to copy · paste ghost follows · <kbd>Esc</kbd> exits</li>
                   <li>Palette <strong>Net label</strong> is the older flag symbol (still names nets when connected)</li>
                   <li><kbd>Click</kbd> a part or wire to select · <kbd>Ctrl</kbd>+click toggles multi-select</li>
-                  <li>After a successful <strong>Run</strong>, turn <strong>Probe</strong> on when you want it: click a wire for the <em>red</em> pin, then another for the <em>black</em> pin → <code>V(a,b)</code> · right-click removes black then red · <kbd>Shift</kbd>+click a part for current · <kbd>Ctrl</kbd>+click selects</li>
+                  <li>After a successful <strong>Run</strong>, turn <strong>Probe</strong> on: click a <em>wire</em> for voltage vs ground · <em>drag</em> or <kbd>Ctrl</kbd>+click two wires for <code>V(a,b)</code> · click a <em>part</em> for current · right-click a pin to remove · right-click empty canvas to turn Probe off</li>
                   <li><kbd>Right-click</kbd> a part to edit properties (OK / Cancel)</li>
                   <li><kbd>Click</kbd> empty canvas to deselect · hollow square = free wire end</li>
                   <li><kbd>Double-click</kbd> a junction square or crossing hop to toggle join ↔ pass</li>

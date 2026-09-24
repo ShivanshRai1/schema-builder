@@ -7,13 +7,14 @@ const MAX = 24;
 /**
  * Always shown first in “Commonly used” (R, C, L, D, sources, ground).
  * Placement history from localStorage appends after these, without duplicating them.
+ * Use BATTERY (DC voltage source), not legacy generic V — that was a duplicate.
  */
 export const COMMONLY_USED_PINNED: readonly ComponentKind[] = [
   "R",
   "C",
   "L",
   "D",
-  "V",
+  "BATTERY",
   "VAC",
   "VPULSE",
   "GND",
@@ -21,6 +22,8 @@ export const COMMONLY_USED_PINNED: readonly ComponentKind[] = [
 
 function isRecordable(kind: ComponentKind): boolean {
   if (kind === "TIP" || kind === "WIRELABEL") return false;
+  // Legacy generic "Voltage source" — Sources palette uses BATTERY instead.
+  if (kind === "V") return false;
   if (isPaletteHidden(kind)) return false;
   return Boolean(COMPONENT_SPECS[kind]);
 }

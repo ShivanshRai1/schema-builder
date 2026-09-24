@@ -123,6 +123,36 @@ export function normalizePulseId(raw: string | undefined | null): LoadDumpPulseI
   return "ISO16750_A";
 }
 
+/** True when a load-dump working-conditions marker is present. */
+export function hasLoadDumpWc(text: string | undefined | null): boolean {
+  return /^\*\s*\.wc\b/im.test(String(text ?? ""));
+}
+
+/** Strip a trailing V / volt unit from a typed magnitude. */
+export function stripVoltUnit(raw: string | undefined | null): string {
+  return String(raw ?? "").trim().replace(/v$/i, "");
+}
+
+/**
+ * First / peak voltage samples from a PWL(...) stimulus (load-dump heuristic).
+ * Returns null if the text is not a usable PWL.
+ */
+export function extractUaUsFromPwl(stimulus: string): { ua: string; us: string } | null {
+  const m = /PWL\s*\(([^)]*)\)/i.exec(stimulus);
+  if (!m) return null;
+  const toks = m[1]!.trim().split(/\s+/).filter(Boolean);
+  const vals: number[] = [];
+  for (let i = 1; i < toks.length; i += 2) {
+    const v = Number(toks[i]);
+    if (Number.isFinite(v)) vals.push(v);
+  }
+  if (!vals.length) return null;
+  return {
+    ua: String(vals[0]),
+    us: String(Math.max(...vals)),
+  };
+}
+
 /**
  * ISO load-dump PWL matching the email B-source formulas.
  * ISO16750_A: Us = absolute peak (Uspk). ISO7637_5A: Us = amplitude above UA.
@@ -233,17 +263,19 @@ export function parseLoadDumpFromNetlist(netlist: string): LoadDumpConditions {
 
   // PWL endpoints if UA/Us missing from marker
   if (!fromMarker?.uaSupply || !fromMarker?.usPeak) {
-    const pwl = /PWL\s*\(([^)]*)\)/i.exec(netlist);
-    if (pwl) {
-      const toks = pwl[1]!.trim().split(/\s+/).filter(Boolean);
-      const vals: number[] = [];
-      for (let i = 1; i < toks.length; i += 2) {
-        const v = Number(toks[i]);
-        if (Number.isFinite(v)) vals.push(v);
-      }
-      if (vals.length && !fromMarker?.uaSupply) base.uaSupply = String(vals[0]);
-      if (vals.length && !fromMarker?.usPeak) {
-        base.usPeak = String(Math.max(...vals));
+    const fromPwl = extractUaUsFromPwl(netlist);
+    if (fromPwl) {
+      if (!fromMarker?.uaSupply) base.uaSupply = fromPwl.ua;
+      if (!fromMarker?.usPeak) {
+        // 7637 Us is amplitude above UA; 16750 Us is absolute peak.
+        const pulse = normalizePulseId(base.pulse);
+        if (pulse === "ISO7637_5A") {
+          const ua = parseNumber(fromPwl.ua, 0);
+          const peak = parseNumber(fromPwl.us, 0);
+          base.usPeak = String(Number((peak - ua).toPrecision(8)));
+        } else {
+          base.usPeak = fromPwl.us;
+        }
       }
     }
   }

@@ -208,8 +208,8 @@ function wireHitAtCursor(
   cursor: Point,
 ): { edgeId: string; point: Point; dist: number } | null {
   return preferShortStubHit(
-    nodes,
-    edges,
+  nodes,
+  edges,
     cursor,
     findNearestWireHit(nodes, edges, cursor, WIRE_HIT_RADIUS, SCHEMATIC_GRID),
   );
@@ -4096,9 +4096,10 @@ export function Canvas({
           />
           <strong>Probe ON</strong>
           <span>
-            Click <em>wire</em> = V · click <em>part</em> = I · drag = V(a,b)
+            Click <em>wire</em> = V vs ground · click <em>part</em> = I ·{" "}
+            <em>drag</em> or <em>Ctrl+click</em> two wires = V(a,b)
             {" · "}
-            pins: red, black, red… · right-click pin = remove · right-click canvas = Probe OFF
+            right-click pin = remove · right-click canvas = Probe OFF
           </span>
         </div>
       ) : null}

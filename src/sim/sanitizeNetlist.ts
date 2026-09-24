@@ -314,11 +314,13 @@ export function sanitizeNetlistForAccuracy(netlist: string): SanitizeNetlistResu
   text = tran.text;
   if (tran.note) notes.push(tran.note);
 
-  if (/delay\s*\(|\bTABLE\s*\(/i.test(text)) {
-    warnings.push(
-      "Library uses unsupported constructs (delay/TABLE) — D1SPICE/D2SPICE may reject those .subckt bodies",
-    );
-  }
+  // Intentionally not surfaced for now (TVS libs use LTspice delay/TABLE).
+  // Re-enable if customers need a visible accuracy caveat on D1SPICE/D2SPICE:
+  // if (/delay\s*\(|\bTABLE\s*\(/i.test(text)) {
+  //   warnings.push(
+  //     "Library uses unsupported constructs (delay/TABLE) — D1SPICE/D2SPICE may reject those .subckt bodies",
+  //   );
+  // }
 
   const missing = missingModelRefs(text);
   if (missing.length) {
